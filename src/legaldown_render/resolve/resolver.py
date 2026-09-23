@@ -61,10 +61,9 @@ from ..tree import (
     Strong,
     Table,
     TermRef,
-    Text,
     Value,
-    iter_block_inlines,
-    iter_inlines,
+    iter_tree_inlines,
+    map_tree_inlines,
     plain_text,
 )
 from .numbering import RENUMBERED, extend, fill, format_counter, heading_levels
@@ -128,9 +127,7 @@ class Resolver:
         self.used_anchors: set[str] = set()
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
-        self.definition_ids: set[str] = set()
         self.inconsistent_placeholders: set[str] = set()
-        self.template = tree.is_template
         self.attachment_anchors: dict[str, str | None] = {}
         self.section_presences: list[Presence] = []
 
@@ -155,9 +152,8 @@ class Resolver:
             )
             for section in sections
         )
-        return replace(
+        resolved = replace(
             self.tree,
-            is_template=self.template,
             title=resolve(self.tree.title),
             subtitle=resolve(self.tree.subtitle),
             locale=self.formatter.tag,
@@ -176,31 +172,26 @@ class Resolver:
                 "heading": self.labels.signatures or "",
             },
         )
+        # A {{term:}} links to its definition only if that definition was
+        # given an anchor: definitions in titles or alt text are not, and a
+        # definition may live in an attachment or an amended original.
+        return map_tree_inlines(resolved, self._settle_term_target)
+
+    def _settle_term_target(self, inline: Inline) -> Inline:
+        if isinstance(inline, TermRef) and inline.target and inline.target not in self.used_anchors:
+            return replace(inline, target=None)
+        return inline
 
     def _survey(self) -> None:
-        """One pass over the tree before resolving: which definitions exist,
-        whether template constructs are used, and which placeholder ids are
-        used with conflicting types (§10.7)."""
+        """One pass over the tree before resolving: which placeholder ids
+        are used with conflicting types (§10.7)."""
         types: dict[str, set[str]] = {}
-        blocks = list(self.tree.preamble) + [block for section in self.tree.sections for block in section.blocks]
-        inlines = [i for block in blocks for i in iter_block_inlines(block)]
-        inlines += [i for section in self.tree.sections for i in iter_inlines(section.title)]
-        inlines += list(iter_inlines(self.tree.title)) + list(iter_inlines(self.tree.subtitle))
-        self.definition_ids = {
-            self._definition_id(inline) for inline in _anchored_definitions(_inlines_of(blocks, self.tree))
-        }
-        for inline in inlines:
+        for inline in iter_tree_inlines(self.tree):
             if isinstance(inline, DirectiveSource):
                 directive = inline.directive
-                if directive.name == "choose":
-                    self.template = True
-                elif directive.name == "placeholder" and directive.positional and not directive.malformed:
+                if directive.name == "placeholder" and directive.positional and not directive.malformed:
                     types.setdefault(directive.positional, set()).add(self._placeholder_type(directive))
         self.inconsistent_placeholders = {pid for pid, found in types.items() if len(found) > 1}
-        if any(section.condition for section in self.tree.sections) or any(
-            _has_condition(block) for block in blocks
-        ):
-            self.template = True
 
     # -- anchors --------------------------------------------------------------
 
@@ -234,7 +225,8 @@ class Resolver:
         indexed = self.result.sections
         out: list[Section] = []
         for index, section in enumerate(self.tree.sections):
-            level = section.level
+            # Numbered with its level clamped to 1-5, as the validator numbers it.
+            level = min(max(section.level, 1), 5)
             sibling = previous.get(level)
             alternative = (
                 sibling is not None
@@ -281,15 +273,27 @@ class Resolver:
 
     def _title_text(self, title: tuple[Inline, ...]) -> str:
         """A heading's text, as the ``none`` scheme designates it (§13.3).
-        Directives in it are resolved, except references, whose targets are
-        not all known yet; a defined term shows as its term."""
-        kept: list[Inline] = []
-        for inline in title:
-            if isinstance(inline, DefinitionSource):
-                kept.append(Text(inline.term))
-            elif not (isinstance(inline, DirectiveSource) and inline.directive.name == "ref"):
-                kept.append(inline)
-        return " ".join(plain_text(self._resolve_inlines(tuple(kept))).split())
+
+        A text-only pass: it gives out no anchors, and it leaves references
+        out wherever they are, since their targets are not all known yet.
+        Other directives show their display text; a defined term its term.
+        """
+        def text(inlines: tuple[Inline, ...]) -> str:
+            parts: list[str] = []
+            for inline in inlines:
+                match inline:
+                    case DirectiveSource(directive=directive):
+                        if directive.name != "ref":
+                            resolved = self._directive(directive)
+                            parts.append(plain_text((resolved,)) if resolved is not None else "")
+                    case DefinitionSource(children=children) | Emphasis(children=children) \
+                            | Strong(children=children) | Link(children=children) | Image(children=children):
+                        parts.append(text(children))
+                    case _:
+                        parts.append(plain_text((inline,)))
+            return "".join(parts)
+
+        return " ".join(text(title).split())
 
     def _structure_section(self, section: Section, presence: Presence) -> tuple[Block, ...]:
         paragraphs = _Counter(self._exclusive)
@@ -464,7 +468,8 @@ class Resolver:
         if term is None:
             return FailureMarker(f"[UNDEFINED: {definition_id}]")
         text = directive.params.get("label") or self._plain_value(term)
-        target = DEFINITION_ANCHOR_PREFIX + definition_id if definition_id in self.definition_ids else None
+        # Settled once everything is resolved (see _settle_term_target).
+        target = DEFINITION_ANCHOR_PREFIX + definition_id
         return TermRef(text, target, self.style.definitions.term_style)
 
     def _date(self, directive: Directive, value: str) -> Inline:
@@ -718,72 +723,24 @@ class _Counter:
         return self.count
 
 
-def _inlines_of(blocks: list[Block], tree: RenderTree) -> tuple[Inline, ...]:
-    """The top-level inlines of *blocks*, the section titles, and the
-    document title, without descending into any of them."""
-    out: list[Inline] = []
-    for block in blocks:
-        out += _block_top_inlines(block)
-    for section in tree.sections:
-        out += section.title
-    return tuple(out) + tree.title + tree.subtitle
-
-
-def _block_top_inlines(block: Block) -> list[Inline]:
-    match block:
-        case Paragraph(inlines=inlines):
-            return list(inlines)
-        case List(items=items):
-            return [inline for item in items for child in item.blocks for inline in _block_top_inlines(child)]
-        case Quote(blocks=blocks) | DraftingNote(blocks=blocks):
-            return [inline for child in blocks for inline in _block_top_inlines(child)]
-        case Table(header=header, rows=rows):
-            return [inline for cell in header for inline in cell] + [
-                inline for row in rows for cell in row for inline in cell]
-    return []
-
-
-def _anchored_definitions(inlines: tuple[Inline, ...]):
-    """Every defined term in *inlines* that will carry an anchor: those in
-    text, but not in a title or alt text (see _attribute_text)."""
-    for inline in inlines:
-        match inline:
-            case DefinitionSource(children=children):
-                yield inline
-                yield from _anchored_definitions(children)
-            case Emphasis(children=children) | Strong(children=children) | Link(children=children):
-                yield from _anchored_definitions(children)
+def fill_condition(template: str, value: str, *, key: str = "condition") -> str:
+    return template.replace("{" + key + "}", value)
 
 
 def _attribute_text(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
     """*inlines* for a plain-text attribute (a title, alt text): a defined
     term there shows its term but is not the definition's anchor, since an
-    attribute cannot hold one."""
+    attribute cannot hold one — however deeply it is nested."""
     out: list[Inline] = []
     for inline in inlines:
-        match inline:
-            case DefinitionSource(children=children):
-                out.extend(_attribute_text(children))
-            case Emphasis(children=children) | Strong(children=children):
-                out.append(replace(inline, children=_attribute_text(children)))
-            case _:
-                out.append(inline)
+        if isinstance(inline, DefinitionSource):
+            out.extend(_attribute_text(inline.children))
+            continue
+        children = getattr(inline, "children", None)
+        if isinstance(children, tuple):
+            inline = replace(inline, children=_attribute_text(children))
+        out.append(inline)
     return tuple(out)
-
-
-def fill_condition(template: str, value: str, *, key: str = "condition") -> str:
-    return template.replace("{" + key + "}", value)
-
-
-def _has_condition(block: Block) -> bool:
-    match block:
-        case Paragraph(condition=condition):
-            return bool(condition)
-        case List(items=items):
-            return any(item.condition or any(_has_condition(child) for child in item.blocks) for item in items)
-        case Quote(blocks=blocks) | DraftingNote(blocks=blocks):
-            return isinstance(block, DraftingNote) or any(_has_condition(child) for child in blocks)
-    return False
 
 
 def resolve_tree(

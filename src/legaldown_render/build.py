@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 import secrets
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 from legaldown import Directive, Document, ValidationResult, find_definition_anchors
 from legaldown.directives import lex
@@ -156,9 +157,12 @@ class _Builder:
         self.payloads: list[_Payload] = []
         self.raw_html = 0
         nonce = secrets.token_hex(8)
-        self.sentinel_re = re.compile(f"{_HIDDEN_LEAD}?{_OPEN}{nonce}:(\\d+){_CLOSE}")
+        # A hidden sentinel has its own form ("h"), so the lead character is
+        # taken only with one, never from the source before another sentinel.
+        self.sentinel_re = re.compile(f"(?:{_HIDDEN_LEAD}{_OPEN}{nonce}h|{_OPEN}{nonce}):(\\d+){_CLOSE}")
         # How markdown-it percent-encodes a sentinel inside a URL.
-        self.encoded_sentinel_re = re.compile(f"(%E2%B8%B1)?%EE%80%80{nonce}:(\\d+)%EE%80%81", re.IGNORECASE)
+        self.encoded_sentinel_re = re.compile(
+            f"(?:%E2%B8%B1%EE%80%80{nonce}h|%EE%80%80{nonce}):(\\d+)%EE%80%81", re.IGNORECASE)
         self.nonce = nonce
         self.body = self._protect(body_of(source))
 
@@ -166,16 +170,10 @@ class _Builder:
 
     def _sentinel(self, payload: _Payload) -> str:
         self.payloads.append(payload)
-        lead = _HIDDEN_LEAD if isinstance(payload, _Hidden) else ""
-        return f"{lead}{_OPEN}{self.nonce}:{len(self.payloads) - 1}{_CLOSE}"
-
-    def _payload(self, match: re.Match[str]) -> tuple[str, _Payload]:
-        """The payload a sentinel match names, and any text before it that
-        the match took but that belongs to the source: a _HIDDEN_LEAD
-        character written just before a sentinel of another kind."""
-        payload = self.payloads[int(match.group(1))]
-        lead = match.group(0)[:1] if match.group(0).startswith(_HIDDEN_LEAD) else ""
-        return ("" if isinstance(payload, _Hidden) else lead), payload
+        index = len(self.payloads) - 1
+        if isinstance(payload, _Hidden):
+            return f"{_HIDDEN_LEAD}{_OPEN}{self.nonce}h:{index}{_CLOSE}"
+        return f"{_OPEN}{self.nonce}:{index}{_CLOSE}"
 
     def _protect(self, body: str) -> str:
         """*body* with every directive replaced by a sentinel. A defined term
@@ -237,16 +235,15 @@ class _Builder:
         """*text* with sentinels turned back into their source text, for
         places Markdown shows literally: code, URLs, alt text."""
         def source(match: re.Match[str]) -> str:
-            lead, payload = self._payload(match)
-            return lead + (payload.directive.source if isinstance(payload, DirectiveSource) else payload.source)
+            payload = self.payloads[int(match.group(1))]
+            return payload.directive.source if isinstance(payload, DirectiveSource) else payload.source
         return self.sentinel_re.sub(source, text)
 
     def _restore_url(self, url: str) -> str:
         """A link or image URL with its sentinels restored. markdown-it has
         percent-encoded them, so they are decoded first and the URL is
         normalised again afterwards."""
-        decoded = self.encoded_sentinel_re.sub(
-            lambda match: f"{_HIDDEN_LEAD if match.group(1) else ''}{_OPEN}{self.nonce}:{match.group(2)}{_CLOSE}", url)
+        decoded = self.encoded_sentinel_re.sub(lambda match: unquote(match.group(0)), url)
         return self.md.normalizeLink(self._restore(decoded)) if decoded != url else url
 
     # -- inlines --------------------------------------------------------------
@@ -300,9 +297,9 @@ class _Builder:
         out: list[Inline] = []
         cursor = 0
         for match in self.sentinel_re.finditer(text):
-            lead, payload = self._payload(match)
-            if match.start() > cursor or lead:
-                out.append(Text(text[cursor:match.start()] + lead))
+            payload = self.payloads[int(match.group(1))]
+            if match.start() > cursor:
+                out.append(Text(text[cursor:match.start()]))
             if isinstance(payload, _DefinitionPayload):
                 out.append(DefinitionSource(payload.directive, self.inlines(payload.inner), payload.term))
             elif isinstance(payload, _Hidden):
@@ -317,19 +314,22 @@ class _Builder:
     # -- blocks ---------------------------------------------------------------
 
     def blocks(self, nodes: list[SyntaxTreeNode], *, in_section: bool, top_level: bool,
-               in_quote: bool = False) -> tuple[Block, ...]:
+               in_quote: bool = False, template: bool = True) -> tuple[Block, ...]:
         out: list[Block] = []
         for node in nodes:
-            block = self._block(node, in_section=in_section, top_level=top_level, in_quote=in_quote)
+            block = self._block(node, in_section=in_section, top_level=top_level, in_quote=in_quote,
+                                template=template)
             if block is not None:
                 out.append(block)
         return tuple(out)
 
-    def _block(self, node: SyntaxTreeNode, *, in_section: bool, top_level: bool, in_quote: bool) -> Block | None:
+    def _block(self, node: SyntaxTreeNode, *, in_section: bool, top_level: bool, in_quote: bool,
+               template: bool) -> Block | None:
         match node.type:
             case "paragraph":
                 position = "top" if top_level else "other"
-                return self.paragraph(_inline_content(node), position=position, in_section=in_section)
+                return self.paragraph(_inline_content(node), position=position, in_section=in_section,
+                                      template=template)
             case "bullet_list" | "ordered_list":
                 return self.list(node, in_section=in_section, in_quote=in_quote)
             case "blockquote":
@@ -350,21 +350,24 @@ class _Builder:
                 return Paragraph((Strong(self.inlines(_inline_content(node))),))
         raise InternalError(f"unexpected Markdown block '{node.type}'")
 
-    def paragraph(self, content: str, *, position: str, in_section: bool) -> Paragraph:
+    def paragraph(self, content: str, *, position: str, in_section: bool, template: bool = True) -> Paragraph:
         """A paragraph, with its trailing marker taken off where §5.7 and
-        §15.3 allow one: *position* is ``top`` for a paragraph directly in a
-        section or the preamble, ``item`` for a list item's first paragraph
-        (outside block quotes), and ``other`` for anywhere else."""
-        text, marker = (content, Marker()) if position == "other" else _split_marker(content)
-        if marker.identifier and not in_section:
-            # Before the first heading a marker may hold only a condition
-            # (§4.4, §15.3); with an #id it is literal text (anchor-misplaced).
-            if not self._is_include_only(text):
-                text, marker = content, Marker()
-            else:
-                marker = Marker(condition=marker.condition)
-        if marker.identifier and self._is_include_only(text):
-            marker = Marker(condition=marker.condition)  # ignored (§12.2)
+        §15.3 place one, exactly as the validator places it: *position* is
+        ``top`` for a paragraph directly in a section or the preamble,
+        ``item`` for a list item's first paragraph (outside block quotes),
+        and ``other`` for anywhere else. Anywhere a marker is not placed it
+        stays literal text, and the validator reports it (anchor-misplaced).
+        """
+        if position == "other":
+            return Paragraph(self.inlines(content))
+        text, marker = _split_marker(content)
+        if marker != Marker() and position == "top" and self._is_include_only(text):
+            marker = Marker(condition=marker.condition)  # the #id is ignored (§12.2)
+        elif not in_section and (position == "item" or marker.identifier or not template):
+            # Before the first heading (§4.4, §15.3): no anchors, no
+            # conditions on list items, and a paragraph's condition only in
+            # a template.
+            text, marker = content, Marker()
         return Paragraph(
             self.inlines(text),
             anchor_id=marker.identifier,
@@ -448,15 +451,40 @@ class _Builder:
                 condition=marker.condition,
                 blocks=self.blocks(nodes, in_section=True, top_level=True),
             ))
+        template = self._is_template(sections, preamble_nodes)
         metadata = self.document.metadata
         return RenderTree(
             title=plain_inlines(metadata.title),
             subtitle=plain_inlines(metadata.subtitle),
             language=self.language,
-            preamble=self.blocks(preamble_nodes, in_section=False, top_level=True),
+            preamble=self.blocks(preamble_nodes, in_section=False, top_level=True, template=template),
             sections=tuple(sections),
-            is_template=metadata.questions is not None,
+            is_template=template,
         )
+
+    def _is_template(self, sections: list[Section], preamble: list[SyntaxTreeNode]) -> bool:
+        """Whether the document is a template, decided as the validator
+        decides it: declared questions, a conditional attachment, section,
+        or unit, or a {{choose:}}. A preamble paragraph's own condition
+        does not count — it applies only once the document is a template."""
+        metadata = self.document.metadata
+        return (
+            metadata.questions is not None
+            or any(attachment.when for attachment in metadata.attachments)
+            or any(section.condition for section in sections)
+            or any(_has_condition(block) for section in sections for block in section.blocks)
+            or any(isinstance(payload, DirectiveSource) and payload.directive.name == "choose"
+                   for payload in self.payloads)
+            or any(self._conditional_include(node) for node in preamble)
+        )
+
+    def _conditional_include(self, node: SyntaxTreeNode) -> bool:
+        """True for a preamble paragraph holding only an {{include:}} and a
+        condition, whose condition applies in any document (§12.2)."""
+        if node.type != "paragraph":
+            return False
+        text, marker = _split_marker(_inline_content(node))
+        return bool(marker.condition) and self._is_include_only(text)
 
     def _check_outline(self, levels: list[int]) -> None:
         expected = [section.level for section in self.document.sections]
@@ -466,6 +494,18 @@ class _Builder:
                 f"(renderer: {levels}, validator: {expected}). This is a bug; please report it "
                 "with the document that triggers it."
             )
+
+
+def _has_condition(block: Block) -> bool:
+    """True if a placed condition is on *block* or on a unit inside it."""
+    match block:
+        case Paragraph(condition=condition):
+            return bool(condition)
+        case List(items=items):
+            return any(item.condition or any(_has_condition(child) for child in item.blocks) for item in items)
+        case Quote(blocks=blocks) | DraftingNote(blocks=blocks):
+            return any(_has_condition(child) for child in blocks)
+    return False
 
 
 def _inline_content(node: SyntaxTreeNode) -> str:

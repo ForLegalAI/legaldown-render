@@ -430,3 +430,66 @@ def test_section_numbers_agree_with_the_validator() -> None:
     result = render(source, format="text")
     expected = [entry.number for entry in validate_document(parse_document(source)).sections]
     assert [section.designation for section in result.tree.sections] == expected == ["1", "2", "3", "4", "4"]
+
+
+# -- regressions from the fourth code review -------------------------------------------
+
+
+def test_preamble_condition_is_literal_outside_a_template() -> None:
+    result = render(FRONT + "Intro text {when=q}\n\n# A\n\nBody.\n", format="text")
+    assert "Intro text {when=q}" in result.output
+    assert "[Only if" not in result.output
+    assert result.tree.is_template is False
+
+
+def test_preamble_condition_applies_in_a_template() -> None:
+    source = FRONT.replace("title: T", THREE_WAY) + "Intro text {when=flag}\n\n# A\n\nBody.\n"
+    output = render(source, format="text").output
+    assert "[Only if: flag] Intro text" in output
+
+
+def test_preamble_list_item_markers_are_literal() -> None:
+    source = FRONT.replace("title: T", THREE_WAY) + "- item one {when=flag}\n- item two {#two}\n\n# A\n"
+    output = render(source, format="text").output
+    assert "(a) item one {when=flag}" in output
+    assert "(b) item two {#two}" in output
+
+
+def test_hidden_lead_character_in_the_source_is_plain_text() -> None:
+    body = "# A\n\n⸱{{include: x.lgd}} {#p}\n\nSee {{ref: p}}.\n"
+    output = render(FRONT + body, format="text").output
+    assert "See 1(a)." not in output and "See 1." in output
+    assert "⸱[NOT PROCESSED: include x.lgd]" in output
+
+
+def test_level_six_headings_are_numbered_as_the_validator_numbers_them() -> None:
+    from legaldown import parse_document, validate_document
+
+    source = FRONT + "# A\n\n## B\n\n### C\n\n#### D\n\n##### E\n\n###### F\n"
+    result = render(source, format="text")
+    expected = [entry.number for entry in validate_document(parse_document(source)).sections]
+    assert [section.designation for section in result.tree.sections] == expected
+
+
+def test_none_scheme_designation_skips_nested_references() -> None:
+    body = "# Later *see {{ref: b}}* {#c}\n\nSee {{ref: c}}.\n\n# B {#b}\n"
+    output = text(body, overrides={"numbering.scheme": "none"})
+    assert "See Later see." in output
+    assert "BROKEN" not in output
+
+
+def test_defined_term_nested_in_a_heading_keeps_its_anchor() -> None:
+    # (The validator does not register a definition in a heading, so a
+    # {{term:}} to it is term-undefined; what matters here is the anchor.)
+    body = '# *The "Buyer" {{def:}} and friends* {#a}\n\nSee {{ref: a}}.\n'
+    output = render(FRONT + body, standalone=False, overrides={"numbering.scheme": "none"}).output
+    assert '<dfn class="ld-defined ld-style-bold" id="def:buyer">Buyer</dfn>' in output
+    assert '<a class="ld-ref" href="#a">The Buyer and friends</a>' in output
+
+
+def test_definition_in_a_link_inside_alt_text_takes_no_anchor() -> None:
+    body = '# A\n\n![pic [the "Fee" {{def:}}](u)](i.png) and {{term: fee}}.\n'
+    output = render(FRONT + body, standalone=False).output
+    assert 'id="def:fee"' not in output
+    assert 'href="#def:fee"' not in output
+    assert 'alt="pic the Fee"' in output

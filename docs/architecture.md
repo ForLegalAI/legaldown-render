@@ -77,14 +77,19 @@ Text nodes are then split on the sentinels, and the directives return as
 `DirectiveSource` and `DefinitionSource` nodes. Where Markdown shows text literally (code, URLs),
 the sentinels are turned back into their source text.
 
-**Markers** (`{#id when=…}`) are taken off only where §5.7 and §15.3 allow one:
+**Markers** (`{#id when=…}`) are taken off exactly where the validator places them (§5.7,
+§15.3):
 
 - after a heading
 - at the end of a top-level paragraph
 - at the end of a list item's first paragraph, outside block quotes
-- in the preamble, with a condition only
+- in the preamble, only a paragraph's condition, and only in a template
+- on a paragraph holding only an `{{include:}}`, anywhere: its condition applies, and its `#id`
+  is ignored (§12.2)
 
-Anywhere else, a marker stays literal text, and the validator reports it.
+Anywhere else, a marker stays literal text, and the validator reports it (`anchor-misplaced`).
+Whether a document is a **template** is decided as the validator decides it: declared
+`questions`, a conditional attachment, section or unit, or a `{{choose:}}`.
 
 **Outline check.** The builder's top-level headings must match the validator's sections one to
 one. A mismatch raises `InternalError`: the two parsers disagree, and the renderer never guesses.
@@ -138,7 +143,13 @@ with `legal_name`, per §3.6).
 **Anchors.** Section, item, paragraph, and attachment anchors use their identifiers. Definition
 anchors are `def:<id>`. Identifiers cannot contain `:`, so the two can never collide in HTML's
 single id space (§5.6). When alternatives share an identifier, only the first keeps the anchor,
-so ids stay unique.
+so ids stay unique. A definition's anchor is given out in one place, when its defined term is
+resolved. Terms in titles or alt text get none. After everything is resolved, one pass drops the
+link of any `{{term:}}` whose definition got no anchor, so term links always have a target.
+
+Under the `none` scheme, a section's designation is its heading text, computed by a text-only
+pass that gives out no anchors and leaves references out. Headings are numbered with their level
+clamped to 1–5, as the validator numbers them.
 
 ### 5. Write (`writers/`)
 

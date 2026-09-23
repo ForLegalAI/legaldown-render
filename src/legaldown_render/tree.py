@@ -12,8 +12,8 @@ All nodes are frozen; stages build new trees rather than mutate.
 """
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field, replace
 
 from legaldown import Directive
 
@@ -375,6 +375,62 @@ def iter_tree_inlines(tree: RenderTree) -> Iterator[Inline]:
         for name, title in signature.signatories:
             yield from iter_inlines(name)
             yield from iter_inlines(title)
+
+
+def map_inlines(inlines: tuple[Inline, ...], fn: Callable[[Inline], Inline]) -> tuple[Inline, ...]:
+    """*inlines* with *fn* applied to every inline, innermost first."""
+    out: list[Inline] = []
+    for inline in inlines:
+        children = getattr(inline, "children", None)
+        if isinstance(children, tuple):
+            inline = replace(inline, children=map_inlines(children, fn))
+        title = getattr(inline, "title", None)
+        if isinstance(title, tuple):
+            inline = replace(inline, title=map_inlines(title, fn))
+        out.append(fn(inline))
+    return tuple(out)
+
+
+def map_block_inlines(block: Block, fn: Callable[[Inline], Inline]) -> Block:
+    """*block* with *fn* applied to every inline inside it."""
+    match block:
+        case Paragraph(inlines=inlines):
+            return replace(block, inlines=map_inlines(inlines, fn))
+        case List(items=items):
+            return replace(block, items=tuple(
+                replace(item, blocks=tuple(map_block_inlines(child, fn) for child in item.blocks)) for item in items))
+        case Quote(blocks=blocks) | DraftingNote(blocks=blocks):
+            return replace(block, blocks=tuple(map_block_inlines(child, fn) for child in blocks))
+        case Table(header=header, rows=rows):
+            return replace(block, header=tuple(map_inlines(cell, fn) for cell in header),
+                           rows=tuple(tuple(map_inlines(cell, fn) for cell in row) for row in rows))
+    return block
+
+
+def map_tree_inlines(tree: RenderTree, fn: Callable[[Inline], Inline]) -> RenderTree:
+    """*tree* with *fn* applied to every inline it holds, wherever it is."""
+    def pair(value: tuple[Inline, ...]) -> tuple[Inline, ...]:
+        return map_inlines(value, fn)
+
+    return replace(
+        tree,
+        title=pair(tree.title),
+        subtitle=pair(tree.subtitle),
+        preamble=tuple(map_block_inlines(block, fn) for block in tree.preamble),
+        sections=tuple(replace(section, title=pair(section.title),
+                               blocks=tuple(map_block_inlines(block, fn) for block in section.blocks))
+                       for section in tree.sections),
+        header=tuple((label, pair(value)) for label, value in tree.header),
+        sides=tuple(replace(side, label=pair(side.label), parties=tuple(
+            replace(party, name=pair(party.name),
+                    details=tuple((label, pair(value)) for label, value in party.details),
+                    representatives=tuple((pair(name), pair(title)) for name, title in party.representatives))
+            for party in side.parties)) for side in tree.sides),
+        attachments=tuple(replace(attachment, title=pair(attachment.title)) for attachment in tree.attachments),
+        signatures=tuple(replace(signature, side=pair(signature.side), name=pair(signature.name),
+                                 signatories=tuple((pair(name), pair(title)) for name, title in signature.signatories))
+                         for signature in tree.signatures),
+    )
 
 
 def assert_resolved(tree: RenderTree) -> None:

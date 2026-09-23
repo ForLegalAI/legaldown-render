@@ -50,8 +50,6 @@ def test_set_keeps_text_values_as_written(capsys: pytest.CaptureFixture[str]) ->
     assert "under Section § 2.1." in capsys.readouterr().out
 
 
-def test_invalid_quoted_setting_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as caught:
-        main([FEATURES, "--set", 'references.format="\\d"'])
-    assert caught.value.code == 2
-    assert "not a valid quoted value" in capsys.readouterr().err
+def test_quote_bounded_literal_setting_is_kept(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([FEATURES, "-f", "text", "-q", "--set", 'references.format="§" {designation} "x"']) == 0
+    assert 'under Section "§" 2.1 "x".' in capsys.readouterr().out

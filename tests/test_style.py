@@ -100,9 +100,9 @@ def test_yaml_quoted_text_values_are_unquoted() -> None:
     assert load_style(overrides={"numbering.scheme": parse_override("numbering.scheme", "'none'")}).numbering.scheme == "none"
 
 
-def test_quoted_values_keep_inner_quotes_or_fail_clearly() -> None:
+def test_only_a_single_quoted_string_is_unquoted() -> None:
     from legaldown_render.style import parse_override
 
     assert parse_override("references.format", """'"{designation}"'""") == '"{designation}"'
-    with pytest.raises(StyleError, match="not a valid quoted value"):
-        parse_override("references.format", '"\\d"')
+    for literal in ('"Section" {designation} "x"', '"C:\\docs"', "'it's'"):
+        assert parse_override("references.format", literal) == literal
