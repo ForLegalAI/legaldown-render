@@ -184,15 +184,24 @@ def _copy(value: Any) -> Any:
 def parse_override(key: str, text: str) -> Any:
     """The value for setting *key* written as *text* on a command line.
 
-    Text settings take *text* exactly as written, so ``[_____]`` or
-    ``{designation}`` stay text. Other settings read it as YAML, so that
-    ``true``, ``2``, or ``[...]`` mean what they say. ``null`` clears a
-    setting that may be unset, such as ``locale``.
+    Text settings take *text* as written, so ``[_____]`` or ``{designation}``
+    stay text; a value in YAML quotes (``"none"``, ``' | '``) is unquoted.
+    Other settings read it as YAML, so that ``true``, ``2``, or ``[...]``
+    mean what they say. ``null`` clears a setting that may be unset, such as
+    ``locale``.
     """
     hint = _hint_for(key.split("."))
     if hint is not None and _is_text(hint):
-        if type(None) in get_args(hint) and text.strip() in ("null", "~"):
+        stripped = text.strip()
+        if type(None) in get_args(hint) and stripped in ("null", "~"):
             return None
+        if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in "'\"":
+            try:
+                quoted = yaml.safe_load(stripped)
+            except yaml.YAMLError:
+                quoted = None
+            if isinstance(quoted, str):
+                return quoted
         return text
     try:
         return yaml.safe_load(text) if text.strip() else ""

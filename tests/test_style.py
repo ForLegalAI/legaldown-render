@@ -89,3 +89,12 @@ def test_overrides_merge_in_order_and_never_modify_the_callers_values() -> None:
                       {"numbering": nested, "numbering.scheme": "mixed"}):
         assert load_style(overrides=overrides).numbering.scheme == "mixed"
     assert nested == {"levels": []}
+
+
+def test_yaml_quoted_text_values_are_unquoted() -> None:
+    from legaldown_render.style import parse_override
+
+    assert parse_override("numbering.scheme", '"none"') == "none"
+    assert parse_override("references.format", '"§ {designation}"') == "§ {designation}"
+    assert parse_override("template_view.choice_separator", "' | '") == " | "
+    assert load_style(overrides={"numbering.scheme": parse_override("numbering.scheme", "'none'")}).numbering.scheme == "none"

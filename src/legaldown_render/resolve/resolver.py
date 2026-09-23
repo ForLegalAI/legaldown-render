@@ -26,6 +26,7 @@ from typing import Any
 
 from legaldown import Diagnostic, Directive, Document, ValidationResult, slugify_identifier
 from legaldown.validator import KNOWN_CURRENCIES
+from legaldown.validator.conditions import exclusive, parse_condition
 from legaldown.validator.helpers import is_positive_numeric, is_valid_iso_date, is_valid_money_amount
 from legaldown.validator.patterns import IDENTIFIER_RE
 
@@ -218,35 +219,44 @@ class Resolver:
 
     def _number_sections(self) -> list[Section]:
         levels = heading_levels(self.style.numbering)
-        counters = [0] * 7
-        previous: dict[int, Section] = {}
+        # The number shown at each level: a section's own, or the one it
+        # shares with an earlier alternative. Counters of deeper levels
+        # restart under every new section.
+        shown = [0] * 7
+        counters: dict[int, _Counter] = {}
         out: list[Section] = []
         for section in self.tree.sections:
             level = section.level
-            sibling = previous.get(level)
-            # Alternatives share an identifier, and SHOULD share a number (§15.8).
-            if not (sibling is not None and _alternatives(sibling.identifier, sibling.condition,
-                                                          section.identifier, section.condition)):
-                counters[level] += 1
-            # An alternative's subsections are numbered afresh, like any section's.
-            counters[level + 1:] = [0] * (6 - level)
-            previous = {lvl: s for lvl, s in previous.items() if lvl < level}
-            previous[level] = section
+            counters = {lvl: counter for lvl, counter in counters.items() if lvl <= level}
+            shown[level] = counters.setdefault(level, _Counter()).next(
+                section.identifier, section.condition, self._exclusive)
+            shown[level + 1:] = [0] * (6 - level)
             if self.textual:
                 label, designation = None, self._title_text(section.title)
             else:
                 designation = ""
                 for depth in range(1, level + 1):
-                    if counters[depth]:
+                    if shown[depth]:
                         fmt = levels[depth - 1]
-                        designation = extend(designation, fill(fmt.ref, n=format_counter(counters[depth], fmt.counter)),
+                        designation = extend(designation, fill(fmt.ref, n=format_counter(shown[depth], fmt.counter)),
                                              textual=False)
                 fmt = levels[level - 1]
-                label = fill(fmt.label, n=format_counter(counters[level], fmt.counter), path=designation)
+                label = fill(fmt.label, n=format_counter(shown[level], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
             self._register(section.identifier, _Target(designation, anchor))
             out.append(replace(section, label=label, designation=designation, anchor=anchor))
         return out
+
+    def _exclusive(self, first: str, second: str) -> bool:
+        """True if units with conditions *first* and *second* can never both
+        appear (§15.4); False when either condition is not a valid test of a
+        declared decision question."""
+        conditions = [parse_condition(text) for text in (first, second)]
+        for condition in conditions:
+            declared = self.questions.get(condition.question) if condition else None
+            if not isinstance(declared, dict) or declared.get("type") not in _DECISION_TYPES:
+                return False
+        return exclusive(frozenset({conditions[0]}), frozenset({conditions[1]}), self.questions)
 
     def _title_text(self, title: tuple[Inline, ...]) -> str:
         """A heading's text, as the ``none`` scheme designates it (§13.3).
@@ -261,17 +271,13 @@ class Resolver:
         return " ".join(plain_text(self._resolve_inlines(tuple(kept))).split())
 
     def _structure_section(self, section: Section) -> tuple[Block, ...]:
-        paragraphs = 0
-        previous: Paragraph | None = None
+        paragraphs = _Counter()
         out: list[Block] = []
         for block in section.blocks:
             if isinstance(block, Paragraph) and block.top_level:
                 # Alternative paragraphs share a number, as sections do (§15.8).
-                if previous is None or not _alternatives(previous.anchor_id, previous.condition,
-                                                         block.anchor_id, block.condition):
-                    paragraphs += 1
-                previous = block
-                block = self._number_paragraph(block, section, paragraphs)
+                number = paragraphs.next(block.anchor_id, block.condition, self._exclusive)
+                block = self._number_paragraph(block, section, number)
             out.append(self._structure(block, section=section, depth=0))
         return tuple(out)
 
@@ -315,13 +321,9 @@ class Resolver:
             fmt = None
         base = section.designation if section else ""
         items: list[ListItem] = []
-        index = 0
-        previous: ListItem | None = None
+        counter = _Counter()
         for item in block.items:
-            if previous is None or not _alternatives(previous.anchor_id, previous.condition,
-                                                     item.anchor_id, item.condition):
-                index += 1
-            previous = item
+            index = counter.next(item.anchor_id, item.condition, self._exclusive)
             if fmt is not None:
                 n = format_counter(index, fmt.counter)
                 designation = extend(parent, fill(fmt.ref, n=n, section=base), textual=self.textual)
@@ -393,8 +395,8 @@ class Resolver:
                 return Emphasis(self._resolve_inlines(children))
             case Strong(children=children):
                 return Strong(self._resolve_inlines(children))
-            case Link(children=children) | Image(children=children):
-                return replace(inline, children=self._resolve_inlines(children))
+            case Link(children=children, title=title) | Image(children=children, title=title):
+                return replace(inline, children=self._resolve_inlines(children), title=self._resolve_inlines(title))
             case _:
                 return inline
 
@@ -655,11 +657,27 @@ _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
 }
 
 
-def _alternatives(first_id: str, first_condition: str, second_id: str, second_condition: str) -> bool:
-    """True when two consecutive units are alternatives: they share an
-    identifier and both are conditional (§15.4). Mutual exclusion itself is
-    checked by the validator."""
-    return bool(first_id) and first_id == second_id and bool(first_condition) and bool(second_condition)
+class _Counter:
+    """Numbers sibling units in order. An alternative — a unit sharing an
+    identifier with an earlier sibling whose condition excludes its own
+    (§15.4) — shows that sibling's number instead of taking the next (§15.8)."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.alternatives: dict[str, list[tuple[str, int]]] = {}
+
+    def next(self, identifier: str, condition: str, exclusive: Callable[[str, str], bool]) -> int:
+        if identifier and condition:
+            earlier = self.alternatives.setdefault(identifier, [])
+            for other, number in earlier:
+                if exclusive(other, condition):
+                    earlier.append((condition, number))
+                    return number
+            self.count += 1
+            earlier.append((condition, self.count))
+            return self.count
+        self.count += 1
+        return self.count
 
 
 def fill_condition(template: str, value: str, *, key: str = "condition") -> str:

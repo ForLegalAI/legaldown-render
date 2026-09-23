@@ -300,7 +300,7 @@ class HtmlWriter:
             case Link(href=href, children=children, title=title):
                 if not is_safe_href(href):
                     return self.inlines(children)
-                title_attr = f' title="{_attr(title)}"' if title else ""
+                title_attr = f' title="{_attr(plain_text(title))}"' if title else ""
                 outer, self._in_link = self._in_link, True
                 content = self.inlines(children)
                 self._in_link = outer
@@ -309,7 +309,7 @@ class HtmlWriter:
                 alt = plain_text(children)
                 if not is_safe_href(src):
                     return _text(alt)
-                title_attr = f' title="{_attr(title)}"' if title else ""
+                title_attr = f' title="{_attr(plain_text(title))}"' if title else ""
                 return f'<img src="{_attr(src)}" alt="{_attr(alt)}"{title_attr}>'
             case CrossRef(text=text, target=target):
                 if not target or self._in_link:

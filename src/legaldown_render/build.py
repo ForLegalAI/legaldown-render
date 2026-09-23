@@ -9,9 +9,11 @@ comes from markdown-it-py, because the validator's model does not keep it yet
 
 The two meet through **sentinels**. Before markdown-it sees the body, every
 directive (and every ``"Term" {{def:}}`` span) is replaced by a private-use
-token, ``\\ue000<n>\\ue001``, so Markdown can never reinterpret directive
-syntax — an underscore in a party name, a pipe in a table cell. Text nodes are
-split on the sentinels afterwards and the directives put back as tree nodes.
+token, ``\\ue000<nonce>:<n>\\ue001``, so Markdown can never reinterpret
+directive syntax — an underscore in a party name, a pipe in a table cell. Text
+nodes are split on the sentinels afterwards and the directives put back as
+tree nodes. The nonce is random for every build, so no text in a document —
+written out, as an entity, or percent-encoded — can pass for a sentinel.
 
 The builder then checks that its headings match the validator's sections one
 to one. A mismatch means the two parsers disagree about the document, which
@@ -20,6 +22,7 @@ must never be papered over: it raises :class:`InternalError`.
 from __future__ import annotations
 
 import re
+import secrets
 from dataclasses import dataclass
 
 from legaldown import Directive, Document, ValidationResult, find_definition_anchors
@@ -56,12 +59,6 @@ from .tree import (
 )
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
-_SENTINEL_RE = re.compile(f"{_OPEN}(\\d+){_CLOSE}")
-# The sentinel characters themselves, where the source already holds them.
-_SENTINEL_CHAR_RE = re.compile(f"[{_OPEN}{_CLOSE}]")
-# Spacing allowed between a defined term's closing mark and its {{def:}} (§7.2).
-_ANCHOR_GAP = " \t\u00a0\u202f"
-_ENCODED_SENTINEL_RE = re.compile("%EE%80%80(\\d+)%EE%80%81", re.IGNORECASE)
 _DRAFTING_RE = re.compile(r"^\[!drafting\][ \t]*$", re.IGNORECASE)
 _COMMENT_ONLY_RE = re.compile(r"^\s*(?:<!--.*?-->\s*)+$", re.DOTALL)
 _ALIGN_RE = re.compile(r"text-align:\s*(left|center|right)")
@@ -86,19 +83,33 @@ class _DefinitionPayload:
     #: already replaced by sentinels.
     inner: str
     term: str
-    #: The full source span, for restoring the text where Markdown shows it
-    #: literally (a link URL, say).
+    #: The source span the sentinel replaced, for restoring the text where
+    #: Markdown shows it literally (a code block, a link URL).
     source: str
 
 
 @dataclass(frozen=True, slots=True)
-class _Literal:
-    """A sentinel character that was already in the source, kept as text."""
+class _Hidden:
+    """Source that renders nothing — a {{def:}} and the spacing before it —
+    kept so that literal restoration gives back the source exactly."""
 
     source: str
 
 
-_Payload = DirectiveSource | _DefinitionPayload | _Literal
+_Payload = DirectiveSource | _DefinitionPayload | _Hidden
+
+
+@dataclass(frozen=True, slots=True)
+class _DefinitionSpan:
+    """Where a defined term and its {{def:}} lie in the body (offsets)."""
+
+    start: int  # of the term's sentinel: its opening mark, or emphasis wrapping it
+    opening: int  # the opening quotation mark
+    closing: int  # the closing quotation mark
+    end: int  # end of the term's sentinel
+    kept: str  # emphasis markers after the term that pair with text beyond it
+    hidden: int  # start of the spacing and {{def:}} that render nothing
+    term: str
 
 
 class _Builder:
@@ -110,53 +121,67 @@ class _Builder:
         self.env: dict = {}
         self.payloads: list[_Payload] = []
         self.raw_html = 0
+        nonce = secrets.token_hex(8)
+        self.sentinel_re = re.compile(f"{_OPEN}{nonce}:(\\d+){_CLOSE}")
+        # How markdown-it percent-encodes a sentinel inside a URL.
+        self.encoded_sentinel_re = re.compile(f"%EE%80%80{nonce}:(\\d+)%EE%80%81", re.IGNORECASE)
+        self.nonce = nonce
         self.body = self._protect(body_of(source))
 
     # -- sentinels ------------------------------------------------------------
 
     def _sentinel(self, payload: _Payload) -> str:
         self.payloads.append(payload)
-        return f"{_OPEN}{len(self.payloads) - 1}{_CLOSE}"
-
-    def _literal(self, text: str) -> str:
-        """*text* with any sentinel character it already holds protected, so
-        that source text can never be mistaken for a sentinel."""
-        return _SENTINEL_CHAR_RE.sub(lambda match: self._sentinel(_Literal(match.group())), text)
+        return f"{_OPEN}{self.nonce}:{len(self.payloads) - 1}{_CLOSE}"
 
     def _protect(self, body: str) -> str:
         """*body* with every directive replaced by a sentinel."""
         lexed = lex(body)
-        # A defined term becomes one sentinel, from its opening quotation
-        # mark to its closing one, and its {{def:}} is dropped. Emphasis
-        # markers around the term stay where they are, so they still pair up
-        # with their closers after the directive.
+        # A defined term becomes one sentinel, its {{def:}} another that
+        # renders nothing. Emphasis markers that wrap just the term go with
+        # it — the style decides how a defined term looks (§7.2) — while
+        # markers that pair with text beyond the term stay in place.
         definitions = {}
         for anchor in find_definition_anchors(body, language=self.language, lexed=lexed):
             if anchor.term is None or anchor.pair is None:
                 continue  # a bare {{def:}}: an Error the validator reports; it renders nothing
+            directive = anchor.directive
             opening = body.index(anchor.pair[0], anchor.start)
-            closing = body.rindex(anchor.pair[1], opening + 1, anchor.directive.start)
-            definitions[id(anchor.directive)] = (opening, closing, anchor.term, anchor.directive.end)
-        covered = [(opening, end) for opening, _, _, end in definitions.values()]
+            closing = body.rindex(anchor.pair[1], opening + 1, directive.start)
+            leading = body[anchor.start:opening]
+            # Between the closing mark and the directive the validator allows
+            # only emphasis markers, then spacing (§7.2).
+            trailing = body[closing + 1:directive.start].rstrip()
+            wraps_term = bool(leading) and trailing == leading[::-1]
+            definitions[id(directive)] = _DefinitionSpan(
+                start=anchor.start if wraps_term else opening,
+                opening=opening,
+                closing=closing,
+                end=closing + 1 + (len(trailing) if wraps_term else 0),
+                kept="" if wraps_term else trailing,
+                hidden=closing + 1 + len(trailing),
+                term=anchor.term,
+            )
+        covered = [(span.start, directive.end) for directive in lexed.directives
+                   if (span := definitions.get(id(directive)))]
 
         out: list[str] = []
         cursor = 0
         for directive in lexed.directives:
-            if id(directive) in definitions:
-                opening, closing, term, _ = definitions[id(directive)]
-                inner = self._protect_inner(body, opening + 1, closing, lexed.directives)
-                out.append(self._literal(body[cursor:opening]))
-                out.append(self._sentinel(_DefinitionPayload(directive, inner, term, body[opening:directive.end])))
-                # What separates the term from its {{def:}}: emphasis markers
-                # stay, and the spacing goes with the directive.
-                out.append(self._literal(body[closing + 1:directive.start].rstrip(_ANCHOR_GAP)))
+            span = definitions.get(id(directive))
+            if span is not None:
+                inner = self._protect_inner(body, span.opening + 1, span.closing, lexed.directives)
+                out.append(body[cursor:span.start])
+                out.append(self._sentinel(_DefinitionPayload(directive, inner, span.term, body[span.start:span.end])))
+                out.append(span.kept)
+                out.append(self._sentinel(_Hidden(body[span.hidden:directive.end])))
             elif any(start <= directive.start and directive.end <= end for start, end in covered):
                 continue  # inside a defined term: protected with the term
             else:
-                out.append(self._literal(body[cursor:directive.start]))
+                out.append(body[cursor:directive.start])
                 out.append(self._sentinel(DirectiveSource(directive)))
             cursor = directive.end
-        out.append(self._literal(body[cursor:]))
+        out.append(body[cursor:])
         return "".join(out)
 
     def _protect_inner(self, body: str, start: int, end: int, directives: list[Directive]) -> str:
@@ -165,10 +190,10 @@ class _Builder:
         cursor = start
         for directive in directives:
             if start <= directive.start and directive.end <= end:
-                out.append(self._literal(body[cursor:directive.start]))
+                out.append(body[cursor:directive.start])
                 out.append(self._sentinel(DirectiveSource(directive)))
                 cursor = directive.end
-        out.append(self._literal(body[cursor:end]))
+        out.append(body[cursor:end])
         return "".join(out).strip()
 
     def _restore(self, text: str) -> str:
@@ -177,13 +202,13 @@ class _Builder:
         def source(match: re.Match[str]) -> str:
             payload = self.payloads[int(match.group(1))]
             return payload.directive.source if isinstance(payload, DirectiveSource) else payload.source
-        return _SENTINEL_RE.sub(source, text)
+        return self.sentinel_re.sub(source, text)
 
     def _restore_url(self, url: str) -> str:
         """A link or image URL with its sentinels restored. markdown-it has
         percent-encoded them, so they are decoded first and the URL is
         normalised again afterwards."""
-        decoded = _ENCODED_SENTINEL_RE.sub(lambda match: f"{_OPEN}{match.group(1)}{_CLOSE}", url)
+        decoded = self.encoded_sentinel_re.sub(lambda match: f"{_OPEN}{self.nonce}:{match.group(1)}{_CLOSE}", url)
         return self.md.normalizeLink(self._restore(decoded)) if decoded != url else url
 
     # -- inlines --------------------------------------------------------------
@@ -218,10 +243,10 @@ class _Builder:
                 return [Code(self._restore(node.content))]
             case "link":
                 href = self._restore_url(str(node.attrs.get("href", "")))
-                return [Link(href, self._inline_children(node), str(node.attrs.get("title", "") or ""))]
+                return [Link(href, self._inline_children(node), self._title(node))]
             case "image":
                 src = self._restore_url(str(node.attrs.get("src", "")))
-                return [Image(src, self._inline_children(node), str(node.attrs.get("title", "") or ""))]
+                return [Image(src, self._inline_children(node), self._title(node))]
             case "html_inline":
                 if not node.content.startswith("<!--"):
                     self.raw_html += 1  # never emitted (§8.7)
@@ -229,17 +254,21 @@ class _Builder:
             case _:
                 return [Text(self._restore(node.content))] if node.content else []
 
+    def _title(self, node: SyntaxTreeNode) -> tuple[Inline, ...]:
+        """A link or image title: plain text in which directives resolve."""
+        return _merge_text(self._split_sentinels(str(node.attrs.get("title", "") or "")))
+
     def _split_sentinels(self, text: str) -> list[Inline]:
         out: list[Inline] = []
         cursor = 0
-        for match in _SENTINEL_RE.finditer(text):
+        for match in self.sentinel_re.finditer(text):
             if match.start() > cursor:
                 out.append(Text(text[cursor:match.start()]))
             payload = self.payloads[int(match.group(1))]
             if isinstance(payload, _DefinitionPayload):
                 out.append(DefinitionSource(payload.directive, self.inlines(payload.inner), payload.term))
-            elif isinstance(payload, _Literal):
-                out.append(Text(payload.source))
+            elif isinstance(payload, _Hidden):
+                pass
             else:
                 out.append(payload)
             cursor = match.end()
@@ -306,7 +335,7 @@ class _Builder:
         )
 
     def _is_include_only(self, text: str) -> bool:
-        match = _SENTINEL_RE.fullmatch(HTML_COMMENT_RE.sub("", text).strip())
+        match = self.sentinel_re.fullmatch(HTML_COMMENT_RE.sub("", text).strip())
         if not match:
             return False
         payload = self.payloads[int(match.group(1))]

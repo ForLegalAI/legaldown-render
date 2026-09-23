@@ -314,3 +314,53 @@ questions:
     choices:
       courts: Courts
       arb: Arbitration"""
+
+
+# -- regressions from the second code review ---------------------------------------
+
+
+def test_sentinels_written_as_entities_are_plain_text() -> None:
+    body = "# A\n\nParty {{placeholder: x}} and &#xE000;9&#xE001; here, &#xE000;0&#xE001; too.\n"
+    output = render(FRONT + body, format="text").output
+    assert "Party [_____] and 9 here, 0 too." in output
+
+
+def test_sentinels_percent_encoded_in_urls_stay_as_written() -> None:
+    body = "# A\n\n{{placeholder: x}} [link](http://a/%EE%80%800%EE%80%81) [y](&#xE000;1&#xE001;)\n"
+    output = render(FRONT + body).output
+    assert 'href="http://a/%EE%80%800%EE%80%81"' in output
+    assert "placeholder" not in "".join(re.findall(r'href="([^"]*)"', output))
+
+
+def test_literal_restore_gives_back_a_definition_exactly() -> None:
+    output = text('# A\n\nText.\n\n    **"Term"** {{def: term}}\n')
+    assert '\n    **"Term"** {{def: term}}\n' in output
+
+
+def test_emphasis_wrapping_only_the_term_is_left_to_the_style() -> None:
+    body = '# D\n\n*"Fee"* {{def:}} means the fee, and "Tax" {{def:}} means tax.\n'
+    output = render(FRONT + body, standalone=False, overrides={"definitions.style": "plain"}).output
+    assert '<dfn class="ld-defined ld-style-plain" id="def:fee">Fee</dfn> means the fee' in output
+    assert '<dfn class="ld-defined ld-style-plain" id="def:tax">Tax</dfn> means tax.' in output
+    assert "<em>" not in output
+
+
+def test_directives_in_link_titles_are_resolved() -> None:
+    output = render(FRONT + '# A\n\n[site](https://example.com "{{party: acme}}")\n').output
+    assert '<a href="https://example.com" title="Acme">site</a>' in output
+
+
+def test_alternatives_share_a_number_when_not_adjacent() -> None:
+    source = FRONT.replace("title: T", TEMPLATE_QUESTIONS) + (
+        "# A\n\nCourts. {#p when=forum:courts}\n\nMid.\n\nArb. {#p when=forum:arb}\n\nAfter.\n")
+    output = render(source, format="text", overrides={"paragraphs.numbered": True}).output
+    for line in ("1.1 Courts.", "1.2 Mid.", "1.1 Arb.", "1.3 After."):
+        assert line in output
+
+
+def test_units_that_can_appear_together_do_not_share_a_number() -> None:
+    source = FRONT.replace("title: T", TEMPLATE_QUESTIONS) + (
+        "# One {#d when=forum:courts}\n\n# Two {#d when=forum:courts}\n")
+    output = render(source, format="text").output
+    assert "1. One" in output
+    assert "2. Two" in output

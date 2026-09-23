@@ -58,7 +58,8 @@ class Code:
 class Link:
     href: str
     children: tuple[Inline, ...]
-    title: str = ""
+    #: The link's title, which may hold directives like any other text.
+    title: tuple[Inline, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +67,7 @@ class Image:
     src: str
     #: The alt text, which may hold directives like any other text.
     children: tuple[Inline, ...]
-    title: str = ""
+    title: tuple[Inline, ...] = ()
 
 
 # Source inlines (build stage only) -----------------------------------------
@@ -321,9 +322,9 @@ def iter_inlines(inlines: tuple[Inline, ...]) -> Iterator[Inline]:
     """Every inline in *inlines*, depth first."""
     for inline in inlines:
         yield inline
-        children = getattr(inline, "children", None)
-        if children:
-            yield from iter_inlines(children)
+        for nested in (getattr(inline, "children", None), getattr(inline, "title", None)):
+            if isinstance(nested, tuple):
+                yield from iter_inlines(nested)
 
 
 def iter_block_inlines(block: Block) -> Iterator[Inline]:
