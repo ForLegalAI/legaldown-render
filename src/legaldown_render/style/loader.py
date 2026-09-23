@@ -314,6 +314,9 @@ def _convert_dataclass(value: Any, cls: type, path: str, problems: list[str]) ->
     label = path or "(root)"
     if isinstance(value, cls):
         return value
+    if cls is model.Numbering and isinstance(value, Mapping) and isinstance(value.get("levels"), (list, tuple)) \
+            and len(value["levels"]) > 5:
+        problems.append(f"{path}.levels: at most 5 formats, one per heading level (§4.1); got {len(value['levels'])}")
     if not isinstance(value, Mapping):
         problems.append(f"{label}: must be a mapping")
         return cls()

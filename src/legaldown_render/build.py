@@ -1,35 +1,33 @@
-"""Stage 3: build the render tree from the source (docs/architecture.md).
+"""Stage 3: build the render tree from the validator's document model
+(docs/architecture.md, docs/decisions/0002).
 
-The LegalDown layer comes only from ``legaldown-validator``
-(docs/decisions/0002): the directive lexer, defined-term anchors, heading and
-paragraph markers, and the section identifiers the validator resolved.
-CommonMark structure — nested lists, block quotes, tables, emphasis, links —
-comes from markdown-it-py, because the validator's model does not keep it yet
-(ForLegalAI/legaldown-validator#14).
+There is one parser: ``legaldown-validator``'s. Its ``Document`` gives the
+sections, their blocks, and each block's text, and its own findings say
+where markers are placed and whether the document is a template
+(:mod:`.validator_bridge`). The builder never decides a structural or
+LegalDown question itself.
 
-The two meet through **sentinels**. Before markdown-it sees the body, every
-directive (and every ``"Term" {{def:}}`` span) is replaced by a private-use
-token, ``\\ue000<nonce>:<n>\\ue001``, so Markdown can never reinterpret
-directive syntax — an underscore in a party name, a pipe in a table cell. Text
-nodes are split on the sentinels afterwards and the directives put back as
-tree nodes. The nonce is random for every build, so no text in a document —
-written out, as an entity, or percent-encoded — can pass for a sentinel.
+Within one block's text it still needs inline Markdown — emphasis, links,
+code spans — which markdown-it-py parses in inline mode only. Directives
+are protected first by **sentinels**: every directive (and every
+``"Term" {{def:}}`` span) is replaced by a private-use token,
+``\\ue000<nonce>:<n>\\ue001``, so Markdown can never reinterpret directive
+syntax, and put back as tree nodes afterwards. The nonce is random for every
+build, so no text in a document — written out, as an entity, or
+percent-encoded — can pass for a sentinel.
 
-The builder then checks that its headings match the validator's sections one
-to one. A mismatch means the two parsers disagree about the document, which
-must never be papered over: it raises :class:`InternalError`.
+Until the validator keeps nested lists (ForLegalAI/legaldown-validator#14),
+lists render as the validator holds them: one level of items.
 """
 from __future__ import annotations
 
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import unquote
 
-from legaldown import Directive, Document, ValidationResult, find_definition_anchors
-from legaldown.directives import lex
-from legaldown.markers import HTML_COMMENT_RE, Marker, split_heading
-from legaldown.parser import FRONTMATTER_RE
+from legaldown import Block as ModelBlock
+from legaldown import Directive, Document, ValidationResult, find_definition_anchors, parse_document, render_block
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 
@@ -58,27 +56,20 @@ from .tree import (
     Table,
     Text,
 )
+from .validator_bridge import block_fragments, block_quotes, lex, placed_markers
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
 # Leads the sentinel of source that renders nothing (a {{def:}}). It is
 # Unicode punctuation, so an emphasis closer just before it still counts as
 # right-flanking and closes (CommonMark); a bare sentinel reads like a letter.
 _HIDDEN_LEAD = "\u2e31"
-_DRAFTING_RE = re.compile(r"^\[!drafting\][ \t]*$", re.IGNORECASE)
-_COMMENT_ONLY_RE = re.compile(r"^\s*(?:<!--.*?-->\s*)+$", re.DOTALL)
-_ALIGN_RE = re.compile(r"text-align:\s*(left|center|right)")
+# A fenced code block's opening line (validator's model keeps the fences).
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def normalize_source(source: str) -> str:
-    """*source* with a byte-order mark removed and line endings unified,
-    exactly as it is handed to both parsers."""
+    """*source* with a byte-order mark removed and line endings unified."""
     return source.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
-
-
-def body_of(source: str) -> str:
-    """The body of *source*: everything after the frontmatter."""
-    match = FRONTMATTER_RE.match(source)
-    return source[match.end():] if match else source
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,17 +139,16 @@ class _DefinitionSpan:
 
 
 class _Builder:
-    def __init__(self, source: str, document: Document, result: ValidationResult) -> None:
+    def __init__(self, document: Document, result: ValidationResult) -> None:
         self.document = document
         self.result = result
         self.language = document.metadata.language or "en"
-        self.md = MarkdownIt("commonmark", {"html": True}).enable("table")
+        # Inline parsing only: block structure is the validator's.
+        self.md = MarkdownIt("commonmark", {"html": True})
         self.env: dict = {}
         self.payloads: list[_Payload] = []
         self.raw_html = 0
-        # Whether the document is a template; decided once the sections are
-        # built, before the preamble (see tree()).
-        self.template = True
+        self.markers = placed_markers(document)
         nonce = secrets.token_hex(8)
         # A hidden sentinel has its own form ("h"), so the lead character is
         # taken only with one, never from the source before another sentinel.
@@ -167,7 +157,6 @@ class _Builder:
         self.encoded_sentinel_re = re.compile(
             f"(?:%E2%B8%B1%EE%80%80{nonce}h|%EE%80%80{nonce}):(\\d+)%EE%80%81", re.IGNORECASE)
         self.nonce = nonce
-        self.body = self._protect(body_of(source))
 
     # -- sentinels ------------------------------------------------------------
 
@@ -179,7 +168,8 @@ class _Builder:
         return f"{_OPEN}{self.nonce}:{index}{_CLOSE}"
 
     def _protect(self, body: str) -> str:
-        """*body* with every directive replaced by a sentinel. A defined term
+        """*body* — one block's text — with every directive replaced by a
+        sentinel, so that Markdown cannot reinterpret directive syntax. A defined term
         becomes one sentinel and its {{def:}} another that renders nothing
         (see _DefinitionSpan). One pass over the directives, in order."""
         lexed = lex(body)
@@ -251,6 +241,11 @@ class _Builder:
 
     # -- inlines --------------------------------------------------------------
 
+    def text(self, source: str) -> tuple[Inline, ...]:
+        """Inline nodes for *source*, one block's text as the validator
+        holds it: directives protected, then parsed as inline Markdown."""
+        return self.inlines(self._protect(source))
+
     def inlines(self, content: str) -> tuple[Inline, ...]:
         """Inline nodes for the inline Markdown *content* (sentinels included)."""
         tokens = self.md.parseInline(content, self.env)
@@ -316,248 +311,158 @@ class _Builder:
 
     # -- blocks ---------------------------------------------------------------
 
-    def blocks(self, nodes: list[SyntaxTreeNode], *, in_section: bool, top_level: bool,
-               in_quote: bool = False, loose: bool = False) -> tuple[Block, ...]:
+    def blocks(self, blocks: list[ModelBlock], section: int | None, *, markers: bool = True) -> tuple[Block, ...]:
+        """Render-tree blocks for the validator's *blocks* of section index
+        *section* (None for the preamble). With *markers* False — text the
+        validator reads inside a quote or an item — no marker is placed."""
         out: list[Block] = []
-        for node in nodes:
-            block = self._block(node, in_section=in_section, top_level=top_level, in_quote=in_quote,
-                                loose=loose)
-            if block is not None:
-                out.append(block)
+        for index, block in enumerate(blocks):
+            placed = self._placed(block, section, index) if markers else {}
+            built = self.block(block, placed, top_level=section is not None and markers)
+            if built is not None:
+                out.append(built)
         return tuple(out)
 
-    def _block(self, node: SyntaxTreeNode, *, in_section: bool, top_level: bool, in_quote: bool,
-               loose: bool) -> Block | None:
-        match node.type:
-            case "paragraph":
-                position = "top" if top_level else "loose" if loose else "other"
-                return self.paragraph(_inline_content(node), position=position, in_section=in_section)
-            case "bullet_list" | "ordered_list":
-                return self.list(node, in_section=in_section, in_quote=in_quote)
-            case "blockquote":
-                return self.quote(node, in_section=in_section)
-            case "fence" | "code_block":
-                return CodeBlock(self._restore(node.content), node.info.strip() if node.type == "fence" else "")
-            case "hr":
-                return Rule()
+    def _placed(self, block: ModelBlock, section: int | None, index: int) -> dict[int, tuple[int, str, str]]:
+        """The markers the validator placed in *block*, by fragment index:
+        (offset of the marker in the fragment, identifier, condition)."""
+        placed: dict[int, tuple[int, str, str]] = {}
+        fragments = block_fragments(block)
+        for fragment_index, (fragment, _position) in enumerate(fragments):
+            found = self.markers.placed.get((section, index, fragment_index))
+            if found is None:
+                continue
+            first_line = fragment.split("\n", 1)[0]
+            offset = first_line.rfind(found.source)
+            if offset < 0:
+                raise InternalError(f"the validator placed '{found.source}' where the renderer cannot find it")
+            identifier = "" if found.include_only else found.marker.identifier
+            placed[fragment_index] = (offset, identifier, found.marker.condition)
+        return placed
+
+    def block(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]], *, top_level: bool) -> Block | None:
+        match block.kind:
+            case "paragraph" | "definition" | "ref" | "term":
+                block, identifier, condition = _strip_markers(block, placed)
+                inlines = self.text(_paragraph_source(block))
+                if not inlines and not identifier:
+                    return None  # only a comment
+                return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level)
+            case "unordered_list" | "ordered_list":
+                return self.list(block, placed)
+            case "quote":
+                return self.quote(block)
+            case "code":
+                return _code_block(block.text)
             case "table":
-                return self.table(node)
-            case "html_block":
-                if not _COMMENT_ONLY_RE.match(node.content):
-                    self.raw_html += 1
-                return None
-            case "heading":
-                # A heading inside a block quote or list item is not a
-                # section (§4.1); it keeps its emphasis as a paragraph.
-                return Paragraph((Strong(self.inlines(_inline_content(node))),))
-        raise InternalError(f"unexpected Markdown block '{node.type}'")
+                return Table(
+                    header=tuple(self.text(cell) for cell in block.headers),
+                    rows=tuple(tuple(self.text(cell) for cell in row) for row in block.rows),
+                    align=(),
+                )
+            case "rule":
+                return Rule()
+        raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def paragraph(self, content: str, *, position: str, in_section: bool) -> Paragraph:
-        """A paragraph, with its trailing marker taken off where §5.7 and
-        §15.3 place one, exactly as the validator places it. *position* is:
-
-        * ``top`` — directly in a section or the preamble;
-        * ``item`` — a list item's first paragraph, outside block quotes;
-        * ``loose`` — a later paragraph of a list item, outside block
-          quotes. The validator's model ends the list at the blank line
-          before it and reads it as a top-level paragraph
-          (ForLegalAI/legaldown-validator#14), so its marker is placed the
-          same way; it is not numbered as a top-level paragraph;
-        * ``other`` — anywhere else.
-
-        Anywhere a marker is not placed it stays literal text, and the
-        validator reports it (anchor-misplaced).
-        """
-        if position == "other":
-            return Paragraph(self.inlines(content))
-        text, marker = _split_marker(content)
-        if marker != Marker() and position in ("top", "loose") and self._is_include_only(text):
-            marker = Marker(condition=marker.condition)  # the #id is ignored (§12.2)
-        elif not in_section and (position == "item" or marker.identifier or not self.template):
-            # Before the first heading (§4.4, §15.3): no anchors, no
-            # conditions on list items, and a paragraph's condition only in
-            # a template.
-            text, marker = content, Marker()
-        return Paragraph(
-            self.inlines(text),
-            anchor_id=marker.identifier,
-            condition=marker.condition,
-            top_level=position == "top" and in_section,
-        )
-
-    def _is_include_only(self, text: str) -> bool:
-        """True for a paragraph holding a single well-formed {{include:}} and
-        nothing else but comments — the validator's is_include_only."""
-        match = self.sentinel_re.fullmatch(HTML_COMMENT_RE.sub("", text).strip())
-        if not match:
-            return False
-        payload = self.payloads[int(match.group(1))]
-        return (isinstance(payload, DirectiveSource) and payload.directive.name == "include"
-                and not payload.directive.malformed)
-
-    def list(self, node: SyntaxTreeNode, *, in_section: bool, in_quote: bool) -> List:
+    def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List:
+        # Items are fragments after any text, prefix, and suffix, which a
+        # list block does not have.
         items: list[ListItem] = []
-        for item in node.children:
-            children = list(item.children)
-            first: Paragraph | None = None
-            if children and children[0].type == "paragraph" and not in_quote:
-                first = self.paragraph(_inline_content(children[0]), position="item", in_section=in_section)
-                children = children[1:]
-            rest = self.blocks(children, in_section=in_section, top_level=False, in_quote=in_quote,
-                               loose=not in_quote)
-            # The marker belongs to the item, not to its first paragraph.
-            blocks = rest if first is None else (Paragraph(first.inlines),) + rest
-            items.append(ListItem(
-                blocks=blocks,
-                anchor_id=first.anchor_id if first else "",
-                condition=first.condition if first else "",
-            ))
-        return List(ordered=node.type == "ordered_list", items=tuple(items))
+        for index, item in enumerate(item for item in block.items if item):
+            identifier = condition = ""
+            if index in placed:
+                offset, identifier, condition = placed[index]
+                item = _cut_marker(item, offset)
+            first, _, rest = item.partition("\n")
+            blocks: tuple[Block, ...] = (Paragraph(self.text(first)),)
+            if rest:
+                # An item keeps a fenced code block's lines (the validator's
+                # model); the validator's parser reads them.
+                blocks += self.blocks(parse_document(rest).preamble, None, markers=False)
+            items.append(ListItem(blocks=blocks, anchor_id=identifier, condition=condition))
+        return List(ordered=block.kind == "ordered_list", items=tuple(items))
 
-    def quote(self, node: SyntaxTreeNode, *, in_section: bool) -> Block:
-        children = list(node.children)
-        if children and children[0].type == "paragraph":
-            first_line, _, rest = _inline_content(children[0]).partition("\n")
-            if _DRAFTING_RE.match(first_line.strip()):
-                blocks = self.blocks(children[1:], in_section=in_section, top_level=False, in_quote=True)
-                if rest.strip():
-                    blocks = (Paragraph(self.inlines(rest)),) + blocks
-                return DraftingNote(blocks)
-        return Quote(self.blocks(children, in_section=in_section, top_level=False, in_quote=True))
-
-    def table(self, node: SyntaxTreeNode) -> Table:
-        header: tuple = ()
-        rows: list = []
-        align: tuple[str, ...] = ()
-        for part in node.children:
-            for row in part.children:
-                cells = tuple(self.inlines(_inline_content(cell)) for cell in row.children)
-                if part.type == "thead":
-                    header = cells
-                    align = tuple(_cell_align(cell) for cell in row.children)
-                else:
-                    rows.append(cells)
-        return Table(header, tuple(rows), align)
+    def quote(self, block: ModelBlock) -> Block:
+        """A block quote, its content read by the validator's parser. A
+        drafting note is decided by the validator's own test (§15.6)."""
+        text = block.text
+        quotes = block_quotes(block)
+        drafting = bool(quotes) and quotes[0].start == 0 and quotes[0].is_drafting_note
+        if drafting:
+            text = text.partition("\n")[2]
+        inner = parse_document(text)
+        blocks = self.blocks(inner.preamble, None, markers=False)
+        for section in inner.sections:
+            # A heading inside a quote is not a section (§4.1).
+            blocks += (Paragraph((Strong(self.text(section.title)),)),)
+            blocks += self.blocks(section.blocks, None, markers=False)
+        return DraftingNote(blocks) if drafting else Quote(blocks)
 
     # -- document -------------------------------------------------------------
 
     def tree(self) -> RenderTree:
-        root = SyntaxTreeNode(self.md.parse(self.body, self.env))
-        preamble_nodes: list[SyntaxTreeNode] = []
-        headings: list[tuple[SyntaxTreeNode, list[SyntaxTreeNode]]] = []
-        for node in root.children:
-            if node.type == "heading":
-                headings.append((node, []))
-            elif headings:
-                headings[-1][1].append(node)
-            else:
-                preamble_nodes.append(node)
-        self._check_outline([int(node.tag[1]) for node, _ in headings])
-
-        sections: list[Section] = []
-        for index, (heading, nodes) in enumerate(headings):
-            title_text, marker = split_heading(_inline_content(heading))
-            title = self.inlines(title_text)
-            sections.append(Section(
-                level=int(heading.tag[1]),
-                title=title,
+        document = self.document
+        sections = tuple(
+            Section(
+                level=section.level,
+                title=self.text(section.title),
                 identifier=self.result.sections[index].identifier,
-                condition=marker.condition,
-                blocks=self.blocks(nodes, in_section=True, top_level=True),
-            ))
-        # Only now is it known whether the document is a template, which
-        # decides whether a preamble paragraph's condition applies (§5.7).
-        self.template = self._is_template(sections, preamble_nodes)
-        metadata = self.document.metadata
+                condition=section.condition,
+                blocks=self.blocks(section.blocks, index),
+            )
+            for index, section in enumerate(document.sections)
+        )
+        metadata = document.metadata
         return RenderTree(
             title=plain_inlines(metadata.title),
             subtitle=plain_inlines(metadata.subtitle),
             language=self.language,
-            preamble=self.blocks(preamble_nodes, in_section=False, top_level=True),
-            sections=tuple(sections),
-            is_template=self.template,
+            preamble=self.blocks(document.preamble, None),
+            sections=sections,
+            is_template=self.markers.template,
         )
 
-    def _is_template(self, sections: list[Section], preamble: list[SyntaxTreeNode]) -> bool:
-        """Whether the document is a template, decided as the validator
-        decides it: declared questions, a conditional attachment, section,
-        or unit, or a {{choose:}}. A preamble paragraph's own condition
-        does not count — it applies only once the document is a template."""
-        metadata = self.document.metadata
-        return (
-            metadata.questions is not None
-            or any(attachment.when for attachment in metadata.attachments)
-            or any(section.condition for section in sections)
-            or any(_has_condition(block) for section in sections for block in section.blocks)
-            or any(isinstance(payload, DirectiveSource) and payload.directive.name == "choose"
-                   for payload in self.payloads)
-            # A {{choose:}} in frontmatter is misplaced, but still makes a
-            # template (§15.1), over the same fields the validator reads.
-            or any(directive.name == "choose" for text in _frontmatter_texts(metadata)
-                   for directive in lex(text or "").directives)
-            or any(self._conditional_include(node) for node in preamble)
-        )
 
-    def _conditional_include(self, node: SyntaxTreeNode) -> bool:
-        """True for a preamble paragraph holding only an {{include:}} and a
-        condition, whose condition applies in any document (§12.2)."""
-        if node.type != "paragraph":
-            return False
-        text, marker = _split_marker(_inline_content(node))
-        return bool(marker.condition) and self._is_include_only(text)
-
-    def _check_outline(self, levels: list[int]) -> None:
-        expected = [section.level for section in self.document.sections]
-        if levels != expected or len(self.result.sections) != len(expected):
-            raise InternalError(
-                "the renderer and legaldown-validator disagree about the document's headings "
-                f"(renderer: {levels}, validator: {expected}). This is a bug; please report it "
-                "with the document that triggers it."
-            )
+def _strip_markers(block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> tuple[ModelBlock, str, str]:
+    """*block* without its placed marker, and the marker's identifier and
+    condition. Fragments are numbered as block_fragments numbers them."""
+    fields = [name for name in ("text", "prefix", "suffix") if getattr(block, name)]
+    identifier = condition = ""
+    for fragment_index, (offset, marker_id, marker_condition) in placed.items():
+        if fragment_index >= len(fields):
+            raise InternalError(f"the validator placed a marker in fragment {fragment_index} of a {block.kind} block")
+        name = fields[fragment_index]
+        block = replace(block, **{name: _cut_marker(getattr(block, name), offset)})
+        identifier, condition = marker_id, marker_condition
+    return block, identifier, condition
 
 
-def _frontmatter_texts(metadata) -> list[str]:
-    """Every frontmatter text the validator reads for misplaced directives.
-    Private to legaldown-validator 0.2 (roadmap U3: to become public API)."""
-    from legaldown.validator.core import _frontmatter_fields
-
-    structural, values = _frontmatter_fields(metadata)
-    return [text for _label, text in structural] + list(values)
-
-
-def _has_condition(block: Block) -> bool:
-    """True if a placed condition is on *block* or on a unit inside it."""
-    match block:
-        case Paragraph(condition=condition):
-            return bool(condition)
-        case List(items=items):
-            return any(item.condition or any(_has_condition(child) for child in item.blocks) for item in items)
-        case Quote(blocks=blocks) | DraftingNote(blocks=blocks):
-            return any(_has_condition(child) for child in blocks)
-    return False
+def _cut_marker(fragment: str, offset: int) -> str:
+    """*fragment* without the marker at *offset* on its first line; a
+    comment after the marker stays (it renders nothing)."""
+    first, newline, rest = fragment.partition("\n")
+    end = first.index("}", offset) + 1
+    return (first[:offset].rstrip() + " " + first[end:].lstrip()).strip() + newline + rest
 
 
-def _inline_content(node: SyntaxTreeNode) -> str:
-    """The raw inline source of a paragraph, heading, or table cell."""
-    for child in node.children:
-        if child.type == "inline":
-            return child.content
-    return ""
+def _paragraph_source(block: ModelBlock) -> str:
+    """A paragraph block's text as source. A definition, {{ref:}}, or
+    {{term:}} the parser lifted into fields is written back by the
+    validator's own serializer."""
+    return block.text if block.kind == "paragraph" else render_block(block)
 
 
-def _split_marker(content: str) -> tuple[str, Marker]:
-    """*content* without a trailing marker, and the marker. Only the last
-    line can carry one."""
-    head, newline, last = content.rpartition("\n")
-    text, marker = split_heading(last)
-    if marker == Marker():
-        return content, marker
-    return head + newline + text, marker
-
-
-def _cell_align(cell: SyntaxTreeNode) -> str:
-    match = _ALIGN_RE.search(str(cell.attrs.get("style", "")))
-    return match.group(1) if match else ""
+def _code_block(text: str) -> CodeBlock:
+    """A fenced code block from the validator's model, fences included."""
+    lines = text.split("\n")
+    opening = _FENCE_RE.match(lines[0]) if lines else None
+    if opening is None:
+        return CodeBlock(text)
+    fence = opening.group(1)
+    body = lines[1:]
+    if body and body[-1].strip().startswith(fence[0] * len(fence)) and not body[-1].strip().strip(fence[0]):
+        body = body[:-1]
+    return CodeBlock("\n".join(body) + ("\n" if body else ""), opening.group(2).strip())
 
 
 def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
@@ -570,10 +475,10 @@ def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
     return tuple(merged)
 
 
-def build_tree(source: str, document: Document, result: ValidationResult) -> tuple[RenderTree, int]:
-    """The render tree for *source* (already normalised), and the number of
-    raw HTML constructs that were dropped (§8.7)."""
-    builder = _Builder(source, document, result)
+def build_tree(document: Document, result: ValidationResult) -> tuple[RenderTree, int]:
+    """The render tree for *document*, and the number of raw HTML
+    constructs that were dropped (§8.7)."""
+    builder = _Builder(document, result)
     tree = builder.tree()
     return tree, builder.raw_html
 

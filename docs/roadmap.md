@@ -10,7 +10,7 @@ here.
 
 | # | Where | Change | Status |
 |---|---|---|---|
-| U1 | validator | **Keep nested list structure** in the model ([#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)) | Open. The renderer works around it with markdown-it-py and an outline check (ADR 0002) |
+| U1 | validator | **Keep nested list structure** in the model ([#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)) | Open. Until then lists render with one level of items (ADR 0007); the resolver and writers already handle nesting |
 | U2 | validator | **Source positions** (line numbers) on sections, blocks, and diagnostics | Open. Diagnostics have no line numbers in either package |
 | U3 | validator | **Public API** for what the renderer imports from submodules: the lexer, markers, frontmatter splitting, value checks, conditions, `IDENTIFIER_RE`, `KNOWN_CURRENCIES`, the frontmatter fields it reads. Better still, expose the validator's own **placed markers** and **template decision**, so the renderer uses them instead of mirroring those rules | Open. Until then the dependency is pinned to one minor version |
 | U4a | validator | **Specification 0.2** (templates, §15) | Done in 0.2.0 |
@@ -23,7 +23,7 @@ here.
 
 - The full pipeline: parse and validate, build, resolve, write
 - All four numbering schemes; list enumeration; paragraph numbering; item and paragraph anchors
-  with full designations ("2.1(b)(i)")
+  with designations ("2.1(b)"), one list level until U1
 - Every directive, with every failure marker
 - Template view: conditions, `{{choose:}}`, drafting notes, alternatives sharing a number
 - Title block, attachment placeholders, signature blocks

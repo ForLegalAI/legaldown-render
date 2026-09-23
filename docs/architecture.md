@@ -55,56 +55,41 @@ raises `DocumentError`. Every other problem renders.
 
 ### 3. Build the render tree (`build.py`)
 
-The validator's model does not keep nested lists or inline structure yet
-([ForLegalAI/legaldown-validator#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)).
-So, per [ADR 0002](decisions/0002-one-parser.md), the builder takes:
+There is one parser: the validator's ([ADR 0007](decisions/0007-one-parser-validator-model.md)).
+The builder walks the validator's `Document` and turns each block into render-tree blocks. It
+never decides a structural or LegalDown question itself:
 
-| From | What |
+| Question | Answered by |
 |---|---|
-| `legaldown-validator` | Directive lexing (`legaldown.directives.lex`), defined-term spans (`find_definition_anchors`), heading and paragraph markers (`legaldown.markers`), section identifiers, frontmatter splitting |
-| markdown-it-py (CommonMark + tables) | Block structure (nested lists, quotes, tables, code) and inline structure (emphasis, links, code spans) |
+| Sections, headings, identifiers | `Document.sections`, `ValidationResult.sections` |
+| Blocks: paragraphs, lists and items, quotes, tables, code, rules | `Document` blocks; quote content and code inside items are read by the validator's parser too |
+| Where a marker (`{#id when=…}`) is placed, and what it means | The validator's `find_markers()`, with its own `placed(template)` |
+| Whether the document is a template | The validator's own formula over those markers |
+| Whether a quote is a drafting note | The validator's `block_quotes()` |
+| A lifted definition, `{{ref:}}` or `{{term:}}` block's source | The validator's `render_block()` |
 
-**Sentinels** join the two. Before markdown-it sees the body, every directive, and every
-`"Term" {{def:}}` span, is replaced with a private-use token, `\ue000<nonce>:<n>\ue001`.
-Markdown therefore cannot reinterpret directive syntax, such as an underscore in an identifier or
-a pipe in a table cell. The nonce is random for each build, so no text in a document, whether
-written literally, as an entity, or percent-encoded, can pass for a sentinel. Emphasis that wraps
-only a defined term is dropped with it, because the style decides how defined terms look (§7.2).
-A `{{def:}}` becomes a sentinel that renders nothing, led by a punctuation character so that an
-emphasis closer just before it still closes. A defined term in a link title or alt text shows its
-term but is not the definition's anchor.
-Text nodes are then split on the sentinels, and the directives return as
-`DirectiveSource` and `DefinitionSource` nodes. Where Markdown shows text literally (code, URLs),
-the sentinels are turned back into their source text.
+The imports beyond the validator's public API are all in `validator_bridge.py`, which is the
+list for roadmap item U3.
 
-**Markers** (`{#id when=…}`) are taken off exactly where the validator places them (§5.7,
-§15.3):
+Within one block's text, **markdown-it-py parses inline Markdown only**: emphasis, links, code
+spans, inline HTML. Directives are protected first by **sentinels**. Every directive, and every
+`"Term" {{def:}}` span, is replaced with a private-use token, `\ue000<nonce>:<n>\ue001`, so
+Markdown cannot reinterpret directive syntax, such as an underscore in an identifier. The nonce is
+random for each build, so no text in a document, whether written literally, as an entity, or
+percent-encoded, can pass for a sentinel. Emphasis that wraps only a defined term is dropped with
+it, because the style decides how defined terms look (§7.2). A `{{def:}}` becomes a sentinel
+that renders nothing, led by a punctuation character so that an emphasis closer just before it
+still closes. A defined term in a link title or alt text shows its term but is not the
+definition's anchor.
 
-- after a heading
-- at the end of a top-level paragraph
-- at the end of a list item's first paragraph, outside block quotes
-- at the end of a list item's later paragraph, outside block quotes. The validator's model ends
-  the list at the blank line before such a paragraph and reads it as top-level
-  ([legaldown-validator#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)), so
-  the renderer places its marker the same way. It is designated as its item
-- in the preamble, only a paragraph's condition, and only in a template
-- on a paragraph holding only an `{{include:}}`, anywhere: its condition applies, and its `#id`
-  is ignored (§12.2)
+HTML comments are dropped (§8.6). Raw HTML is dropped and counted for a `raw-html` Warning
+(§8.7).
 
-Anywhere else, a marker stays literal text, and the validator reports it (`anchor-misplaced`).
-Whether a document is a **template** is decided as the validator decides it: declared
-`questions`, a conditional attachment, section or unit, or a `{{choose:}}`, in the body or in
-frontmatter.
-
-**Outline check.** The builder's top-level headings must match the validator's sections one to
-one. A mismatch raises `InternalError`: the two parsers disagree, and the renderer never guesses.
-The whole specification fixtures corpus passes this check.
-
-Everything else is stripped at this stage:
-
-- HTML comments (§8.6)
-- raw HTML, which is dropped and counted for a `raw-html` Warning (§8.7)
-- `> [!DRAFTING]` quotes, which become `DraftingNote` blocks (§15.6)
+Until the validator's model keeps them, some structure is rendered as the validator holds it
+(see `CONFORMANCE.md`):
+- lists have one level of items
+- table column alignment is not kept
+- a paragraph's line breaks are joined
 
 ### 4. Resolve (`resolve/`)
 
@@ -194,7 +179,7 @@ src/legaldown_render/
 | Dependency | Why |
 |---|---|
 | `legaldown-validator>=0.2.0,<0.3` | The only LegalDown parser; Core validation |
-| `markdown-it-py` | CommonMark structure (ADR 0002) |
+| `markdown-it-py` | Inline Markdown inside one block's text (ADR 0007) |
 | `babel` | CLDR locale data (ADR 0005) |
 | `pyyaml` | Style templates |
 

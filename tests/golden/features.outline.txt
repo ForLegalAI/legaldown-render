@@ -29,9 +29,9 @@ The Provider shall perform the Services on each business day, and shall:
 
 (a) keep records of all work performed
 (b) notify the Client of any delay, including:
-    (i) the cause of the delay
-    (ii) its expected duration
-(c) comply with the policies in the price list.
+(c) the cause of the delay
+(d) its expected duration
+(e) comply with the policies in the price list.
 
 The steps of the escalation procedure are:
 
@@ -40,7 +40,7 @@ The steps of the escalation procedure are:
 
 B. Changes
 
-A change under item II.A(b)(i) or step II.A(2) is made in writing under Section II.A.
+A change under item II.A(c) or step II.A(2) is made in writing under Section II.A.
 
 III. Fees
 

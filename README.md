@@ -20,7 +20,7 @@ reference text, or formatted values. The source says `{{ref: late-payment}}`, an
 turns it into "4.2(b)" with a link. This package is that renderer:
 
 🔢 **Numbers** sections, list items, and paragraphs under a configurable scheme (§13.1, §13.2).
-References to items resolve to full designations such as "2.1(b)(i)".
+References to items resolve to designations such as "2.1(b)".
 
 🔗 **Resolves** cross-references, defined terms, parties, sides, and attachment references into
 display text with links (§13.3–§13.5).

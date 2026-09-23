@@ -95,7 +95,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
-    tree, extra = _resolve(source, document, result, style)
+    tree, extra = _resolve(document, result, style)
     diagnostics += [d for d in extra if d not in diagnostics]
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
@@ -117,9 +117,9 @@ def _parse(source: str) -> Document:
         raise DocumentError(f"The document cannot be read: {error}") from error
 
 
-def _resolve(source: str, document: Document, result: ValidationResult, style: Style) -> tuple[RenderTree, list[Diagnostic]]:
+def _resolve(document: Document, result: ValidationResult, style: Style) -> tuple[RenderTree, list[Diagnostic]]:
     diagnostics: list[Diagnostic] = []
-    tree, raw_html = build_tree(source, document, result)
+    tree, raw_html = build_tree(document, result)
     if raw_html:
         diagnostics.append(Diagnostic(
             rule="raw-html",

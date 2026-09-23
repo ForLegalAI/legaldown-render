@@ -222,7 +222,7 @@ class Resolver:
         agree with ``ValidationResult.sections``.
         """
         levels = heading_levels(self.style.numbering)
-        counters = [0] * 7
+        counters = [0] * 6  # index 1-5: one counter per heading level
         previous: dict[int, int] = {}  # level -> index of the previous sibling
         presences: dict[int, Presence] = {}  # level -> presence of the open section
         indexed = self.result.sections
@@ -238,7 +238,7 @@ class Resolver:
             )
             if not alternative:
                 counters[level] += 1
-            counters[level + 1:] = [0] * (6 - level)
+            counters[level + 1:] = [0] * (5 - level)
             previous = {lvl: i for lvl, i in previous.items() if lvl < level}
             previous[level] = index
             enclosing = max((lvl for lvl in presences if lvl < level), default=None)
@@ -377,21 +377,11 @@ class Resolver:
             children = tuple(
                 self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner)
                 if isinstance(child, List)
-                else self._loose_paragraph(child, section, target) if isinstance(child, Paragraph)
                 else self._structure(child, section=section, depth=depth + 1, presence=inner)
                 for child in item.blocks
             )
             items.append(replace(item, blocks=children, label=label, anchor=anchor))
         return List(block.ordered, tuple(items), enumerated=fmt is not None)
-
-    def _loose_paragraph(self, block: Paragraph, section: Section | None, target: _Target) -> Paragraph:
-        """A paragraph inside a list item that carries its own anchor (see
-        build.paragraph, ``loose``): it is designated as its item is."""
-        if not block.anchor_id or section is None:
-            return block
-        anchor = self._anchor(block.anchor_id)
-        self._register(block.anchor_id, replace(target, anchor=anchor))
-        return replace(block, anchor=anchor)
 
     # -- blocks ---------------------------------------------------------------
 

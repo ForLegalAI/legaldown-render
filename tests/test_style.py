@@ -108,3 +108,9 @@ def test_only_a_single_quoted_string_is_unquoted() -> None:
         assert parse_override("references.format", literal) == literal
     # No escapes are interpreted: a backslash is a backslash.
     assert parse_override("references.format", '"C:\\new"') == "C:\\new"
+
+
+def test_numbering_levels_are_at_most_five() -> None:
+    levels = [{"counter": "decimal"}] * 6
+    with pytest.raises(StyleError, match="numbering.levels: at most 5 formats"):
+        load_style(overrides={"numbering.levels": levels})

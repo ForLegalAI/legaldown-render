@@ -46,18 +46,17 @@ NUMBERED = """
 The Provider may terminate if:
 
 - payment is late {#late}
-  - by thirty days {#late-thirty}
 - the Client breaches {#breach}
 
-See {{ref: termination}}, {{ref: late}}, and {{ref: late-thirty}}.
+See {{ref: termination}}, {{ref: late}}, and {{ref: breach}}.
 """
 
 
 @pytest.mark.parametrize(("scheme", "heading", "refs"), [
-    ("decimal", "1.1 Termination", "See 1.1, 1.1(a), and 1.1(a)(i)."),
-    ("legal-outline", "A. Termination", "See I.A, I.A(a), and I.A(a)(i)."),
-    ("mixed", "(a) Termination", "See 1(a), 1(a)(a), and 1(a)(a)(i)."),
-    ("none", "Termination", "See Termination, Termination (a), and Termination (a) (i)."),
+    ("decimal", "1.1 Termination", "See 1.1, 1.1(a), and 1.1(b)."),
+    ("legal-outline", "A. Termination", "See I.A, I.A(a), and I.A(b)."),
+    ("mixed", "(a) Termination", "See 1(a), 1(a)(a), and 1(a)(b)."),
+    ("none", "Termination", "See Termination, Termination (a), and Termination (b)."),
 ])
 def test_numbering_schemes(scheme: str, heading: str, refs: str) -> None:
     output = text(NUMBERED, overrides={"numbering.scheme": scheme})
@@ -68,6 +67,14 @@ def test_numbering_schemes(scheme: str, heading: str, refs: str) -> None:
 def test_ordered_lists_are_renumbered() -> None:
     output = text("# A\n\n7. first\n7. second\n")
     assert "1. first\n2. second" in output
+
+
+def test_nested_lists_render_flat_until_the_validator_keeps_them() -> None:
+    # One parser: lists are the validator's, which keeps one level of items
+    # (ForLegalAI/legaldown-validator#14).
+    output = text("# A\n\n- one {#one}\n  - nested {#nested}\n- two\n\nSee {{ref: nested}}.\n")
+    assert "(a) one\n(b) nested\n(c) two" in output
+    assert "See 1(b)." in output
 
 
 def test_ref_to_unenumerated_item_falls_back_with_warning() -> None:
@@ -290,8 +297,17 @@ def test_source_holding_sentinel_characters_renders_them() -> None:
 
 
 def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
-    output = text("# A\n\n1. first\n2. - - deep\n")
-    assert "2.\n    (i)\n        (A) deep" in output
+    # The text writer, on a tree with nesting (as the validator will give
+    # once it keeps nested lists): the item's label comes first.
+    from legaldown_render.tree import List, ListItem, Paragraph, RenderTree, Section, Text
+    from legaldown_render.writers import TextWriter
+
+    deep = List(False, (ListItem((Paragraph((Text("deep"),)),), label="(A)"),), enumerated=True)
+    middle = List(False, (ListItem((deep,), label="(i)"),), enumerated=True)
+    outer = List(True, (ListItem((Paragraph((Text("first"),)),), label="1."), ListItem((middle,), label="2.")),
+                 enumerated=True)
+    tree = RenderTree((), (), "en", (), (Section(1, (Text("A"),), "a", "", (outer,), label="1."),))
+    assert "1. first\n2.\n    (i)\n        (A) deep" in TextWriter().write(tree)
 
 
 def test_an_unresolved_node_is_an_internal_error() -> None:
@@ -330,11 +346,6 @@ def test_sentinels_percent_encoded_in_urls_stay_as_written() -> None:
     output = render(FRONT + body).output
     assert 'href="http://a/%EE%80%800%EE%80%81"' in output
     assert "placeholder" not in "".join(re.findall(r'href="([^"]*)"', output))
-
-
-def test_literal_restore_gives_back_a_definition_exactly() -> None:
-    output = text('# A\n\nText.\n\n    **"Term"** {{def: term}}\n')
-    assert '\n    **"Term"** {{def: term}}\n' in output
 
 
 def test_emphasis_wrapping_only_the_term_is_left_to_the_style() -> None:
@@ -521,10 +532,11 @@ def test_the_first_definition_in_document_order_keeps_the_anchor() -> None:
     assert 'id="def:fee"' not in sections
 
 
-def test_a_later_paragraph_in_a_list_item_places_its_marker() -> None:
+def test_a_later_paragraph_in_a_list_item_is_the_validators_paragraph() -> None:
+    # The validator ends the list at the blank line and reads "second" as a
+    # top-level paragraph, whose marker it places; so does the renderer.
     output = text("# A\n\n- item one\n\n  second {#sec}\n\nSee {{ref: sec}}.\n")
-    assert "second {#sec}" not in output
-    assert "See 1(a)." in output
+    assert "(a) item one\n\nsecond\n\nSee 1." in output
 
 
 def test_a_level_six_heading_nests_where_its_number_puts_it() -> None:
@@ -533,3 +545,46 @@ def test_a_level_six_heading_nests_where_its_number_puts_it() -> None:
     # F is E's sibling, numbered after it — not nested inside it.
     assert ('</section><section class="ld-section ld-level-5" id="f"><h6 class="ld-heading">'
             '<span class="ld-number">1.1.1.1.2</span>') in output.replace("\n", "")
+
+
+# -- one parser: the renderer follows the validator's reading ---------------------------
+
+
+def _validator_rules(source: str) -> set[str]:
+    from legaldown import parse_document, validate_document
+
+    return {d.rule for d in validate_document(parse_document(source)).diagnostics}
+
+
+def test_a_heading_in_a_comment_renders_as_the_validator_reads_it() -> None:
+    # The validator reads the heading as a section; the renderer never
+    # crashes on a disagreement, because there is none to have.
+    result = render(FRONT + "# Zero\n\n<!--\n# Old clause\n-->\n", format="text")
+    assert [s.designation for s in result.tree.sections] == ["1", "2"]
+
+
+def test_a_signature_block_heading_ends_the_body_as_in_the_validator() -> None:
+    result = render(FRONT + "# One\n\nText.\n\n# Signature Block {#signature-block}\n\nSigned\n", format="text")
+    assert [s.designation for s in result.tree.sections] == ["1"]
+    assert "Signed" not in result.output
+
+
+def test_markers_and_references_agree_with_the_validators_diagnostics() -> None:
+    cases = [
+        ("1. item\n   ```\n   code\n   ```\n   after {#x}\n\nSee {{ref: x}}.\n", True),
+        ("1. # Heading {#x}\n\nSee {{ref: x}}.\n", False),
+        ("- item one\n\n  second {#x}\n\nSee {{ref: x}}.\n", False),
+    ]
+    for body, broken in cases:
+        source = FRONT + "# One\n\n" + body
+        output = render(source, format="text").output
+        assert ("ref-broken" in _validator_rules(source)) is broken
+        assert ("[BROKEN REF: x]" in output) is broken
+
+
+def test_template_decision_is_the_validators() -> None:
+    source = FRONT.replace("title: T", THREE_WAY) + (
+        "- intro\n\n  {{include: other.lgd}} {when=flag}\n\nPreamble para {when=flag}\n\n# A\n")
+    result = render(source, format="text")
+    assert result.tree.is_template is True
+    assert "[Only if: flag] Preamble para" in result.output

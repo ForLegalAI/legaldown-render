@@ -28,7 +28,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 
 | Feature | Status |
 |---|---|
-| List enumeration (§13.2) | ✅ Configurable per depth; can be disabled. Ordered lists are always renumbered |
+| List enumeration (§13.2) | ✅ Configurable per depth; can be disabled. Ordered lists are always renumbered. Lists have one level until the validator keeps nesting (see below) |
 | Paragraph numbering and section-qualified items (§13.2) | ✅ Style settings; the `continental` style uses both |
 | Style templates in a separate file (§13.7) | ✅ YAML, layered and validated; see [docs/style-templates.md](docs/style-templates.md) |
 | Signature blocks (§2.2) | ✅ One per party, with `legal_name` and each representative |
@@ -46,9 +46,19 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 - **Diagnostics have no line numbers**, because the validator's diagnostics do not carry them yet.
 - **Malformed directives** (a §11.2 grammar violation) render their type's marker without a value,
   for example `[INVALID AMOUNT]`. The specification defines no marker for this case.
-- **Nested lists** are parsed by markdown-it-py until the validator's model keeps them
-  ([legaldown-validator#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)). An
-  outline check guarantees both parsers agree on the document's sections.
+- **One parser.** The renderer builds from the validator's document model only
+  ([ADR 0007](docs/decisions/0007-one-parser-validator-model.md)). Anchors, markers, and the
+  template view therefore always agree with the validator's diagnostics. The price is that some
+  structure renders as the validator's model holds it, until that model keeps more
+  ([legaldown-validator#14](https://github.com/ForLegalAI/legaldown-validator/issues/14),
+  roadmap U1–U2):
+  - **Nested lists** render as one level of items, so an item is referenced as "2.1(c)", never
+    "2.1(b)(i)". The resolver and writers already handle nesting.
+  - **Table column alignment** is not kept.
+  - **Line breaks** within a paragraph are joined, hard breaks included.
+  - **Link reference definitions** (`[label]: url`) are not resolved.
+  - Constructs the validator reads unusually render as it reads them. For example, a heading
+    inside a multi-line HTML comment is a section, with the comment's delimiters shown as text.
 
 ## Beyond this level (Full, §17.4)
 
