@@ -65,9 +65,12 @@ So, per [ADR 0002](decisions/0002-one-parser.md), the builder takes:
 | markdown-it-py (CommonMark + tables) | Block structure (nested lists, quotes, tables, code) and inline structure (emphasis, links, code spans) |
 
 **Sentinels** join the two. Before markdown-it sees the body, every directive, and every
-`"Term" {{def:}}` span, is replaced with a private-use token (`<n>`). Markdown
-therefore cannot reinterpret directive syntax, such as an underscore in an identifier or a pipe
-in a table cell. Text nodes are then split on the sentinels, and the directives return as
+`"Term" {{def:}}` span, is replaced with a private-use token, `\ue000<nonce>:<n>\ue001`.
+Markdown therefore cannot reinterpret directive syntax, such as an underscore in an identifier or
+a pipe in a table cell. The nonce is random for each build, so no text in a document, whether
+written literally, as an entity, or percent-encoded, can pass for a sentinel. Emphasis that wraps
+only a defined term is dropped with it, because the style decides how defined terms look (§7.2).
+Text nodes are then split on the sentinels, and the directives return as
 `DirectiveSource` and `DefinitionSource` nodes. Where Markdown shows text literally (code, URLs),
 the sentinels are turned back into their source text.
 
@@ -96,8 +99,10 @@ Everything else is stripped at this stage:
 
 1. **Survey.** It collects which definitions exist, whether template constructs are used, and
    which placeholder ids are used with conflicting types (§10.7).
-2. **Structure.** It numbers sections under the style's level formats. Alternatives, meaning
-   consecutive conditional siblings with one identifier, share a number (§15.8). It then labels
+2. **Structure.** It numbers sections under the style's level formats. **Alternatives** are
+   siblings with one identifier whose conditions exclude each other (§15.4, checked with the
+   validator's `exclusive()`). They share the first one's number (§15.8), whether or not they are
+   adjacent, and the same applies to paragraphs and list items. It then labels
    list items by depth and top-level paragraphs, and allocates output anchors. Every anchor
    target is registered with its **designation**: "4.2", "4.2(b)(ii)", or "Termination (a)"
    under the `none` scheme.

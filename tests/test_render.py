@@ -284,9 +284,9 @@ def test_alternative_paragraphs_and_items_share_a_number() -> None:
 
 
 def test_source_holding_sentinel_characters_renders_them() -> None:
-    body = "# A\n\nx 5 y and `` in code, {{party: acme}}.\n"
+    body = "# A\n\nx \ue0005\ue001 y and `\ue000` in code, {{party: acme}}.\n"
     output = render(FRONT + body, format="text").output
-    assert "x 5 y and  in code, Acme." in output
+    assert "x \ue0005\ue001 y and \ue000 in code, Acme." in output
 
 
 def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
@@ -322,7 +322,7 @@ questions:
 def test_sentinels_written_as_entities_are_plain_text() -> None:
     body = "# A\n\nParty {{placeholder: x}} and &#xE000;9&#xE001; here, &#xE000;0&#xE001; too.\n"
     output = render(FRONT + body, format="text").output
-    assert "Party [_____] and 9 here, 0 too." in output
+    assert "Party [_____] and \ue0009\ue001 here, \ue0000\ue001 too." in output
 
 
 def test_sentinels_percent_encoded_in_urls_stay_as_written() -> None:
