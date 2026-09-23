@@ -13,6 +13,7 @@ raised, so one run reports everything that is wrong with a template.
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import difflib
 import types
@@ -155,6 +156,9 @@ def _merge(base: Mapping, override: Mapping) -> dict:
 
 
 def _expand_dotted(overrides: Mapping[str, Any]) -> dict:
+    """*overrides* as one nested mapping. Dotted and nested keys for the
+    same setting merge in order, and the caller's values are copied, never
+    modified."""
     expanded: dict = {}
     for key, value in overrides.items():
         target = expanded
@@ -163,8 +167,65 @@ def _expand_dotted(overrides: Mapping[str, Any]) -> dict:
             target = target.setdefault(part, {})
             if not isinstance(target, dict):
                 raise StyleError("overrides", [f"{key}: '{part}' is set to a value and cannot hold keys"])
+        value = _copy(value)
+        if isinstance(value, dict) and isinstance(target.get(last), dict):
+            value = _merge(target[last], value)
         target[last] = value
     return expanded
+
+
+def _copy(value: Any) -> Any:
+    """A deep copy of *value* with every mapping made a plain dict."""
+    if isinstance(value, Mapping):
+        return {str(key): _copy(item) for key, item in value.items()}
+    return copy.deepcopy(value)
+
+
+def parse_override(key: str, text: str) -> Any:
+    """The value for setting *key* written as *text* on a command line.
+
+    Text settings take *text* exactly as written, so ``[_____]`` or
+    ``{designation}`` stay text. Other settings read it as YAML, so that
+    ``true``, ``2``, or ``[...]`` mean what they say. ``null`` clears a
+    setting that may be unset, such as ``locale``.
+    """
+    hint = _hint_for(key.split("."))
+    if hint is not None and _is_text(hint):
+        if type(None) in get_args(hint) and text.strip() in ("null", "~"):
+            return None
+        return text
+    try:
+        return yaml.safe_load(text) if text.strip() else ""
+    except yaml.YAMLError:
+        return text
+
+
+def _hint_for(parts: list[str]) -> Any:
+    """The declared type of the setting at the dotted path *parts*, or None."""
+    hint: Any = Style
+    for part in parts:
+        if dataclasses.is_dataclass(hint):
+            hints = get_type_hints(hint, vars(model))
+            if part not in hints:
+                return None
+            hint = hints[part]
+        elif get_origin(hint) is dict:
+            hint = get_args(hint)[1]
+        else:
+            return None
+    return hint
+
+
+def _is_text(hint: Any) -> bool:
+    if hint is str:
+        return True
+    origin = get_origin(hint)
+    if origin is Literal:
+        return all(isinstance(arg, str) for arg in get_args(hint))
+    if origin in (Union, types.UnionType):
+        options = [arg for arg in get_args(hint) if arg is not type(None)]
+        return bool(options) and all(_is_text(arg) for arg in options)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -282,5 +343,6 @@ __all__ = [
     "builtin_styles",
     "dump_style",
     "load_style",
+    "parse_override",
     "style_to_dict",
 ]

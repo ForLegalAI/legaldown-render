@@ -12,12 +12,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from . import __version__
 from .api import RenderOptions, render
 from .errors import DocumentError, InternalError, RenderRefused
-from .style import StyleError, builtin_styles, dump_style, load_style
+from .style import StyleError, builtin_styles, dump_style, load_style, parse_override
 from .writers import FORMATS, format_for_path
 
 
@@ -25,12 +23,8 @@ def _setting(text: str) -> tuple[str, Any]:
     key, separator, value = text.partition("=")
     if not separator or not key.strip():
         raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got '{text}'")
-    # YAML scalars, so that true, 2, and plain words all mean what they say.
-    try:
-        parsed = yaml.safe_load(value) if value.strip() else ""
-    except yaml.YAMLError:
-        parsed = value
-    return key.strip(), parsed
+    # Typed by the setting: text stays exactly as written, anything else is YAML.
+    return key.strip(), parse_override(key.strip(), value)
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -69,3 +69,23 @@ def test_dump_round_trips(tmp_path: Path) -> None:
     path = tmp_path / "dumped.yaml"
     path.write_text(dump_style(style))
     assert load_style(path) == style
+
+
+def test_command_line_values_are_typed_by_their_setting() -> None:
+    from legaldown_render.style import parse_override
+
+    assert parse_override("placeholders.blank", "[__]") == "[__]"
+    assert parse_override("references.format", "{designation}") == "{designation}"
+    assert parse_override("template_view.choice_separator", " | ") == " | "
+    assert parse_override("enumeration.enabled", "false") is False
+    assert parse_override("locale", "null") is None
+    assert parse_override("headings.1.size", "2em") == "2em"
+    assert parse_override("numbering.levels", "[{counter: decimal}]") == [{"counter": "decimal"}]
+
+
+def test_overrides_merge_in_order_and_never_modify_the_callers_values() -> None:
+    nested = {"levels": []}
+    for overrides in ({"numbering.scheme": "mixed", "numbering": nested},
+                      {"numbering": nested, "numbering.scheme": "mixed"}):
+        assert load_style(overrides=overrides).numbering.scheme == "mixed"
+    assert nested == {"levels": []}

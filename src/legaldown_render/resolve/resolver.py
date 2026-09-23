@@ -225,13 +225,11 @@ class Resolver:
             level = section.level
             sibling = previous.get(level)
             # Alternatives share an identifier, and SHOULD share a number (§15.8).
-            alternative = (
-                sibling is not None and sibling.identifier == section.identifier
-                and bool(sibling.condition) and bool(section.condition)
-            )
-            if not alternative:
+            if not (sibling is not None and _alternatives(sibling.identifier, sibling.condition,
+                                                          section.identifier, section.condition)):
                 counters[level] += 1
-                counters[level + 1:] = [0] * (6 - level)
+            # An alternative's subsections are numbered afresh, like any section's.
+            counters[level + 1:] = [0] * (6 - level)
             previous = {lvl: s for lvl, s in previous.items() if lvl < level}
             previous[level] = section
             if self.textual:
@@ -264,10 +262,15 @@ class Resolver:
 
     def _structure_section(self, section: Section) -> tuple[Block, ...]:
         paragraphs = 0
+        previous: Paragraph | None = None
         out: list[Block] = []
         for block in section.blocks:
             if isinstance(block, Paragraph) and block.top_level:
-                paragraphs += 1
+                # Alternative paragraphs share a number, as sections do (§15.8).
+                if previous is None or not _alternatives(previous.anchor_id, previous.condition,
+                                                         block.anchor_id, block.condition):
+                    paragraphs += 1
+                previous = block
                 block = self._number_paragraph(block, section, paragraphs)
             out.append(self._structure(block, section=section, depth=0))
         return tuple(out)
@@ -285,7 +288,7 @@ class Resolver:
             label, target = None, _Target(base, None, enumerated=False)
         anchor = self._anchor(block.anchor_id)
         if block.anchor_id:
-            self._register(block.anchor_id, replace(target, anchor=anchor or self._target_anchor(block.anchor_id)))
+            self._register(block.anchor_id, replace(target, anchor=anchor))
         return replace(block, label=label, anchor=anchor)
 
     def _structure(self, block: Block, *, section: Section | None, depth: int) -> Block:
@@ -312,7 +315,13 @@ class Resolver:
             fmt = None
         base = section.designation if section else ""
         items: list[ListItem] = []
-        for index, item in enumerate(block.items, start=1):
+        index = 0
+        previous: ListItem | None = None
+        for item in block.items:
+            if previous is None or not _alternatives(previous.anchor_id, previous.condition,
+                                                     item.anchor_id, item.condition):
+                index += 1
+            previous = item
             if fmt is not None:
                 n = format_counter(index, fmt.counter)
                 designation = extend(parent, fill(fmt.ref, n=n, section=base), textual=self.textual)
@@ -322,7 +331,7 @@ class Resolver:
                 designation, label, target = parent, None, _Target(base, None, enumerated=False)
             anchor = self._anchor(item.anchor_id)
             if item.anchor_id and section is not None:
-                self._register(item.anchor_id, replace(target, anchor=anchor or self._target_anchor(item.anchor_id)))
+                self._register(item.anchor_id, replace(target, anchor=anchor))
             children = tuple(
                 self._structure_list(child, section=section, depth=depth + 1, parent=designation)
                 if isinstance(child, List) else self._structure(child, section=section, depth=depth + 1)
@@ -330,10 +339,6 @@ class Resolver:
             )
             items.append(replace(item, blocks=children, label=label, anchor=anchor))
         return List(block.ordered, tuple(items), enumerated=fmt is not None)
-
-    def _target_anchor(self, identifier: str) -> str | None:
-        existing = self.targets.get(identifier)
-        return existing.anchor if existing else None
 
     # -- blocks ---------------------------------------------------------------
 
@@ -648,6 +653,13 @@ _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
     "choose": Resolver._choose,
     "include": Resolver._include,
 }
+
+
+def _alternatives(first_id: str, first_condition: str, second_id: str, second_condition: str) -> bool:
+    """True when two consecutive units are alternatives: they share an
+    identifier and both are conditional (§15.4). Mutual exclusion itself is
+    checked by the validator."""
+    return bool(first_id) and first_id == second_id and bool(first_condition) and bool(second_condition)
 
 
 def fill_condition(template: str, value: str, *, key: str = "condition") -> str:

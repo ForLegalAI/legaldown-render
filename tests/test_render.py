@@ -235,3 +235,82 @@ def test_unreadable_document() -> None:
 def test_options_object_and_keywords_are_exclusive() -> None:
     with pytest.raises(TypeError):
         render(FRONT, RenderOptions(), format="text")
+
+
+# -- regressions from code review -------------------------------------------------
+
+
+def test_disguised_javascript_urls_are_not_links() -> None:
+    from legaldown_render.writers.html import is_safe_href
+
+    for href in ("java\tscript:alert(1)", "jav\nascript:x", "\x01javascript:x", " JAVASCRIPT:x", "data:text/html,x"):
+        assert not is_safe_href(href), repr(href)
+    for href in ("https://example.com", "#section", "attachments/a.pdf", "mailto:a@example.com"):
+        assert is_safe_href(href), href
+    source = FRONT.replace("title: T", 'title: T\nattachments:\n  - id: annex\n    title: Annex\n    file: "java\\tscript:alert(1)"')
+    output = render(source + "# A\n\nSee {{attach: annex}}.\n", overrides={"attachments.render": "omit"}).output
+    assert "script:alert" not in "".join(re.findall(r'href="([^"]*)"', output))
+    assert '<span class="ld-value ld-attach">Annex</span>' in output
+
+
+def test_emphasis_around_a_defined_term_stays_paired() -> None:
+    output = render(FRONT + '# D\n\n**"Notice" {{def:}}** means a notice.\n\n*"Fee" {{def:}} means the fee.*\n',
+                    standalone=False).output
+    assert '<strong><dfn class="ld-defined ld-style-bold" id="def:notice">Notice</dfn></strong> means a notice.' in output
+    assert '<em><dfn class="ld-defined ld-style-bold" id="def:fee">Fee</dfn> means the fee.</em>' in output
+    assert "*" not in re.sub(r"<[^>]+>", "", output.split("<h2", 1)[1])
+
+
+def test_alternative_sections_restart_their_subsection_numbers() -> None:
+    source = FRONT.replace("title: T", TEMPLATE_QUESTIONS) + (
+        "# Disputes {#d when=forum:courts}\n\n## Sub one\n\n## Sub two\n\n"
+        "# Disputes {#d when=forum:arb}\n\n## Sub alt {#sub-alt}\n\nSee {{ref: sub-alt}}.\n")
+    output = render(source, format="text").output
+    assert "1.1 Sub alt" in output
+    assert "See 1.1." in output
+
+
+def test_alternative_paragraphs_and_items_share_a_number() -> None:
+    source = FRONT.replace("title: T", TEMPLATE_QUESTIONS) + (
+        "# A\n\nIntro.\n\nCourts. {#p when=forum:courts}\n\nArbitration. {#p when=forum:arb}\n\nAfter.\n\n"
+        "- first\n- by courts {#i when=forum:courts}\n- by arbitration {#i when=forum:arb}\n- last\n")
+    output = render(source, format="text", overrides={"paragraphs.numbered": True}).output
+    assert "1.2 Courts." in output
+    assert "1.2 Arbitration." in output
+    assert "1.3 After." in output
+    assert "(b) [Only if: forum:courts] by courts" in output
+    assert "(b) [Only if: forum:arb] by arbitration" in output
+    assert "(c) last" in output
+
+
+def test_source_holding_sentinel_characters_renders_them() -> None:
+    body = "# A\n\nx 5 y and `` in code, {{party: acme}}.\n"
+    output = render(FRONT + body, format="text").output
+    assert "x 5 y and  in code, Acme." in output
+
+
+def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
+    output = text("# A\n\n1. first\n2. - - deep\n")
+    assert "2.\n    (i)\n        (A) deep" in output
+
+
+def test_an_unresolved_node_is_an_internal_error() -> None:
+    from dataclasses import replace
+
+    from legaldown_render import InternalError
+    from legaldown_render.tree import DirectiveSource, Paragraph, assert_resolved
+
+    result = render(FRONT + "# A\n\n{{party: acme}}\n", format="text")
+    directive = next(iter(__import__("legaldown").iter_directives("{{party: acme}}")))
+    section = replace(result.tree.sections[0], blocks=(Paragraph((DirectiveSource(directive),)),))
+    with pytest.raises(InternalError):
+        assert_resolved(replace(result.tree, sections=(section,)))
+
+
+TEMPLATE_QUESTIONS = """title: T
+questions:
+  forum:
+    type: choice
+    choices:
+      courts: Courts
+      arb: Arbitration"""

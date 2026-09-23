@@ -51,6 +51,11 @@ from ..tree import (
 
 SAFE_SCHEMES = frozenset({"http", "https", "mailto", "tel"})
 _SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
+# What the WHATWG URL parser ignores before it reads a scheme: tabs and
+# newlines anywhere, and C0 controls and spaces at either end. Checking the
+# URL as a browser will read it means "java\tscript:" cannot slip through.
+_URL_IGNORED_RE = re.compile(r"[\t\n\r]")
+_URL_TRIMMED = "".join(chr(code) for code in range(0x21))
 
 
 def _text(value: str) -> str:
@@ -62,8 +67,9 @@ def _attr(value: str) -> str:
 
 
 def is_safe_href(href: str) -> bool:
-    """True for relative URLs, fragments, and the schemes in SAFE_SCHEMES."""
-    scheme = _SCHEME_RE.match(href.strip())
+    """True for relative URLs, fragments, and the schemes in SAFE_SCHEMES,
+    judged as a browser parses the URL."""
+    scheme = _SCHEME_RE.match(_URL_IGNORED_RE.sub("", href).strip(_URL_TRIMMED))
     return scheme is None or scheme.group(1).lower() in SAFE_SCHEMES
 
 

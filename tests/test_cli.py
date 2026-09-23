@@ -42,3 +42,9 @@ def test_print_and_list_styles(capsys: pytest.CaptureFixture[str]) -> None:
     assert "locale: de" in printed
     assert main(["--list-styles"]) == 0
     assert "default" in capsys.readouterr().out.split()
+
+
+def test_set_keeps_text_values_as_written(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([FEATURES, "-f", "text", "-q", "--set", "placeholders.blank=[__]",
+                 "--set", "references.format=§ {designation}"]) == 0
+    assert "under Section § 2.1." in capsys.readouterr().out

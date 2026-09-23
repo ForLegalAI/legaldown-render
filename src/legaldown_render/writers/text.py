@@ -142,6 +142,11 @@ class TextWriter:
             first = True
             for child in item.blocks:
                 if isinstance(child, List):
+                    if first:
+                        # The item opens with a nested list: its own label
+                        # still comes first, on a line of its own.
+                        lines.append(indent + marker)
+                        first = False
                     lines += self.list(child, depth + 1)
                     continue
                 text = self.block(child)

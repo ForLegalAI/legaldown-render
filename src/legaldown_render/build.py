@@ -57,6 +57,10 @@ from .tree import (
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
 _SENTINEL_RE = re.compile(f"{_OPEN}(\\d+){_CLOSE}")
+# The sentinel characters themselves, where the source already holds them.
+_SENTINEL_CHAR_RE = re.compile(f"[{_OPEN}{_CLOSE}]")
+# Spacing allowed between a defined term's closing mark and its {{def:}} (§7.2).
+_ANCHOR_GAP = " \t\u00a0\u202f"
 _ENCODED_SENTINEL_RE = re.compile("%EE%80%80(\\d+)%EE%80%81", re.IGNORECASE)
 _DRAFTING_RE = re.compile(r"^\[!drafting\][ \t]*$", re.IGNORECASE)
 _COMMENT_ONLY_RE = re.compile(r"^\s*(?:<!--.*?-->\s*)+$", re.DOTALL)
@@ -87,6 +91,16 @@ class _DefinitionPayload:
     source: str
 
 
+@dataclass(frozen=True, slots=True)
+class _Literal:
+    """A sentinel character that was already in the source, kept as text."""
+
+    source: str
+
+
+_Payload = DirectiveSource | _DefinitionPayload | _Literal
+
+
 class _Builder:
     def __init__(self, source: str, document: Document, result: ValidationResult) -> None:
         self.document = document
@@ -94,45 +108,55 @@ class _Builder:
         self.language = document.metadata.language or "en"
         self.md = MarkdownIt("commonmark", {"html": True}).enable("table")
         self.env: dict = {}
-        self.payloads: list[DirectiveSource | _DefinitionPayload] = []
+        self.payloads: list[_Payload] = []
         self.raw_html = 0
         self.body = self._protect(body_of(source))
 
     # -- sentinels ------------------------------------------------------------
 
-    def _sentinel(self, payload: DirectiveSource | _DefinitionPayload) -> str:
+    def _sentinel(self, payload: _Payload) -> str:
         self.payloads.append(payload)
         return f"{_OPEN}{len(self.payloads) - 1}{_CLOSE}"
+
+    def _literal(self, text: str) -> str:
+        """*text* with any sentinel character it already holds protected, so
+        that source text can never be mistaken for a sentinel."""
+        return _SENTINEL_CHAR_RE.sub(lambda match: self._sentinel(_Literal(match.group())), text)
 
     def _protect(self, body: str) -> str:
         """*body* with every directive replaced by a sentinel."""
         lexed = lex(body)
-        # A defined term and its {{def:}} become one sentinel, spanning from
-        # the opening quotation mark to the end of the directive.
+        # A defined term becomes one sentinel, from its opening quotation
+        # mark to its closing one, and its {{def:}} is dropped. Emphasis
+        # markers around the term stay where they are, so they still pair up
+        # with their closers after the directive.
         definitions = {}
         for anchor in find_definition_anchors(body, language=self.language, lexed=lexed):
             if anchor.term is None or anchor.pair is None:
                 continue  # a bare {{def:}}: an Error the validator reports; it renders nothing
             opening = body.index(anchor.pair[0], anchor.start)
             closing = body.rindex(anchor.pair[1], opening + 1, anchor.directive.start)
-            definitions[id(anchor.directive)] = (anchor.start, anchor, opening, closing)
-        covered = [(start, anchor.directive.end) for start, anchor, _, _ in definitions.values()]
+            definitions[id(anchor.directive)] = (opening, closing, anchor.term, anchor.directive.end)
+        covered = [(opening, end) for opening, _, _, end in definitions.values()]
 
         out: list[str] = []
         cursor = 0
         for directive in lexed.directives:
             if id(directive) in definitions:
-                start, anchor, opening, closing = definitions[id(directive)]
+                opening, closing, term, _ = definitions[id(directive)]
                 inner = self._protect_inner(body, opening + 1, closing, lexed.directives)
-                payload = _DefinitionPayload(directive, inner, anchor.term, body[start:directive.end])
+                out.append(self._literal(body[cursor:opening]))
+                out.append(self._sentinel(_DefinitionPayload(directive, inner, term, body[opening:directive.end])))
+                # What separates the term from its {{def:}}: emphasis markers
+                # stay, and the spacing goes with the directive.
+                out.append(self._literal(body[closing + 1:directive.start].rstrip(_ANCHOR_GAP)))
             elif any(start <= directive.start and directive.end <= end for start, end in covered):
                 continue  # inside a defined term: protected with the term
             else:
-                start, payload = directive.start, DirectiveSource(directive)
-            out.append(body[cursor:start])
-            out.append(self._sentinel(payload))
+                out.append(self._literal(body[cursor:directive.start]))
+                out.append(self._sentinel(DirectiveSource(directive)))
             cursor = directive.end
-        out.append(body[cursor:])
+        out.append(self._literal(body[cursor:]))
         return "".join(out)
 
     def _protect_inner(self, body: str, start: int, end: int, directives: list[Directive]) -> str:
@@ -141,10 +165,10 @@ class _Builder:
         cursor = start
         for directive in directives:
             if start <= directive.start and directive.end <= end:
-                out.append(body[cursor:directive.start])
+                out.append(self._literal(body[cursor:directive.start]))
                 out.append(self._sentinel(DirectiveSource(directive)))
                 cursor = directive.end
-        out.append(body[cursor:end])
+        out.append(self._literal(body[cursor:end]))
         return "".join(out).strip()
 
     def _restore(self, text: str) -> str:
@@ -152,7 +176,7 @@ class _Builder:
         places Markdown shows literally: code, URLs, alt text."""
         def source(match: re.Match[str]) -> str:
             payload = self.payloads[int(match.group(1))]
-            return payload.source if isinstance(payload, _DefinitionPayload) else payload.directive.source
+            return payload.directive.source if isinstance(payload, DirectiveSource) else payload.source
         return _SENTINEL_RE.sub(source, text)
 
     def _restore_url(self, url: str) -> str:
@@ -203,7 +227,7 @@ class _Builder:
                     self.raw_html += 1  # never emitted (§8.7)
                 return []
             case _:
-                return self._split_sentinels(self._restore(node.content)) if node.content else []
+                return [Text(self._restore(node.content))] if node.content else []
 
     def _split_sentinels(self, text: str) -> list[Inline]:
         out: list[Inline] = []
@@ -214,6 +238,8 @@ class _Builder:
             payload = self.payloads[int(match.group(1))]
             if isinstance(payload, _DefinitionPayload):
                 out.append(DefinitionSource(payload.directive, self.inlines(payload.inner), payload.term))
+            elif isinstance(payload, _Literal):
+                out.append(Text(payload.source))
             else:
                 out.append(payload)
             cursor = match.end()

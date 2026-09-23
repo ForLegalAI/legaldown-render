@@ -1,6 +1,6 @@
 """Style templates (§13.7): the model, the built-in templates, and loading."""
 from .labels import BUILTIN_LABELS, effective_labels
-from .loader import StyleError, builtin_styles, dump_style, load_style, style_to_dict
+from .loader import StyleError, builtin_styles, dump_style, load_style, parse_override, style_to_dict
 from .model import (
     Attachments,
     Definitions,
@@ -47,5 +47,6 @@ __all__ = [
     "dump_style",
     "effective_labels",
     "load_style",
+    "parse_override",
     "style_to_dict",
 ]

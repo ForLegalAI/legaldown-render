@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 
 from legaldown import Directive
 
+from .errors import InternalError
+
 # ---------------------------------------------------------------------------
 # Inlines
 # ---------------------------------------------------------------------------
@@ -375,11 +377,12 @@ def iter_tree_inlines(tree: RenderTree) -> Iterator[Inline]:
 
 
 def assert_resolved(tree: RenderTree) -> None:
-    """Raise ``TypeError`` if *tree* still holds a source inline: a writer
-    must never see LegalDown semantics (docs/decisions/0003)."""
+    """Raise :class:`InternalError` if *tree* still holds a source inline: a
+    writer must never see LegalDown semantics (docs/decisions/0003)."""
     for inline in iter_tree_inlines(tree):
         if isinstance(inline, SOURCE_INLINES):
-            raise TypeError(f"unresolved {type(inline).__name__} reached a writer")
+            raise InternalError(f"an unresolved {type(inline).__name__} reached a writer. This is a bug; "
+                                "please report it with the document that triggers it.")
 
 
 def plain_text(inlines: tuple[Inline, ...]) -> str:
