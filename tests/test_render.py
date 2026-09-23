@@ -456,10 +456,10 @@ def test_preamble_list_item_markers_are_literal() -> None:
 
 
 def test_hidden_lead_character_in_the_source_is_plain_text() -> None:
-    body = "# A\n\n⸱{{include: x.lgd}} {#p}\n\nSee {{ref: p}}.\n"
+    body = "# A\n\n\u2e31{{include: x.lgd}} {#p}\n\nSee {{ref: p}}.\n"
     output = render(FRONT + body, format="text").output
     assert "See 1(a)." not in output and "See 1." in output
-    assert "⸱[NOT PROCESSED: include x.lgd]" in output
+    assert "\u2e31[NOT PROCESSED: include x.lgd]" in output
 
 
 def test_level_six_headings_are_numbered_as_the_validator_numbers_them() -> None:
