@@ -1,0 +1,57 @@
+Consulting Agreement with [_____]
+
+Consultant
+    Acme Corporation
+
+Client
+    [_____]
+
+1. Fees
+
+The Client shall pay [_____] per month.
+
+> [Drafting note]
+> The standard fee is agreed with the partner in charge.
+
+2. Non-Solicitation
+
+[Only if: non-solicit]
+
+Neither party shall solicit the other's employees.
+
+3. Dispute Resolution
+
+[Only if: forum:courts]
+
+Disputes are resolved by the courts.
+
+3. Dispute Resolution
+
+[Only if: forum:arbitration]
+
+Disputes are resolved by arbitration.
+
+4. Relief
+
+(a) interim relief is available from [a competent court / a competent court or an emergency arbitrator]
+(b) [Only if: !non-solicit] nothing in Section 3 limits this item
+
+---
+
+Consultant
+Acme Corporation
+
+______________________________
+Name:
+Title:
+Date:
+Place:
+
+Client
+[_____]
+
+______________________________
+Name:
+Title:
+Date:
+Place:

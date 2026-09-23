@@ -1,0 +1,7 @@
+# Legal outline numbering: I. / A. / 1. / a. (§13.1).
+version: 1
+name: outline
+extends: default
+
+numbering:
+  scheme: legal-outline

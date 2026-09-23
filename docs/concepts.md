@@ -100,7 +100,7 @@ style template.
 | **Enumeration** | How list items are labelled at each nesting level, for example (a) / (i) / (A) (§13.2) |
 | **Designation** | The rendered name of a reference target: "4.2", "4.2(b)(ii)", "Termination (a)" under the `none` scheme, or "Schedule A: Services, Section 2" across attachment scopes (§13.3) |
 | **Numbering scope** | A region that is numbered independently: the main body, or each attachment when the style template restarts numbering (§13.8) |
-| **Anchor** | A link target in the output. Section, item, and paragraph anchors share one namespace in the source (§5.6). The renderer maps them, together with definition anchors, into the output's single anchor space without collisions, for example by prefixing definition anchors with `def-` |
+| **Anchor** | A link target in the output. Section, item, and paragraph anchors share one namespace in the source (§5.6). The renderer maps them, together with definition anchors, into the output's single anchor space without collisions, by prefixing definition anchors with `def:`, a character no identifier can contain |
 | **Failure marker** | The visible bracketed text the specification requires in place of something that did not resolve, for example `[BROKEN REF: id]` or `[INVALID DATE: value]` |
-| **Diagnostic** | A finding with a stable rule id, a severity, a message, and a source line. It uses the same type and rule ids as the validator, plus the rules only a renderer can evaluate, such as `ref-not-enumerated` |
+| **Diagnostic** | A finding with a stable rule id, a severity, and a message (source lines will follow once the validator provides them). It uses the same type and rule ids as the validator, plus the rules only a renderer can evaluate, such as `ref-not-enumerated` |
 | **Template view** | How a template is rendered without answers: conditional units marked, every `{{choose:}}` phrase shown, drafting notes styled distinctly (§15.8) |

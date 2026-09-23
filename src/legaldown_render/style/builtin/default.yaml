@@ -1,0 +1,7 @@
+# The default LegalDown style: decimal section numbering, (a) / (i) / (A)
+# list enumeration, bold defined terms, and a neutral serif page.
+#
+# Every setting has a built-in default, so this file only names the style.
+# Run `legaldown-render --print-style default` to see every setting.
+version: 1
+name: default

@@ -1,0 +1,59 @@
+---
+legaldown: "0.2"
+title: "Consulting Agreement with {{placeholder: client-name}}"
+document_type: contract
+questions:
+  client-name:
+    type: text
+    prompt: The client's name
+  fee:
+    type: money
+    prompt: Monthly fee
+  non-solicit:
+    type: boolean
+    prompt: Include a non-solicitation covenant?
+  forum:
+    type: choice
+    prompt: How are disputes resolved?
+    choices:
+      courts: State courts
+      arbitration: Arbitration
+sides:
+  - name: consultants
+    label: Consultant
+    parties:
+      - name: acme
+        type: legal_entity
+        legal_name: Acme Corporation
+  - name: clients
+    label: Client
+    parties:
+      - name: client
+        type: legal_entity
+        legal_name: "{{placeholder: client-name}}"
+language: en
+---
+
+# Fees {#fees}
+
+The Client shall pay {{placeholder: fee, currency=EUR}} per month.
+
+> [!DRAFTING]
+> The standard fee is agreed with the partner in charge.
+
+# Non-Solicitation {#non-solicit when=non-solicit}
+
+Neither party shall solicit the other's employees.
+
+# Dispute Resolution {#disputes when=forum:courts}
+
+Disputes are resolved by the courts.
+
+# Dispute Resolution {#disputes when=forum:arbitration}
+
+Disputes are resolved by arbitration.
+
+# Relief
+
+- interim relief is available from {{choose: forum, courts="a competent court", arbitration="a competent court or an emergency arbitrator"}} {#relief-forum}
+- nothing in Section {{ref: disputes}} limits this item {when=!non-solicit}

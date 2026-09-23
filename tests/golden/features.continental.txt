@@ -1,0 +1,96 @@
+Services Agreement
+
+Test document covering every rendered construct
+
+Effective date: June 1, 2026
+
+Provider
+    Acme Corporation
+    Registration No.: DE-12345678
+    Address: 123 Main Street, Dover, DE 19901
+    John Smith, Chief Executive Officer
+
+Client Group
+    Beta Industries Inc.
+
+This Services Agreement (this Agreement) is made between Acme and Beta Industries Inc. (together with its affiliates, the Client Group).
+
+1. Definitions
+
+(1) Services means the services described in Schedule A: Service Description.
+
+(2) Business Day means a day on which banks are open in Delaware.
+
+2. Services
+
+2.1 Performance
+
+(1) The Provider shall perform the Services on each business day, and shall:
+
+2.1.1 keep records of all work performed
+2.1.2 notify the Client of any delay, including:
+    a) the cause of the delay
+    b) its expected duration
+2.1.3 comply with the policies in the price list.
+
+(2) The steps of the escalation procedure are:
+
+1. contact the account manager
+2. contact the service director
+
+2.2 Changes
+
+(1) A change under item 2.1.2(a) or step 2.1(2) is made in writing under Section 2.1.
+
+3. Fees
+
+(1) The Client shall pay $10,000.00 per month, and €1,234.50 for setup, within 30 days of July 1, 2026. The Provider's VAT number is DE123456789.
+
+| Service | Fee | Notes |
+|---|---|---|
+| Hosting | $500.00 | per month |
+| Support | $250.75 | see 3 |
+
+> The fees are fixed for the first year.
+
+    {{ref: not-a-directive-in-code}} stays literal
+
+(2) Inline code keeps {{term: services}} literal.
+
+---
+
+4. Broken References
+
+(1) These are deliberately wrong: [BROKEN REF: nowhere], [UNDEFINED: nothing], [INVALID DATE: 2026-13-45], [INVALID AMOUNT], [UNKNOWN CURRENCY: XYZ], [UNKNOWN PARTY: nobody], [INVALID PARTY: Bad_Name], [UNKNOWN SIDE: nobody], [INVALID DURATION: -1], [INVALID DURATION UNIT: M], [INVALID FIELD: value], [UNKNOWN DIRECTIVE: trem], [UNKNOWN ATTACHMENT: schedule-z], [INVALID PLACEHOLDER: fee], and [NOT PROCESSED: include includes/extra.lgd].
+
+(2) Raw HTML is dropped. A safe link <https://example.com> stays; [an unsafe one](javascript:alert(1)) does not.
+
+---
+
+Attachments
+
+Schedule A: Service Description
+File: attachments/service-description.lgd
+
+Exhibit 1: Price List
+File: attachments/price-list.pdf
+
+---
+
+Provider
+Acme Corporation
+
+______________________________
+Name: John Smith
+Title: Chief Executive Officer
+Date:
+Place:
+
+Client Group
+Beta Industries Inc.
+
+______________________________
+Name:
+Title:
+Date:
+Place:

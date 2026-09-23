@@ -1,6 +1,6 @@
 # 0005. Locale formatting with Babel
 
-- Status: Proposed
+- Status: Accepted (implemented in 0.1.0)
 - Date: 2026-09-23
 
 ## Context
@@ -13,7 +13,7 @@ the active locale (§10, §13.5). Doing this correctly takes real locale data:
 - currency symbols, their placement, and minor units
 - plural rules for durations ("1 month", "12 months", "2 měsíce", "5 měsíců")
 
-## Decision (proposed)
+## Decision
 
 Use [Babel](https://babel.pocoo.org/). It is pure Python and ships CLDR data.
 
