@@ -350,11 +350,12 @@ def test_directives_in_link_titles_are_resolved() -> None:
     assert '<a href="https://example.com" title="Acme">site</a>' in output
 
 
-def test_alternatives_share_a_number_when_not_adjacent() -> None:
+def test_only_adjacent_alternatives_share_a_number() -> None:
+    # As the validator numbers sections: an alternative follows its sibling.
     source = FRONT.replace("title: T", TEMPLATE_QUESTIONS) + (
         "# A\n\nCourts. {#p when=forum:courts}\n\nMid.\n\nArb. {#p when=forum:arb}\n\nAfter.\n")
     output = render(source, format="text", overrides={"paragraphs.numbered": True}).output
-    for line in ("1.1 Courts.", "1.2 Mid.", "1.1 Arb.", "1.3 After."):
+    for line in ("1.1 Courts.", "1.2 Mid.", "1.3 Arb.", "1.4 After."):
         assert line in output
 
 
@@ -364,3 +365,68 @@ def test_units_that_can_appear_together_do_not_share_a_number() -> None:
     output = render(source, format="text").output
     assert "1. One" in output
     assert "2. Two" in output
+
+
+# -- regressions from the third code review -------------------------------------------
+
+THREE_WAY = """title: T
+questions:
+  q:
+    type: choice
+    choices: {a: A, b: B, c: C}
+  flag:
+    type: boolean"""
+
+
+def test_underscore_emphasis_closes_after_a_defined_term() -> None:
+    output = render(FRONT + '# D\n\nAnd _the "Fee"_ {{def: fee}} applies.\n', standalone=False).output
+    assert '<em>the <dfn class="ld-defined ld-style-bold" id="def:fee">Fee</dfn></em> applies.' in output
+
+
+def test_definitions_in_titles_and_alt_text_do_not_take_the_anchor() -> None:
+    body = ("# D\n\n[x](https://a.example 'about \"Fee\" {{def: fee}}') ![\"Tax\" {{def: tax}} chart](c.png) "
+            "{{term: fee}} {{term: tax}}\n\n\"Fee\" {{def: fee}} means the fee.\n")
+    output = render(FRONT + body, standalone=False).output
+    assert 'title="about Fee"' in output
+    assert 'alt="Tax chart"' in output
+    ids = set(re.findall(r' id="([^"]+)"', output))
+    assert "def:fee" in ids
+    for target in re.findall(r'href="#([^"]+)"', output):
+        assert target in ids
+
+
+def test_alternatives_use_their_enclosing_presence() -> None:
+    source = FRONT.replace("title: T", THREE_WAY) + (
+        "# S {#s when=!q:c}\n\nOne. {#p when=!q:a}\n\nTwo. {#p when=!q:b}\n\n"
+        "## Child {#x when=!q:a}\n\n## Child {#x when=!q:b}\n")
+    output = render(source, format="text", overrides={"paragraphs.numbered": True}).output
+    assert "1.1 One." in output
+    assert "1.1 Two." in output
+    assert output.count("1.1 Child") == 2
+
+
+def test_invalid_conditions_are_never_alternatives() -> None:
+    source = FRONT.replace("title: T", THREE_WAY) + "# A\n\nOne. {#p when=flag}\n\nTwo. {#p when=flag:yes}\n"
+    output = render(source, format="text", overrides={"paragraphs.numbered": True}).output
+    assert "1.1 One." in output
+    assert "1.2 Two." in output
+
+
+def test_a_shared_number_excludes_every_unit_holding_it() -> None:
+    # B (q:b) and C (!q:a) can both appear, so C does not join A and B.
+    source = FRONT.replace("title: T", THREE_WAY) + (
+        "# A\n\n- first {#i when=q:a}\n- second {#i when=q:b}\n- third {#i when=!q:a}\n")
+    output = render(source, format="text").output
+    assert "(a) [Only if: q:a] first" in output
+    assert "(a) [Only if: q:b] second" in output
+    assert "(b) [Only if: !q:a] third" in output
+
+
+def test_section_numbers_agree_with_the_validator() -> None:
+    from legaldown import parse_document, validate_document
+
+    source = FRONT.replace("title: T", THREE_WAY) + (
+        "# A {#x when=q:a}\n\n# B\n\n# C {#x when=q:b}\n\n# D {#d when=q:a}\n\n# E {#d when=q:b}\n")
+    result = render(source, format="text")
+    expected = [entry.number for entry in validate_document(parse_document(source)).sections]
+    assert [section.designation for section in result.tree.sections] == expected == ["1", "2", "3", "4", "4"]

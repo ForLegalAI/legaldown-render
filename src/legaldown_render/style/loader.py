@@ -185,10 +185,12 @@ def parse_override(key: str, text: str) -> Any:
     """The value for setting *key* written as *text* on a command line.
 
     Text settings take *text* as written, so ``[_____]`` or ``{designation}``
-    stay text; a value in YAML quotes (``"none"``, ``' | '``) is unquoted.
-    Other settings read it as YAML, so that ``true``, ``2``, or ``[...]``
-    mean what they say. ``null`` clears a setting that may be unset, such as
-    ``locale``.
+    stay text. A value wrapped in YAML quotes (``"none"``, ``' | '``) is
+    unquoted; to keep quotation marks in the value, wrap it in the other kind
+    (``'"{designation}"'``). Other settings read it as YAML, so that
+    ``true``, ``2``, or ``[...]`` mean what they say. ``null`` clears a
+    setting that may be unset, such as ``locale``. Raises StyleError for a
+    quoted value that is not valid YAML.
     """
     hint = _hint_for(key.split("."))
     if hint is not None and _is_text(hint):
@@ -198,8 +200,9 @@ def parse_override(key: str, text: str) -> Any:
         if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in "'\"":
             try:
                 quoted = yaml.safe_load(stripped)
-            except yaml.YAMLError:
-                quoted = None
+            except yaml.YAMLError as error:
+                problem = str(error).splitlines()[0]
+                raise StyleError("setting", [f"{key}: {stripped} is not a valid quoted value ({problem})"]) from None
             if isinstance(quoted, str):
                 return quoted
         return text

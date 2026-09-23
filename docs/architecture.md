@@ -70,6 +70,9 @@ Markdown therefore cannot reinterpret directive syntax, such as an underscore in
 a pipe in a table cell. The nonce is random for each build, so no text in a document, whether
 written literally, as an entity, or percent-encoded, can pass for a sentinel. Emphasis that wraps
 only a defined term is dropped with it, because the style decides how defined terms look (§7.2).
+A `{{def:}}` becomes a sentinel that renders nothing, led by a punctuation character so that an
+emphasis closer just before it still closes. A defined term in a link title or alt text shows its
+term but is not the definition's anchor.
 Text nodes are then split on the sentinels, and the directives return as
 `DirectiveSource` and `DefinitionSource` nodes. Where Markdown shows text literally (code, URLs),
 the sentinels are turned back into their source text.
@@ -99,10 +102,13 @@ Everything else is stripped at this stage:
 
 1. **Survey.** It collects which definitions exist, whether template constructs are used, and
    which placeholder ids are used with conflicting types (§10.7).
-2. **Structure.** It numbers sections under the style's level formats. **Alternatives** are
-   siblings with one identifier whose conditions exclude each other (§15.4, checked with the
-   validator's `exclusive()`). They share the first one's number (§15.8), whether or not they are
-   adjacent, and the same applies to paragraphs and list items. It then labels
+2. **Structure.** It numbers sections under the style's level formats. **Alternatives** share a
+   number (§15.8). For sections, which ones are alternatives is taken from the validator's own
+   numbering, so rendered numbers always match `ValidationResult.sections`. For paragraphs and
+   list items, the validator's rule is applied the same way: an alternative directly follows its
+   sibling, has the same identifier and a valid condition, and its full presence (its own condition
+   and every enclosing one) excludes that of every unit already holding the number (§15.4, the
+   validator's `exclusive()`). It then labels
    list items by depth and top-level paragraphs, and allocates output anchors. Every anchor
    target is registered with its **designation**: "4.2", "4.2(b)(ii)", or "Termination (a)"
    under the `none` scheme.

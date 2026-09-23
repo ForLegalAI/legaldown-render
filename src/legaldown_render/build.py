@@ -59,6 +59,10 @@ from .tree import (
 )
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
+# Leads the sentinel of source that renders nothing (a {{def:}}). It is
+# Unicode punctuation, so an emphasis closer just before it still counts as
+# right-flanking and closes (CommonMark); a bare sentinel reads like a letter.
+_HIDDEN_LEAD = "\u2e31"
 _DRAFTING_RE = re.compile(r"^\[!drafting\][ \t]*$", re.IGNORECASE)
 _COMMENT_ONLY_RE = re.compile(r"^\s*(?:<!--.*?-->\s*)+$", re.DOTALL)
 _ALIGN_RE = re.compile(r"text-align:\s*(left|center|right)")
@@ -101,15 +105,45 @@ _Payload = DirectiveSource | _DefinitionPayload | _Hidden
 
 @dataclass(frozen=True, slots=True)
 class _DefinitionSpan:
-    """Where a defined term and its {{def:}} lie in the body (offsets)."""
+    """Where a defined term and its {{def:}} lie in the body.
 
-    start: int  # of the term's sentinel: its opening mark, or emphasis wrapping it
-    opening: int  # the opening quotation mark
-    closing: int  # the closing quotation mark
-    end: int  # end of the term's sentinel
-    kept: str  # emphasis markers after the term that pair with text beyond it
-    hidden: int  # start of the spacing and {{def:}} that render nothing
+    ``leading`` and ``trailing`` are the emphasis markers written before the
+    opening mark and after the closing one. When they wrap just the term,
+    they go with it — the style decides how a defined term looks (§7.2);
+    otherwise the trailing ones are *kept*, because they pair with text
+    beyond the term.
+    """
+
+    opening: int  # offset of the opening quotation mark
+    closing: int  # offset of the closing quotation mark
+    leading: str  # emphasis markers just before the opening mark
+    trailing: str  # emphasis markers between the closing mark and the spacing
     term: str
+
+    @property
+    def wraps(self) -> bool:
+        """True when the markers open before the term and close right after
+        it, as in ``**"Term"**``."""
+        return bool(self.leading) and self.trailing == self.leading[::-1]
+
+    @property
+    def start(self) -> int:
+        """Start of the term's sentinel."""
+        return self.opening - len(self.leading) if self.wraps else self.opening
+
+    @property
+    def end(self) -> int:
+        """End of the term's sentinel."""
+        return self.hidden if self.wraps else self.closing + 1
+
+    @property
+    def kept(self) -> str:
+        return "" if self.wraps else self.trailing
+
+    @property
+    def hidden(self) -> int:
+        """Start of the spacing and {{def:}}, which render nothing."""
+        return self.closing + 1 + len(self.trailing)
 
 
 class _Builder:
@@ -122,9 +156,9 @@ class _Builder:
         self.payloads: list[_Payload] = []
         self.raw_html = 0
         nonce = secrets.token_hex(8)
-        self.sentinel_re = re.compile(f"{_OPEN}{nonce}:(\\d+){_CLOSE}")
+        self.sentinel_re = re.compile(f"{_HIDDEN_LEAD}?{_OPEN}{nonce}:(\\d+){_CLOSE}")
         # How markdown-it percent-encodes a sentinel inside a URL.
-        self.encoded_sentinel_re = re.compile(f"%EE%80%80{nonce}:(\\d+)%EE%80%81", re.IGNORECASE)
+        self.encoded_sentinel_re = re.compile(f"(%E2%B8%B1)?%EE%80%80{nonce}:(\\d+)%EE%80%81", re.IGNORECASE)
         self.nonce = nonce
         self.body = self._protect(body_of(source))
 
@@ -132,60 +166,63 @@ class _Builder:
 
     def _sentinel(self, payload: _Payload) -> str:
         self.payloads.append(payload)
-        return f"{_OPEN}{self.nonce}:{len(self.payloads) - 1}{_CLOSE}"
+        lead = _HIDDEN_LEAD if isinstance(payload, _Hidden) else ""
+        return f"{lead}{_OPEN}{self.nonce}:{len(self.payloads) - 1}{_CLOSE}"
+
+    def _payload(self, match: re.Match[str]) -> tuple[str, _Payload]:
+        """The payload a sentinel match names, and any text before it that
+        the match took but that belongs to the source: a _HIDDEN_LEAD
+        character written just before a sentinel of another kind."""
+        payload = self.payloads[int(match.group(1))]
+        lead = match.group(0)[:1] if match.group(0).startswith(_HIDDEN_LEAD) else ""
+        return ("" if isinstance(payload, _Hidden) else lead), payload
 
     def _protect(self, body: str) -> str:
-        """*body* with every directive replaced by a sentinel."""
+        """*body* with every directive replaced by a sentinel. A defined term
+        becomes one sentinel and its {{def:}} another that renders nothing
+        (see _DefinitionSpan). One pass over the directives, in order."""
         lexed = lex(body)
-        # A defined term becomes one sentinel, its {{def:}} another that
-        # renders nothing. Emphasis markers that wrap just the term go with
-        # it — the style decides how a defined term looks (§7.2) — while
-        # markers that pair with text beyond the term stay in place.
-        definitions = {}
+        spans: dict[int, _DefinitionSpan] = {}
         for anchor in find_definition_anchors(body, language=self.language, lexed=lexed):
             if anchor.term is None or anchor.pair is None:
                 continue  # a bare {{def:}}: an Error the validator reports; it renders nothing
-            directive = anchor.directive
             opening = body.index(anchor.pair[0], anchor.start)
-            closing = body.rindex(anchor.pair[1], opening + 1, directive.start)
-            leading = body[anchor.start:opening]
+            closing = body.rindex(anchor.pair[1], opening + 1, anchor.directive.start)
             # Between the closing mark and the directive the validator allows
             # only emphasis markers, then spacing (§7.2).
-            trailing = body[closing + 1:directive.start].rstrip()
-            wraps_term = bool(leading) and trailing == leading[::-1]
-            definitions[id(directive)] = _DefinitionSpan(
-                start=anchor.start if wraps_term else opening,
-                opening=opening,
-                closing=closing,
-                end=closing + 1 + (len(trailing) if wraps_term else 0),
-                kept="" if wraps_term else trailing,
-                hidden=closing + 1 + len(trailing),
-                term=anchor.term,
-            )
-        covered = [(span.start, directive.end) for directive in lexed.directives
-                   if (span := definitions.get(id(directive)))]
+            trailing = body[closing + 1:anchor.directive.start].rstrip()
+            spans[id(anchor.directive)] = _DefinitionSpan(
+                opening, closing, body[anchor.start:opening], trailing, anchor.term)
 
         out: list[str] = []
         cursor = 0
+        pending: list[Directive] = []  # directives inside the next defined term
+        starts = sorted((span.start, span.end) for span in spans.values())
+        next_span = 0
         for directive in lexed.directives:
-            span = definitions.get(id(directive))
-            if span is not None:
-                inner = self._protect_inner(body, span.opening + 1, span.closing, lexed.directives)
+            span = spans.get(id(directive))
+            if span is None:
+                while next_span < len(starts) and starts[next_span][1] <= directive.start:
+                    next_span += 1
+                if next_span < len(starts) and starts[next_span][0] <= directive.start:
+                    pending.append(directive)  # inside a defined term: protected with it
+                    continue
+                out.append(body[cursor:directive.start])
+                out.append(self._sentinel(DirectiveSource(directive)))
+            else:
+                inner = self._protect_inner(body, span.opening + 1, span.closing, pending)
+                pending = []
                 out.append(body[cursor:span.start])
                 out.append(self._sentinel(_DefinitionPayload(directive, inner, span.term, body[span.start:span.end])))
                 out.append(span.kept)
                 out.append(self._sentinel(_Hidden(body[span.hidden:directive.end])))
-            elif any(start <= directive.start and directive.end <= end for start, end in covered):
-                continue  # inside a defined term: protected with the term
-            else:
-                out.append(body[cursor:directive.start])
-                out.append(self._sentinel(DirectiveSource(directive)))
             cursor = directive.end
         out.append(body[cursor:])
         return "".join(out)
 
     def _protect_inner(self, body: str, start: int, end: int, directives: list[Directive]) -> str:
-        """The term text ``body[start:end]`` with its own directives replaced."""
+        """The term text ``body[start:end]`` with *directives*, the ones
+        inside it, replaced."""
         out: list[str] = []
         cursor = start
         for directive in directives:
@@ -200,15 +237,16 @@ class _Builder:
         """*text* with sentinels turned back into their source text, for
         places Markdown shows literally: code, URLs, alt text."""
         def source(match: re.Match[str]) -> str:
-            payload = self.payloads[int(match.group(1))]
-            return payload.directive.source if isinstance(payload, DirectiveSource) else payload.source
+            lead, payload = self._payload(match)
+            return lead + (payload.directive.source if isinstance(payload, DirectiveSource) else payload.source)
         return self.sentinel_re.sub(source, text)
 
     def _restore_url(self, url: str) -> str:
         """A link or image URL with its sentinels restored. markdown-it has
         percent-encoded them, so they are decoded first and the URL is
         normalised again afterwards."""
-        decoded = self.encoded_sentinel_re.sub(lambda match: f"{_OPEN}{self.nonce}:{match.group(1)}{_CLOSE}", url)
+        decoded = self.encoded_sentinel_re.sub(
+            lambda match: f"{_HIDDEN_LEAD if match.group(1) else ''}{_OPEN}{self.nonce}:{match.group(2)}{_CLOSE}", url)
         return self.md.normalizeLink(self._restore(decoded)) if decoded != url else url
 
     # -- inlines --------------------------------------------------------------
@@ -262,9 +300,9 @@ class _Builder:
         out: list[Inline] = []
         cursor = 0
         for match in self.sentinel_re.finditer(text):
-            if match.start() > cursor:
-                out.append(Text(text[cursor:match.start()]))
-            payload = self.payloads[int(match.group(1))]
+            lead, payload = self._payload(match)
+            if match.start() > cursor or lead:
+                out.append(Text(text[cursor:match.start()] + lead))
             if isinstance(payload, _DefinitionPayload):
                 out.append(DefinitionSource(payload.directive, self.inlines(payload.inner), payload.term))
             elif isinstance(payload, _Hidden):
