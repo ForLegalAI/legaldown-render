@@ -156,6 +156,9 @@ class _Builder:
         self.env: dict = {}
         self.payloads: list[_Payload] = []
         self.raw_html = 0
+        # Whether the document is a template; decided once the sections are
+        # built, before the preamble (see tree()).
+        self.template = True
         nonce = secrets.token_hex(8)
         # A hidden sentinel has its own form ("h"), so the lead character is
         # taken only with one, never from the source before another sentinel.
@@ -314,22 +317,21 @@ class _Builder:
     # -- blocks ---------------------------------------------------------------
 
     def blocks(self, nodes: list[SyntaxTreeNode], *, in_section: bool, top_level: bool,
-               in_quote: bool = False, template: bool = True) -> tuple[Block, ...]:
+               in_quote: bool = False, loose: bool = False) -> tuple[Block, ...]:
         out: list[Block] = []
         for node in nodes:
             block = self._block(node, in_section=in_section, top_level=top_level, in_quote=in_quote,
-                                template=template)
+                                loose=loose)
             if block is not None:
                 out.append(block)
         return tuple(out)
 
     def _block(self, node: SyntaxTreeNode, *, in_section: bool, top_level: bool, in_quote: bool,
-               template: bool) -> Block | None:
+               loose: bool) -> Block | None:
         match node.type:
             case "paragraph":
-                position = "top" if top_level else "other"
-                return self.paragraph(_inline_content(node), position=position, in_section=in_section,
-                                      template=template)
+                position = "top" if top_level else "loose" if loose else "other"
+                return self.paragraph(_inline_content(node), position=position, in_section=in_section)
             case "bullet_list" | "ordered_list":
                 return self.list(node, in_section=in_section, in_quote=in_quote)
             case "blockquote":
@@ -350,20 +352,28 @@ class _Builder:
                 return Paragraph((Strong(self.inlines(_inline_content(node))),))
         raise InternalError(f"unexpected Markdown block '{node.type}'")
 
-    def paragraph(self, content: str, *, position: str, in_section: bool, template: bool = True) -> Paragraph:
+    def paragraph(self, content: str, *, position: str, in_section: bool) -> Paragraph:
         """A paragraph, with its trailing marker taken off where §5.7 and
-        §15.3 place one, exactly as the validator places it: *position* is
-        ``top`` for a paragraph directly in a section or the preamble,
-        ``item`` for a list item's first paragraph (outside block quotes),
-        and ``other`` for anywhere else. Anywhere a marker is not placed it
-        stays literal text, and the validator reports it (anchor-misplaced).
+        §15.3 place one, exactly as the validator places it. *position* is:
+
+        * ``top`` — directly in a section or the preamble;
+        * ``item`` — a list item's first paragraph, outside block quotes;
+        * ``loose`` — a later paragraph of a list item, outside block
+          quotes. The validator's model ends the list at the blank line
+          before it and reads it as a top-level paragraph
+          (ForLegalAI/legaldown-validator#14), so its marker is placed the
+          same way; it is not numbered as a top-level paragraph;
+        * ``other`` — anywhere else.
+
+        Anywhere a marker is not placed it stays literal text, and the
+        validator reports it (anchor-misplaced).
         """
         if position == "other":
             return Paragraph(self.inlines(content))
         text, marker = _split_marker(content)
-        if marker != Marker() and position == "top" and self._is_include_only(text):
+        if marker != Marker() and position in ("top", "loose") and self._is_include_only(text):
             marker = Marker(condition=marker.condition)  # the #id is ignored (§12.2)
-        elif not in_section and (position == "item" or marker.identifier or not template):
+        elif not in_section and (position == "item" or marker.identifier or not self.template):
             # Before the first heading (§4.4, §15.3): no anchors, no
             # conditions on list items, and a paragraph's condition only in
             # a template.
@@ -376,11 +386,14 @@ class _Builder:
         )
 
     def _is_include_only(self, text: str) -> bool:
+        """True for a paragraph holding a single well-formed {{include:}} and
+        nothing else but comments — the validator's is_include_only."""
         match = self.sentinel_re.fullmatch(HTML_COMMENT_RE.sub("", text).strip())
         if not match:
             return False
         payload = self.payloads[int(match.group(1))]
-        return isinstance(payload, DirectiveSource) and payload.directive.name == "include"
+        return (isinstance(payload, DirectiveSource) and payload.directive.name == "include"
+                and not payload.directive.malformed)
 
     def list(self, node: SyntaxTreeNode, *, in_section: bool, in_quote: bool) -> List:
         items: list[ListItem] = []
@@ -390,7 +403,8 @@ class _Builder:
             if children and children[0].type == "paragraph" and not in_quote:
                 first = self.paragraph(_inline_content(children[0]), position="item", in_section=in_section)
                 children = children[1:]
-            rest = self.blocks(children, in_section=in_section, top_level=False, in_quote=in_quote)
+            rest = self.blocks(children, in_section=in_section, top_level=False, in_quote=in_quote,
+                               loose=not in_quote)
             # The marker belongs to the item, not to its first paragraph.
             blocks = rest if first is None else (Paragraph(first.inlines),) + rest
             items.append(ListItem(
@@ -451,15 +465,17 @@ class _Builder:
                 condition=marker.condition,
                 blocks=self.blocks(nodes, in_section=True, top_level=True),
             ))
-        template = self._is_template(sections, preamble_nodes)
+        # Only now is it known whether the document is a template, which
+        # decides whether a preamble paragraph's condition applies (§5.7).
+        self.template = self._is_template(sections, preamble_nodes)
         metadata = self.document.metadata
         return RenderTree(
             title=plain_inlines(metadata.title),
             subtitle=plain_inlines(metadata.subtitle),
             language=self.language,
-            preamble=self.blocks(preamble_nodes, in_section=False, top_level=True, template=template),
+            preamble=self.blocks(preamble_nodes, in_section=False, top_level=True),
             sections=tuple(sections),
-            is_template=template,
+            is_template=self.template,
         )
 
     def _is_template(self, sections: list[Section], preamble: list[SyntaxTreeNode]) -> bool:
@@ -475,6 +491,10 @@ class _Builder:
             or any(_has_condition(block) for section in sections for block in section.blocks)
             or any(isinstance(payload, DirectiveSource) and payload.directive.name == "choose"
                    for payload in self.payloads)
+            # A {{choose:}} in frontmatter is misplaced, but still makes a
+            # template (§15.1), over the same fields the validator reads.
+            or any(directive.name == "choose" for text in _frontmatter_texts(metadata)
+                   for directive in lex(text or "").directives)
             or any(self._conditional_include(node) for node in preamble)
         )
 
@@ -494,6 +514,15 @@ class _Builder:
                 f"(renderer: {levels}, validator: {expected}). This is a bug; please report it "
                 "with the document that triggers it."
             )
+
+
+def _frontmatter_texts(metadata) -> list[str]:
+    """Every frontmatter text the validator reads for misplaced directives.
+    Private to legaldown-validator 0.2 (roadmap U3: to become public API)."""
+    from legaldown.validator.core import _frontmatter_fields
+
+    structural, values = _frontmatter_fields(metadata)
+    return [text for _label, text in structural] + list(values)
 
 
 def _has_condition(block: Block) -> bool:

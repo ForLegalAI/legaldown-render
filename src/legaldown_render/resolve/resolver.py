@@ -143,6 +143,9 @@ class Resolver:
             for section, presence in zip(sections, self.section_presences, strict=True)
         )
         resolve = self._resolve_inlines
+        # In document order, so that the first of several definitions of a
+        # term is the one that keeps its anchor.
+        preamble = tuple(self._resolve_block(block) for block in preamble)
         sections = tuple(
             replace(
                 section,
@@ -157,7 +160,7 @@ class Resolver:
             title=resolve(self.tree.title),
             subtitle=resolve(self.tree.subtitle),
             locale=self.formatter.tag,
-            preamble=tuple(self._resolve_block(block) for block in preamble),
+            preamble=preamble,
             sections=sections,
             header=self._header(),
             sides=self._sides() if self.style.title_block.parties else (),
@@ -255,7 +258,9 @@ class Resolver:
                 label = fill(fmt.label, n=format_counter(counters[level], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
             self._register(section.identifier, _Target(designation, anchor))
-            out.append(replace(section, label=label, designation=designation, anchor=anchor))
+            # The level is stored clamped too, so every writer nests the section
+            # where its number puts it.
+            out.append(replace(section, level=level, label=label, designation=designation, anchor=anchor))
         return out
 
     def _presence(self, condition: str) -> Presence:
@@ -371,11 +376,22 @@ class Resolver:
                 self._register(item.anchor_id, replace(target, anchor=anchor))
             children = tuple(
                 self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner)
-                if isinstance(child, List) else self._structure(child, section=section, depth=depth + 1, presence=inner)
+                if isinstance(child, List)
+                else self._loose_paragraph(child, section, target) if isinstance(child, Paragraph)
+                else self._structure(child, section=section, depth=depth + 1, presence=inner)
                 for child in item.blocks
             )
             items.append(replace(item, blocks=children, label=label, anchor=anchor))
         return List(block.ordered, tuple(items), enumerated=fmt is not None)
+
+    def _loose_paragraph(self, block: Paragraph, section: Section | None, target: _Target) -> Paragraph:
+        """A paragraph inside a list item that carries its own anchor (see
+        build.paragraph, ``loose``): it is designated as its item is."""
+        if not block.anchor_id or section is None:
+            return block
+        anchor = self._anchor(block.anchor_id)
+        self._register(block.anchor_id, replace(target, anchor=anchor))
+        return replace(block, anchor=anchor)
 
     # -- blocks ---------------------------------------------------------------
 

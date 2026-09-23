@@ -493,3 +493,43 @@ def test_definition_in_a_link_inside_alt_text_takes_no_anchor() -> None:
     assert 'id="def:fee"' not in output
     assert 'href="#def:fee"' not in output
     assert 'alt="pic the Fee"' in output
+
+
+# -- regressions from the fifth code review --------------------------------------------
+
+
+def test_a_malformed_include_is_not_an_include_paragraph() -> None:
+    output = text('# A\n\n{{include: "x}} {#pp}\n\nSee {{ref: pp}}.\n')
+    assert "See 1." in output
+    result = render(FRONT + '{{include: "x}} {when=flag}\n\nIntro {when=flag}\n\n# A\n', format="text")
+    assert result.tree.is_template is False
+    assert "Intro {when=flag}" in result.output
+
+
+def test_a_choose_in_frontmatter_makes_a_template() -> None:
+    source = FRONT.replace("title: T", 'title: "A {{choose: flag, true=x, false=y}}"')
+    result = render(source + "Intro {when=flag}\n\n# A\n", format="text")
+    assert result.tree.is_template is True
+    assert "Intro {when=flag}" not in result.output
+
+
+def test_the_first_definition_in_document_order_keeps_the_anchor() -> None:
+    body = 'The "Fee" {{def:}} is due.\n\n# A\n\nThe "Fee" {{def:}} again. See {{term: fee}}.\n'
+    output = render(FRONT + body, standalone=False).output
+    preamble, sections = output.split('<div class="ld-preamble">')[1].split("</div>", 1)
+    assert 'id="def:fee"' in preamble
+    assert 'id="def:fee"' not in sections
+
+
+def test_a_later_paragraph_in_a_list_item_places_its_marker() -> None:
+    output = text("# A\n\n- item one\n\n  second {#sec}\n\nSee {{ref: sec}}.\n")
+    assert "second {#sec}" not in output
+    assert "See 1(a)." in output
+
+
+def test_a_level_six_heading_nests_where_its_number_puts_it() -> None:
+    output = render(FRONT + "# A\n\n## B\n\n### C\n\n#### D\n\n##### E\n\n###### F\n", standalone=False).output
+    assert output.count('class="ld-section ld-level-5"') == 2
+    # F is E's sibling, numbered after it — not nested inside it.
+    assert ('</section><section class="ld-section ld-level-5" id="f"><h6 class="ld-heading">'
+            '<span class="ld-number">1.1.1.1.2</span>') in output.replace("\n", "")

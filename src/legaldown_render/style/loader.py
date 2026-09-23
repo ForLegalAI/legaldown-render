@@ -184,26 +184,23 @@ def _copy(value: Any) -> Any:
 def parse_override(key: str, text: str) -> Any:
     """The value for setting *key* written as *text* on a command line.
 
-    Text settings take *text* as written, so ``[_____]`` or ``{designation}``
-    stay text. A value that is one quoted YAML string (``"none"``, ``' | '``)
-    is unquoted; anything else — ``"Section" {designation}``, ``"C:\\docs"`` —
-    stays exactly as written. To keep quotation marks around a value, wrap it
-    in the other kind (``'"{designation}"'``). Other settings read it as
-    YAML, so that ``true``, ``2``, or ``[...]`` mean what they say. ``null``
-    clears a setting that may be unset, such as ``locale``.
+    Text settings take *text* as written, so ``[_____]``, ``{designation}``
+    or ``C:\\docs`` stay text. A value wrapped in one pair of matching quotes
+    that does not contain that quote character (``"none"``, ``' | '``) is
+    unquoted — nothing else is interpreted, no escapes and no comments. To
+    keep quotation marks around a value, wrap it in the other kind
+    (``'"{designation}"'``). Other settings read it as YAML, so that
+    ``true``, ``2``, or ``[...]`` mean what they say. ``null`` clears a
+    setting that may be unset, such as ``locale``.
     """
     hint = _hint_for(key.split("."))
     if hint is not None and _is_text(hint):
         stripped = text.strip()
         if type(None) in get_args(hint) and stripped in ("null", "~"):
             return None
-        if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in "'\"":
-            try:
-                quoted = yaml.safe_load(stripped)
-            except yaml.YAMLError:
-                quoted = None  # not one quoted string: the value is taken as written
-            if isinstance(quoted, str):
-                return quoted
+        quote = stripped[:1]
+        if len(stripped) >= 2 and quote in "'\"" and stripped[-1] == quote and quote not in stripped[1:-1]:
+            return stripped[1:-1]
         return text
     try:
         return yaml.safe_load(text) if text.strip() else ""
@@ -287,8 +284,8 @@ def _convert(value: Any, hint: Any, path: str, problems: list[str]) -> Any:
                 except (TypeError, ValueError):
                     problems.append(f"{path}.{key}: key must be a number")
                     continue
-                if not 1 <= key <= 6:
-                    problems.append(f"{path}.{key}: heading levels are 1 to 6")
+                if not 1 <= key <= 5:
+                    problems.append(f"{path}.{key}: heading levels are 1 to 5 (§4.1)")
                     continue
             converted[key] = _convert(item, item_hint, f"{path}.{key}", problems)
         return converted

@@ -83,13 +83,18 @@ the sentinels are turned back into their source text.
 - after a heading
 - at the end of a top-level paragraph
 - at the end of a list item's first paragraph, outside block quotes
+- at the end of a list item's later paragraph, outside block quotes. The validator's model ends
+  the list at the blank line before such a paragraph and reads it as top-level
+  ([legaldown-validator#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)), so
+  the renderer places its marker the same way. It is designated as its item
 - in the preamble, only a paragraph's condition, and only in a template
 - on a paragraph holding only an `{{include:}}`, anywhere: its condition applies, and its `#id`
   is ignored (§12.2)
 
 Anywhere else, a marker stays literal text, and the validator reports it (`anchor-misplaced`).
 Whether a document is a **template** is decided as the validator decides it: declared
-`questions`, a conditional attachment, section or unit, or a `{{choose:}}`.
+`questions`, a conditional attachment, section or unit, or a `{{choose:}}`, in the body or in
+frontmatter.
 
 **Outline check.** The builder's top-level headings must match the validator's sections one to
 one. A mismatch raises `InternalError`: the two parsers disagree, and the renderer never guesses.
@@ -197,8 +202,9 @@ All of them are pure Python. The DOCX and PDF writers will bring their dependenc
 
 The renderer imports a few names from `legaldown` submodules that the validator does not
 re-export at the top level: `legaldown.directives.lex`, `legaldown.markers`,
-`legaldown.parser.FRONTMATTER_RE`, `legaldown.validator.helpers`, and
-`legaldown.validator.patterns`. The pin to one minor version exists because of them. Asking the
+`legaldown.parser.FRONTMATTER_RE`, `legaldown.validator.helpers`,
+`legaldown.validator.patterns`, `legaldown.validator.conditions`, and one private function,
+`legaldown.validator.core._frontmatter_fields`. The pin to one minor version exists because of them. Asking the
 validator to export them publicly is roadmap item U3.
 
 ## Errors and diagnostics

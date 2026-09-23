@@ -12,7 +12,7 @@ here.
 |---|---|---|---|
 | U1 | validator | **Keep nested list structure** in the model ([#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)) | Open. The renderer works around it with markdown-it-py and an outline check (ADR 0002) |
 | U2 | validator | **Source positions** (line numbers) on sections, blocks, and diagnostics | Open. Diagnostics have no line numbers in either package |
-| U3 | validator | **Public API** for what the renderer imports from submodules: the lexer, markers, frontmatter splitting, value checks, `IDENTIFIER_RE`, `KNOWN_CURRENCIES` | Open. Until then the dependency is pinned to one minor version |
+| U3 | validator | **Public API** for what the renderer imports from submodules: the lexer, markers, frontmatter splitting, value checks, conditions, `IDENTIFIER_RE`, `KNOWN_CURRENCIES`, the frontmatter fields it reads. Better still, expose the validator's own **placed markers** and **template decision**, so the renderer uses them instead of mirroring those rules | Open. Until then the dependency is pinned to one minor version |
 | U4a | validator | **Specification 0.2** (templates, §15) | Done in 0.2.0 |
 | U4b | validator | Template **assembly** with an answers set (§15.7) | Open. It blocks rendering templates with answers |
 | U5 | specification | A **rendering fixtures corpus**: source + style settings → expected plain-text output | Not started. The plain-text writer is designed to be its oracle |

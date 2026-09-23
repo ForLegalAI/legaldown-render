@@ -235,7 +235,6 @@ def _default_headings() -> dict[int, HeadingStyle]:
         3: HeadingStyle(size="1em", weight="600", italic=True),
         4: HeadingStyle(size="1em", weight="600", italic=True),
         5: HeadingStyle(size="1em", weight="400", italic=True),
-        6: HeadingStyle(size="1em", weight="400", italic=True),
     }
 
 

@@ -36,11 +36,12 @@ def _level(counter: str, label: str, ref: str) -> LevelFormat:
     return LevelFormat(counter, label, ref)  # type: ignore[arg-type]
 
 
-#: The built-in heading schemes of §13.1, six levels each.
+#: The built-in heading schemes of §13.1, one format per heading level
+#: (LegalDown has five, §4.1).
 SCHEMES: dict[str, tuple[LevelFormat, ...]] = {
     "decimal": (
         _level("decimal", "{path}.", "{n}"),
-        *(_level("decimal", "{path}", ".{n}") for _ in range(5)),
+        *(_level("decimal", "{path}", ".{n}") for _ in range(4)),
     ),
     "legal-outline": (
         _level("upper-roman", "{n}.", "{n}"),
@@ -48,7 +49,6 @@ SCHEMES: dict[str, tuple[LevelFormat, ...]] = {
         _level("decimal", "{n}.", ".{n}"),
         _level("lower-alpha", "{n}.", ".{n}"),
         _level("lower-roman", "({n})", "({n})"),
-        _level("decimal", "({n})", "({n})"),
     ),
     "mixed": (
         _level("decimal", "{n}.", "{n}"),
@@ -56,7 +56,6 @@ SCHEMES: dict[str, tuple[LevelFormat, ...]] = {
         _level("lower-roman", "({n})", "({n})"),
         _level("upper-alpha", "({n})", "({n})"),
         _level("decimal", "({n})", "({n})"),
-        _level("lower-alpha", "({n})", "({n})"),
     ),
 }
 
@@ -65,10 +64,10 @@ RENUMBERED = _level("decimal", "{n}.", "({n})")
 
 
 def heading_levels(numbering: Numbering) -> tuple[LevelFormat, ...]:
-    """The six level formats for *numbering*: the style's ``levels`` first,
+    """The five level formats for *numbering*: the style's ``levels`` first,
     the scheme's for the rest."""
     preset = SCHEMES.get(numbering.scheme, SCHEMES["decimal"])
-    return tuple(numbering.levels[:6]) + preset[len(numbering.levels[:6]):]
+    return tuple(numbering.levels[:5]) + preset[len(numbering.levels[:5]):]
 
 
 _FIELD_RE = re.compile(r"\{(n|path|section)\}")

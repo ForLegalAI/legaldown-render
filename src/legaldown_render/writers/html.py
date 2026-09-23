@@ -166,10 +166,9 @@ class HtmlWriter:
     def heading(self, section: Section) -> str:
         number = f'<span class="ld-number">{_text(section.label)}</span> ' if section.label else ""
         content = f'{number}<span class="ld-heading-text">{self.inlines(section.title)}</span>'
-        if section.level < 6:
-            tag = f"h{section.level + 1}"
-            return f'<{tag} class="ld-heading">{content}</{tag}>'
-        return f'<div class="ld-heading" role="heading" aria-level="7">{content}</div>'
+        # Levels 1-5 (the resolver clamps them, §4.1) under the title's <h1>.
+        tag = f"h{section.level + 1}"
+        return f'<{tag} class="ld-heading">{content}</{tag}>'
 
     def attachments(self, tree: RenderTree) -> str:
         separator = self.style.attachments.separator

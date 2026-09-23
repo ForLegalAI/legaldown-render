@@ -29,8 +29,9 @@ Values are layered. Each layer overrides the one before it, **field by field**:
 3. **The chosen style**: `--style NAME|PATH`, or `RenderOptions(style=...)`.
 4. **Per-job overrides**: `--set numbering.scheme=mixed` or `overrides={"numbering.scheme": "mixed"}`,
    plus `--locale`. On the command line, text settings take the value as written
-   (`--set placeholders.blank=[__]`). A value that is one quoted YAML string is unquoted, and
-   anything else, such as `"Section" {designation}`, stays as written. To keep quotation marks
+   (`--set placeholders.blank=[__]`). A value wrapped in one pair of matching quotes that does
+   not contain that quote is unquoted; nothing else is interpreted, so `"Section" {designation}`
+   or `C:\new` stay exactly as written. To keep quotation marks
    around a value, wrap it in the other kind (`--set 'references.format="{designation}"'`
    gives `{designation}`, and `--set "references.format='\"{designation}\"'"` gives
    `"{designation}"`). Other settings are read as YAML (`true`, `2`, `[...]`).
@@ -122,7 +123,7 @@ typography:
   link_color: "#1f4e8c"
   justify: false
 
-headings:                    # per level 1–6
+headings:                    # per level 1–5
   1: { size: 1.15em, weight: "700", italic: false, transform: uppercase, align: left }
 
 page: { size: A4, margin: 25mm }      # print stylesheet now; the PDF writer later

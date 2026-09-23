@@ -32,7 +32,7 @@ def test_every_problem_is_reported_with_its_path() -> None:
     assert "numbering.scheme: must be one of" in problems
     assert "numbring: unknown key (did you mean 'numbering'?)" in problems
     assert "enumeration.enabled: must be true or false" in problems
-    assert "headings.9: heading levels are 1 to 6" in problems
+    assert "headings.9: heading levels are 1 to 5" in problems
 
 
 def test_file_extends_a_builtin(tmp_path: Path) -> None:
@@ -104,5 +104,7 @@ def test_only_a_single_quoted_string_is_unquoted() -> None:
     from legaldown_render.style import parse_override
 
     assert parse_override("references.format", """'"{designation}"'""") == '"{designation}"'
-    for literal in ('"Section" {designation} "x"', '"C:\\docs"', "'it's'"):
+    for literal in ('"Section" {designation} "x"', "'it's'", '"Sec" #"'):
         assert parse_override("references.format", literal) == literal
+    # No escapes are interpreted: a backslash is a backslash.
+    assert parse_override("references.format", '"C:\\new"') == "C:\\new"

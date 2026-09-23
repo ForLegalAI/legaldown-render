@@ -42,8 +42,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("-s", "--style", help="style template: a built-in name or a path to a .yaml file")
     parser.add_argument("--set", dest="overrides", action="append", default=[], type=_setting, metavar="KEY=VALUE",
                         help="override one style setting; repeatable. Text settings take the value as "
-                             "written; a value that is one quoted string is unquoted (wrap it in the other "
-                             "kind of quote to keep quotation marks). Others read it as YAML, e.g. true or 2")
+                             "written; one pair of matching outer quotes is removed (wrap the value in the "
+                             "other kind of quote to keep quotation marks). Others read it as YAML, e.g. true or 2")
     parser.add_argument("--locale", help="formatting locale, e.g. en-US or cs-CZ (default: the style's, else the document language)")
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
