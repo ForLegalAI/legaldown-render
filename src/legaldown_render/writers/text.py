@@ -79,19 +79,17 @@ class TextWriter:
         if subtitle:
             chunks.append(subtitle)
         if tree.header:
-            chunks.append("\n".join(f"{label}: {inline_text(value)}" for label, value in tree.header))
+            chunks.append("\n".join(f"{label}{tree.colon}{inline_text(value)}" for label, value in tree.header))
         for side in tree.sides:
             lines = [inline_text(side.label)]
             for party in side.parties:
                 lines.append(_INDENT + inline_text(party.name))
-                lines += [f"{_INDENT}{label}: {inline_text(value)}" for label, value in party.details]
-                for name, title in party.representatives:
-                    lines.append(_INDENT + ", ".join(filter(None, (inline_text(name), inline_text(title)))))
+                lines += [f"{_INDENT}{label}{tree.colon}{inline_text(value)}" for label, value in party.details]
             chunks.append("\n".join(lines))
         if tree.contents:
-            lines = [tree.contents_label]
+            lines = [tree.contents_label] if tree.contents_label else []
             for entry in tree.contents:
-                line = _INDENT * (entry.level - 1) + " ".join(filter(None, (entry.label, entry.text)))
+                line = _INDENT * (entry.level - 1) + " ".join(filter(None, (entry.label, inline_text(entry.title))))
                 if entry.condition_label:
                     line += f" [{entry.condition_label}]"
                 lines.append(line)
@@ -115,7 +113,7 @@ class TextWriter:
                 chunks.append("\n".join(lines))
         if tree.signatures:
             chunks.append("---")
-            chunks += [self.signature(signature, tree.signature_labels) for signature in tree.signatures]
+            chunks += [self.signature(signature, tree.signature_labels, tree.colon) for signature in tree.signatures]
         return "\n\n".join(chunk for chunk in chunks if chunk) + "\n"
 
     def block(self, block: Block) -> str:
@@ -174,17 +172,17 @@ class TextWriter:
         lines += ["| " + " | ".join(row) + " |" for row in rows]
         return "\n".join(lines)
 
-    def signature(self, signature: SignatureParty, labels: dict[str, str]) -> str:
+    def signature(self, signature: SignatureParty, labels: dict[str, str], colon: str) -> str:
         lines = [inline_text(signature.side), inline_text(signature.name)]
         # With no declared representative, one blank signing line.
         for name, title in signature.signatories or (((), ()),):
             lines += [
                 "",
                 "_" * 30,
-                f"{labels['name']}: {inline_text(name)}".rstrip(),
-                f"{labels['title']}: {inline_text(title)}".rstrip(),
+                f"{labels['name']}{colon}{inline_text(name)}".rstrip(),
+                f"{labels['title']}{colon}{inline_text(title)}".rstrip(),
             ]
-        lines += [f"{labels['date']}:", f"{labels['place']}:"]
+        lines += [f"{labels['date']}{colon}".rstrip(), f"{labels['place']}{colon}".rstrip()]
         return "\n".join(lines)
 
 

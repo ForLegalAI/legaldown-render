@@ -258,13 +258,17 @@ class Section:
     designation: str | None = None
     anchor: str | None = None
     condition_label: str | None = None
+    #: How deep its number goes: 1 for "2", 2 for "2.1". Less than
+    #: ``level`` when a heading level is skipped.
+    depth: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class PartyInfo:
     name: tuple[Inline, ...]
+    #: (label, value) rows: identification, address, custom fields, and
+    #: one row per representative.
     details: tuple[tuple[str, tuple[Inline, ...]], ...]
-    representatives: tuple[tuple[tuple[Inline, ...], tuple[Inline, ...]], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,12 +296,13 @@ class SignatureParty:
 
 @dataclass(frozen=True, slots=True)
 class ContentsEntry:
-    """One line of the table of contents: a section or an attachment. Its
-    text is plain, so that no link or anchor is repeated from the body."""
+    """One line of the table of contents: a section, the attachments
+    heading, or an attachment. Its title reads as in the body, without the
+    body's links and anchors (see :func:`unlinked`)."""
 
     level: int
     label: str | None
-    text: str
+    title: tuple[Inline, ...]
     anchor: str | None
     condition_label: str | None = None
 
@@ -326,6 +331,8 @@ class RenderTree:
     #: The table of contents; empty unless the style enables it.
     contents: tuple[ContentsEntry, ...] = ()
     contents_label: str = ""
+    #: Between a generated label and its value ("Name: ..."), per language.
+    colon: str = ": "
 
 
 # ---------------------------------------------------------------------------
@@ -379,11 +386,10 @@ def iter_tree_inlines(tree: RenderTree) -> Iterator[Inline]:
             yield from iter_inlines(party.name)
             for _, value in party.details:
                 yield from iter_inlines(value)
-            for name, title in party.representatives:
-                yield from iter_inlines(name)
-                yield from iter_inlines(title)
     for attachment in tree.attachments:
         yield from iter_inlines(attachment.title)
+    for entry in tree.contents:
+        yield from iter_inlines(entry.title)
     for signature in tree.signatures:
         yield from iter_inlines(signature.side)
         yield from iter_inlines(signature.name)
@@ -438,14 +444,39 @@ def map_tree_inlines(tree: RenderTree, fn: Callable[[Inline], Inline]) -> Render
         header=tuple((label, pair(value)) for label, value in tree.header),
         sides=tuple(replace(side, label=pair(side.label), parties=tuple(
             replace(party, name=pair(party.name),
-                    details=tuple((label, pair(value)) for label, value in party.details),
-                    representatives=tuple((pair(name), pair(title)) for name, title in party.representatives))
+                    details=tuple((label, pair(value)) for label, value in party.details))
             for party in side.parties)) for side in tree.sides),
         attachments=tuple(replace(attachment, title=pair(attachment.title)) for attachment in tree.attachments),
+        contents=tuple(replace(entry, title=pair(entry.title)) for entry in tree.contents),
         signatures=tuple(replace(signature, side=pair(signature.side), name=pair(signature.name),
                                  signatories=tuple((pair(name), pair(title)) for name, title in signature.signatories))
                          for signature in tree.signatures),
     )
+
+
+def unlinked(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
+    """*inlines* as they read, without links or anchors: for text shown a
+    second time, such as a heading in the table of contents, which links
+    to the heading itself and must not repeat an anchor from the body."""
+    out: list[Inline] = []
+    for inline in inlines:
+        match inline:
+            case Link(children=children):
+                out.extend(unlinked(children))
+                continue
+            case CrossRef():
+                inline = replace(inline, target="")
+            case TermRef():
+                inline = replace(inline, target=None)
+            case DefinedTerm():
+                inline = replace(inline, anchor=None)
+            case Value():
+                inline = replace(inline, href=None)
+        children = getattr(inline, "children", None)
+        if isinstance(children, tuple) and not isinstance(inline, Image):
+            inline = replace(inline, children=unlinked(children))
+        out.append(inline)
+    return tuple(out)
 
 
 def assert_resolved(tree: RenderTree) -> None:

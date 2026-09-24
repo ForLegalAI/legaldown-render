@@ -256,7 +256,8 @@ def _convert(value: Any, hint: Any, path: str, problems: list[str]) -> Any:
         return _convert_dataclass(value, hint, path, problems)
     if origin is Literal:
         allowed = get_args(hint)
-        if value not in allowed:
+        # By type too: True == 1 and 2.0 == 2, but neither is a level.
+        if not any(value == option and type(value) is type(option) for option in allowed):
             problems.append(f"{label}: must be one of {', '.join(map(str, allowed))} (got {value!r})")
             return allowed[0]
         return value

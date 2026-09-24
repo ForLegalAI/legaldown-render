@@ -8,7 +8,7 @@ Provider
     Acme Corporation
     Registration No.: DE-12345678
     Address: 123 Main Street, Dover, DE 19901
-    John Smith, Chief Executive Officer
+    Represented by: John Smith, Chief Executive Officer
 
 Client Group
     Beta Industries Inc.

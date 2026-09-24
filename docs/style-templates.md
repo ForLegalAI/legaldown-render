@@ -105,6 +105,7 @@ placeholders:
 
 title_block: { parties: true, effective_date: true, version: false }
 contents: { enabled: false, depth: 2, attachments: true }     # table of contents after the title block; depth 1-5
+                                                              # counts number levels ("2.1" is 2); attachments listed last
 attachments: { render: placeholder, separator: page-break }   # placeholder | omit; page-break | rule | none
 signatures: { enabled: true }                                 # the document's include_signatures: false wins
 template_view: { choice_separator: " / ", empty_choice: "" }
@@ -115,6 +116,7 @@ labels:                      # every word the renderer generates; unset: built-i
   # identification_number, date_of_birth, address, represented_by, effective_date, version,
   # attachments, contents, attachment_file ("{file}"), signatures, signature_date, signature_place,
   # signature_name, signature_title
+  colon: ": "                # between a label and its value; French: no-break space, then ": "
 
 typography:
   font_family: 'Georgia, "Times New Roman", serif'

@@ -8,6 +8,7 @@ import pytest
 from conftest import DOCUMENTS
 
 from legaldown_render import DocumentError, RenderOptions, RenderRefused, render
+from legaldown_render.style import StyleError
 
 FRONT = """---
 title: T
@@ -273,6 +274,56 @@ def test_contents_label_follows_the_language_and_marks_conditions() -> None:
     contents = output[output.index("Contents\n"):].split("\n\n", 1)[0]
     assert "2. Non-Solicitation [Only if: non-solicit]" in contents
     assert text("# A\n", overrides={"contents.enabled": True, "labels.contents": "Obsah"}).count("Obsah") == 1
+
+
+def test_contents_follow_the_numbering_depth_not_the_heading_level() -> None:
+    output = text("# A\n\n### B\n\n###### C\n", overrides={"contents.enabled": True})
+    assert "Contents\n1. A\n    1.1 B\n\n" in output
+
+
+def test_contents_group_attachments_under_their_heading() -> None:
+    output = render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), format="text",
+                    overrides={"contents.enabled": True}).output
+    contents = output[output.index("Contents\n"):].split("\n\n", 1)[0]
+    assert contents.endswith("\nAttachments\n    Schedule A: Service Description\n    Exhibit 1: Price List")
+
+
+def test_contents_heading_reads_as_in_the_body_without_links() -> None:
+    body = "# See {{ref: nowhere}} and [site](https://example.com/x)\n"
+    html = render(FRONT + body, standalone=False, overrides={"contents.enabled": True}).output
+    nav = html[html.index("<nav"):html.index("</nav>")]
+    assert 'class="ld-failure"' in nav
+    assert "example.com" not in nav
+
+
+def test_an_empty_contents_label_leaves_out_the_heading() -> None:
+    settings = {"contents.enabled": True, "labels.contents": ""}
+    html = render(FRONT + "# A\n", standalone=False, overrides=settings).output
+    assert '<nav class="ld-contents">\n<ol' in html
+    output = text("# A\n", overrides=settings)
+    assert "\n\n\n" not in output and output.count("1. A") == 2
+
+
+def test_contents_css_only_when_enabled() -> None:
+    assert ".ld-contents" not in render(FRONT + "# A\n").output
+    assert ".ld-contents-list" in render(FRONT + "# A\n", overrides={"contents.enabled": True}).output
+
+
+@pytest.mark.parametrize("depth", [True, 2.0, 0, 6])
+def test_contents_depth_must_be_a_level(depth: object) -> None:
+    with pytest.raises(StyleError, match="contents.depth"):
+        render(FRONT + "# A\n", overrides={"contents.depth": depth})
+
+
+def test_representatives_are_labelled_and_french_labels_space_their_colons() -> None:
+    source = (DOCUMENTS / "features.lgd").read_text(encoding="utf-8")
+    assert "Represented by: John Smith" in render(source, format="text").output
+    relabelled = render(source, format="text", overrides={"labels.represented_by": "Acting for"}).output
+    assert "Acting for: John Smith" in relabelled
+    french = render(source.replace("language: en", "language: fr"), format="text").output
+    assert "Représentée par\xa0: John Smith" in french
+    assert "Nom\xa0: " in french and "\nLieu\xa0:\n" in french
+    assert "Date d'effet\xa0: " in french
 
 
 def test_final_check_reports_blanks_and_template_constructs() -> None:

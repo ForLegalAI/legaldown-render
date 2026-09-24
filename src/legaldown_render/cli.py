@@ -48,8 +48,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
     parser.add_argument("--final", action="store_true",
-                        help="the document is meant for signature: a remaining blank, condition, choice, or "
-                             "drafting note is an error (§15.9); with --strict, it is refused")
+                        help="the document is meant for signature: a remaining blank, questions key, condition, "
+                             "choice, or drafting note is an error (§15.9); with --strict, it is refused")
     parser.add_argument("-q", "--quiet", action="store_true", help="do not list diagnostics")
     parser.add_argument("--print-style", action="store_true",
                         help="print the effective style — the one --style, --set and --locale produce — as YAML, and exit")

@@ -194,6 +194,9 @@ class Labels:
     version: str | None = None
     attachments: str | None = None
     contents: str | None = None
+    #: Between a label and its value ("Name: ..."); French puts a no-break
+    #: space before the colon.
+    colon: str | None = None
     #: ``{file}`` is the attachment's declared file.
     attachment_file: str | None = None
     signatures: str | None = None

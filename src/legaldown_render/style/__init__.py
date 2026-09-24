@@ -3,6 +3,7 @@ from .labels import BUILTIN_LABELS, effective_labels
 from .loader import StyleError, builtin_styles, dump_style, load_style, parse_override, style_to_dict
 from .model import (
     Attachments,
+    Contents,
     Definitions,
     Enumeration,
     HeadingStyle,
@@ -25,6 +26,7 @@ from .model import (
 __all__ = [
     "BUILTIN_LABELS",
     "Attachments",
+    "Contents",
     "Definitions",
     "Enumeration",
     "HeadingStyle",

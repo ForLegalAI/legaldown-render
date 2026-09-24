@@ -102,7 +102,7 @@ class HtmlWriter:
         if tree.attachments:
             parts.append(self.attachments(tree))
         if tree.signatures:
-            parts.append(self.signatures(tree.signatures, tree.signature_labels))
+            parts.append(self.signatures(tree.signatures, tree.signature_labels, tree.colon))
         parts.append("</article>")
         body = "\n".join(part for part in parts if part)
         if not self.standalone:
@@ -136,9 +136,6 @@ class HtmlWriter:
                         for label, value in party.details:
                             parts.append(f"<dt>{_text(label)}</dt><dd>{self.inlines(value)}</dd>")
                         parts.append("</dl>")
-                    for name, title in party.representatives:
-                        text = ", ".join(filter(None, (self.inlines(name), self.inlines(title))))
-                        parts.append(f'<p class="ld-representative">{text}</p>')
                     parts.append("</div>")
                 parts.append("</div>")
             parts.append("</div>")
@@ -147,12 +144,17 @@ class HtmlWriter:
 
     def contents(self, tree: RenderTree) -> str:
         """The table of contents: one link per entry, indented by level."""
-        parts = [f'<nav class="ld-contents" aria-label="{_attr(tree.contents_label)}">',
-                 f'<h2 class="ld-contents-heading">{_text(tree.contents_label)}</h2>',
-                 '<ol class="ld-contents-list">']
+        label = tree.contents_label
+        parts = [f'<nav class="ld-contents" aria-label="{_attr(label)}">' if label else '<nav class="ld-contents">']
+        if label:
+            parts.append(f'<h2 class="ld-contents-heading">{_text(label)}</h2>')
+        parts.append('<ol class="ld-contents-list">')
         for entry in tree.contents:
             number = f'<span class="ld-number">{_text(entry.label)}</span> ' if entry.label else ""
-            text = f'{number}<span class="ld-contents-text">{_text(entry.text)}</span>'
+            outer, self._in_link = self._in_link, True
+            title = self.inlines(entry.title)
+            self._in_link = outer
+            text = f'{number}<span class="ld-contents-text">{title}</span>'
             if entry.anchor:
                 text = f'<a href="#{_attr(entry.anchor)}">{text}</a>'
             if entry.condition_label:
@@ -206,7 +208,7 @@ class HtmlWriter:
         parts.append("</section>")
         return "\n".join(parts)
 
-    def signatures(self, signatures: tuple[SignatureParty, ...], labels: dict[str, str]) -> str:
+    def signatures(self, signatures: tuple[SignatureParty, ...], labels: dict[str, str], colon: str) -> str:
         parts = [f'<section class="ld-signatures" aria-label="{_attr(labels["heading"])}">']
         for signature in signatures:
             parts.append('<div class="ld-signature">')
@@ -214,9 +216,10 @@ class HtmlWriter:
             parts.append(f'<p class="ld-signature-party">{self.inlines(signature.name)}</p>')
             for name, title in signature.signatories or (((), ()),):
                 parts.append('<div class="ld-signatory"><div class="ld-signature-line"></div>')
-                parts.append(f'<p>{_text(labels["name"])}: {self.inlines(name)}</p>')
-                parts.append(f'<p>{_text(labels["title"])}: {self.inlines(title)}</p></div>')
-            parts.append(f'<p>{_text(labels["date"])}:</p>\n<p>{_text(labels["place"])}:</p>')
+                parts.append(f'<p>{_text(labels["name"] + colon)}{self.inlines(name)}</p>')
+                parts.append(f'<p>{_text(labels["title"] + colon)}{self.inlines(title)}</p></div>')
+            date, place = (_text((labels[key] + colon).rstrip()) for key in ("date", "place"))
+            parts.append(f"<p>{date}</p>\n<p>{place}</p>")
             parts.append("</div>")
         parts.append("</section>")
         return "\n".join(parts)
@@ -371,7 +374,6 @@ _BASE_CSS = """\
 .ld-side-label { font-weight: 700; margin: 0 0 0.25em; }
 .ld-party-name { margin: 0; }
 .ld-party + .ld-party { margin-top: 1em; }
-.ld-representative { margin: 0.25em 0 0; }
 .ld-heading { margin: 1.5em 0 0.5em; }
 .ld-heading .ld-number { display: inline-block; min-width: 2.5em; }
 .ld-p { margin: 0.6em 0; }
@@ -405,14 +407,6 @@ dfn { font-style: normal; }
 p.ld-condition { margin: 0 0 0.5em; }
 .ld-conditional { border-left: 2px dashed #b9a6e8; padding-left: 0.6em; }
 .ld-choice { background: #efe9fb; border-radius: 3px; padding: 0 0.2em; }
-.ld-contents { margin: 2em 0; }
-.ld-contents-list { list-style: none; padding-left: 0; }
-.ld-contents-list li { margin: 0.2em 0; }
-.ld-contents-list a { color: inherit; text-decoration: none; }
-.ld-contents-level-2 { padding-left: 1.5em; }
-.ld-contents-level-3 { padding-left: 3em; }
-.ld-contents-level-4 { padding-left: 4.5em; }
-.ld-contents-level-5 { padding-left: 6em; }
 .ld-attachments { margin-top: 3em; }
 .ld-attachment-file { color: var(--ld-muted); }
 .ld-signatures { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 2rem; margin-top: 3em; }
@@ -427,6 +421,17 @@ p.ld-condition { margin: 0 0 0.5em; }
   a { color: inherit; }
 }
 """
+
+
+_CONTENTS_CSS = """\
+.ld-contents { margin: 2em 0; }
+.ld-contents-list { list-style: none; padding-left: 0; }
+.ld-contents-list li { margin: 0.2em 0; }
+.ld-contents-list a { color: inherit; text-decoration: none; }
+.ld-contents-level-2 { padding-left: 1.5em; }
+.ld-contents-level-3 { padding-left: 3em; }
+.ld-contents-level-4 { padding-left: 4.5em; }
+.ld-contents-level-5 { padding-left: 6em; }"""
 
 
 def stylesheet(style: Style) -> str:
@@ -449,6 +454,8 @@ def stylesheet(style: Style) -> str:
         elif heading.transform == "small-caps":
             rules.append("font-variant: small-caps")
         lines.append(f".ld-level-{level} > .ld-heading {{ {'; '.join(rules)}; }}")
+    if style.contents.enabled:
+        lines.append(_CONTENTS_CSS)
     if style.attachments.separator == "rule":
         lines.append(".ld-attachment { border-top: 1px solid var(--ld-rule); padding-top: 1em; }")
     lines.append(f"@page {{ size: {_css(style.page.size)}; margin: {_css(style.page.margin)}; }}")

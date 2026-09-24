@@ -62,10 +62,12 @@ from ..tree import (
     Strong,
     Table,
     TermRef,
+    Text,
     Value,
     iter_tree_inlines,
     map_tree_inlines,
     plain_text,
+    unlinked,
 )
 from .numbering import RENUMBERED, extend, fill, format_counter, heading_levels
 from .values import DURATION_UNITS, Formatter
@@ -170,6 +172,7 @@ class Resolver:
             attachments_label=self.labels.attachments or "",
             contents=self._contents(sections, attachments),
             contents_label=self.labels.contents or "",
+            colon=self.labels.colon or ": ",
             signatures=self._signatures(),
             signature_labels={
                 "date": self.labels.signature_date or "",
@@ -188,19 +191,21 @@ class Resolver:
         self, sections: tuple[Section, ...], attachments: tuple[AttachmentPart, ...],
     ) -> tuple[ContentsEntry, ...]:
         """The table of contents, when the style enables it: every section
-        down to its depth, then the attachment placeholders."""
+        whose number is at most *depth* levels deep, indented by that depth,
+        then the attachment placeholders under the attachments heading."""
         settings = self.style.contents
         if not settings.enabled:
             return ()
         entries = [
-            ContentsEntry(section.level, section.label, plain_text(section.title), section.anchor,
+            ContentsEntry(section.depth, section.label, unlinked(section.title), section.anchor,
                           section.condition_label)
             for section in sections
-            if section.level <= settings.depth
+            if section.depth <= settings.depth
         ]
-        if settings.attachments:
+        if settings.attachments and attachments:
+            entries.append(ContentsEntry(1, None, (Text(self.labels.attachments or ""),), None))
             entries += [
-                ContentsEntry(1, None, plain_text(attachment.title), attachment.anchor, attachment.condition_label)
+                ContentsEntry(2, None, unlinked(attachment.title), attachment.anchor, attachment.condition_label)
                 for attachment in attachments
             ]
         return tuple(entries)
@@ -283,9 +288,11 @@ class Resolver:
                 label = fill(fmt.label, n=format_counter(counters[level], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
             self._register(section.identifier, _Target(designation, anchor))
+            depth = sum(1 for counter in counters[1:level + 1] if counter)
             # The level is stored clamped too, so every writer nests the section
             # where its number puts it.
-            out.append(replace(section, level=level, label=label, designation=designation, anchor=anchor))
+            out.append(replace(section, level=level, label=label, designation=designation, anchor=anchor,
+                               depth=depth))
         return out
 
     def _presence(self, condition: str) -> Presence:
@@ -655,13 +662,12 @@ class Resolver:
                     details.append((self.labels.address or "", self._frontmatter(party.address)))
                 for custom in party.custom_fields:
                     details.append((custom.label, self._frontmatter(custom.value)))
-                representatives = tuple(
-                    (self._frontmatter(rep.name), self._frontmatter(rep.title)) for rep in party.representatives
-                )
+                for rep in party.representatives:
+                    name, title = self._frontmatter(rep.name), self._frontmatter(rep.title)
+                    details.append((self.labels.represented_by or "", name + ((Text(", "),) + title if title else ())))
                 parties.append(PartyInfo(
                     name=self._frontmatter(party.legal_name or party.label or party.name),
                     details=tuple(details),
-                    representatives=representatives,
                 ))
             label = self.result.side_lookup.get(side.name) or side.label or side.name
             sides.append(SideInfo(self._frontmatter(label), tuple(parties)))
