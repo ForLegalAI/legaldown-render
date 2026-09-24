@@ -151,10 +151,8 @@ class HtmlWriter:
         parts.append('<ol class="ld-contents-list">')
         for entry in tree.contents:
             number = f'<span class="ld-number">{_text(entry.label)}</span> ' if entry.label else ""
-            outer, self._in_link = self._in_link, True
-            title = self.inlines(entry.title)
-            self._in_link = outer
-            text = f'{number}<span class="ld-contents-text">{title}</span>'
+            # unlinked() has taken every link out of the title.
+            text = f'{number}<span class="ld-contents-text">{self.inlines(entry.title)}</span>'
             if entry.anchor:
                 text = f'<a href="#{_attr(entry.anchor)}">{text}</a>'
             if entry.condition_label:
@@ -192,7 +190,8 @@ class HtmlWriter:
 
     def attachments(self, tree: RenderTree) -> str:
         separator = self.style.attachments.separator
-        parts = [f'<section class="ld-attachments ld-separator-{separator}">',
+        anchor = f' id="{_attr(tree.attachments_anchor)}"' if tree.attachments_anchor else ""
+        parts = [f'<section class="ld-attachments ld-separator-{separator}"{anchor}>',
                  f'<h2 class="ld-attachments-heading">{_text(tree.attachments_label)}</h2>']
         parts += [self.attachment(attachment) for attachment in tree.attachments]
         parts.append("</section>")

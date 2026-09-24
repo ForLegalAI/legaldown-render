@@ -75,6 +75,8 @@ from .values import DURATION_UNITS, Formatter
 #: Definition anchors are prefixed with a character no identifier can hold,
 #: so they can never collide with a section or item anchor (§5.6).
 DEFINITION_ANCHOR_PREFIX = "def:"
+#: The attachments heading's anchor, with a colon for the same reason.
+ATTACHMENTS_ANCHOR = "ld:attachments"
 
 _VALUE_TYPES = ("text", "date", "money", "duration")
 _DECISION_TYPES = ("boolean", "choice")
@@ -172,7 +174,8 @@ class Resolver:
             attachments_label=self.labels.attachments or "",
             contents=self._contents(sections, attachments),
             contents_label=self.labels.contents or "",
-            colon=self.labels.colon or ": ",
+            colon=self.labels.colon if self.labels.colon is not None else ": ",
+            attachments_anchor=ATTACHMENTS_ANCHOR if attachments else "",
             signatures=self._signatures(),
             signature_labels={
                 "date": self.labels.signature_date or "",
@@ -203,9 +206,13 @@ class Resolver:
             if section.depth <= settings.depth
         ]
         if settings.attachments and attachments:
-            entries.append(ContentsEntry(1, None, (Text(self.labels.attachments or ""),), None))
+            # Under the attachments heading, unless a style blanks its label.
+            level = 1
+            if self.labels.attachments:
+                entries.append(ContentsEntry(1, None, (Text(self.labels.attachments),), ATTACHMENTS_ANCHOR))
+                level = 2
             entries += [
-                ContentsEntry(2, None, unlinked(attachment.title), attachment.anchor, attachment.condition_label)
+                ContentsEntry(level, None, unlinked(attachment.title), attachment.anchor, attachment.condition_label)
                 for attachment in attachments
             ]
         return tuple(entries)
@@ -288,7 +295,8 @@ class Resolver:
                 label = fill(fmt.label, n=format_counter(counters[level], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
             self._register(section.identifier, _Target(designation, anchor))
-            depth = sum(1 for counter in counters[1:level + 1] if counter)
+            # How deep the validator's own number goes ("2.1" is 2).
+            depth = indexed[index].number.count(".") + 1 if indexed[index].number else level
             # The level is stored clamped too, so every writer nests the section
             # where its number puts it.
             out.append(replace(section, level=level, label=label, designation=designation, anchor=anchor,
@@ -664,7 +672,8 @@ class Resolver:
                     details.append((custom.label, self._frontmatter(custom.value)))
                 for rep in party.representatives:
                     name, title = self._frontmatter(rep.name), self._frontmatter(rep.title)
-                    details.append((self.labels.represented_by or "", name + ((Text(", "),) + title if title else ())))
+                    value = name + (Text(", "),) + title if name and title else name or title
+                    details.append((self.labels.represented_by or "", value))
                 parties.append(PartyInfo(
                     name=self._frontmatter(party.legal_name or party.label or party.name),
                     details=tuple(details),

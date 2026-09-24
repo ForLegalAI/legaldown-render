@@ -326,6 +326,36 @@ def test_representatives_are_labelled_and_french_labels_space_their_colons() -> 
     assert "Date d'effet\xa0: " in french
 
 
+def test_a_representative_without_a_name_or_title_has_no_stray_comma() -> None:
+    front = FRONT.replace("        legal_name: Acme Corporation\n",
+                          "        legal_name: Acme Corporation\n        representatives:\n          - title: Director\n", 1)
+    output = render(front + "# A\n", format="text").output
+    assert "Represented by: Director\n" in output
+
+
+def test_an_empty_colon_label_is_kept() -> None:
+    source = (DOCUMENTS / "features.lgd").read_text(encoding="utf-8")
+    assert "Represented byJohn Smith" in render(source, format="text", overrides={"labels.colon": ""}).output
+
+
+def test_contents_without_an_attachments_label_lists_attachments_at_the_top() -> None:
+    output = render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), format="text",
+                    overrides={"contents.enabled": True, "labels.attachments": ""}).output
+    contents = output[output.index("Contents\n"):].split("\n\n", 1)[0]
+    assert contents.endswith("4. Broken References\nSchedule A: Service Description\nExhibit 1: Price List")
+
+
+def test_contents_link_the_attachments_heading_and_never_repeat_a_definition() -> None:
+    html = render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), standalone=False,
+                  overrides={"contents.enabled": True}).output
+    assert '<a href="#ld:attachments"><span class="ld-contents-text">Attachments</span></a>' in html
+    assert '<section class="ld-attachments ld-separator-page-break" id="ld:attachments">' in html
+    html = render(FRONT + '# The "Term" {{def: term}}\n', standalone=False, overrides={"contents.enabled": True}).output
+    nav = html[html.index("<nav"):html.index("</nav>")]
+    assert "<dfn" not in nav and '<span class="ld-term ld-style-bold">Term</span>' in nav
+    assert html.count("<dfn") == 1
+
+
 def test_final_check_reports_blanks_and_template_constructs() -> None:
     body = "# A\n\nPay {{placeholder: fee, type=text}}.\n\n> [!DRAFTING]\n> Check the fee.\n"
     assert not {"placeholder-unfilled", "template-construct-present"} & {d.rule for d in render(FRONT + body).diagnostics}

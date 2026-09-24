@@ -331,6 +331,8 @@ class RenderTree:
     #: The table of contents; empty unless the style enables it.
     contents: tuple[ContentsEntry, ...] = ()
     contents_label: str = ""
+    #: The attachments heading's anchor, when there are attachments.
+    attachments_anchor: str = ""
     #: Between a generated label and its value ("Name: ..."), per language.
     colon: str = ": "
 
@@ -468,8 +470,9 @@ def unlinked(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
                 inline = replace(inline, target="")
             case TermRef():
                 inline = replace(inline, target=None)
-            case DefinedTerm():
-                inline = replace(inline, anchor=None)
+            case DefinedTerm(children=children, style=style):
+                # Shown in its style, but not as a second definition.
+                inline = TermRef(text=plain_text(children), target=None, style=style)
             case Value():
                 inline = replace(inline, href=None)
         children = getattr(inline, "children", None)
