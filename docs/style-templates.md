@@ -152,8 +152,8 @@ are set off by a space ("Termination (a)", §13.3).
 
 ### Built-in labels
 
-Labels follow the document's `language`. English (`en`) and Czech (`cs`) are built in, and other
-languages fall back to English. A style sets any label explicitly to override it, which is also
+Labels follow the document's `language`. English (`en`), Czech (`cs`), German (`de`), French
+(`fr`), Polish (`pl`), and Slovak (`sk`) are built in, and other languages fall back to English. A style sets any label explicitly to override it, which is also
 how a firm adds a language.
 
 ## Open questions

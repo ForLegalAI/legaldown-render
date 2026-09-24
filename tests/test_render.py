@@ -160,6 +160,29 @@ def test_template_labels_follow_the_document_language() -> None:
     assert "> [Poznámka pro zpracovatele]" in output
 
 
+@pytest.mark.parametrize(("language", "condition", "note"), [
+    ("de", "[Nur wenn: non-solicit]", "[Bearbeitungshinweis]"),
+    ("fr", "[Uniquement si\u00a0: non-solicit]", "[Note de rédaction]"),
+    ("pl", "[Tylko jeżeli: non-solicit]", "[Uwaga redakcyjna]"),
+    ("sk", "[Iba ak: non-solicit]", "[Poznámka pre spracovateľa]"),
+])
+def test_built_in_labels_for_more_languages(language: str, condition: str, note: str) -> None:
+    source = (DOCUMENTS / "template.lgd").read_text(encoding="utf-8").replace("language: en", f"language: {language}")
+    output = render(source, format="text").output
+    assert condition in output
+    assert note in output
+
+
+def test_every_built_in_language_sets_every_label() -> None:
+    from dataclasses import fields
+
+    from legaldown_render.style.labels import BUILTIN_LABELS
+    for language, labels in BUILTIN_LABELS.items():
+        for item in fields(labels):
+            assert getattr(labels, item.name), f"{language}: {item.name} is not set"
+        assert "{condition}" in labels.condition and "{file}" in labels.attachment_file, language
+
+
 # -- HTML safety and structure ---------------------------------------------------
 
 

@@ -32,7 +32,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Paragraph numbering and section-qualified items (§13.2) | ✅ Style settings; the `continental` style uses both |
 | Style templates in a separate file (§13.7) | ✅ YAML, layered and validated; see [docs/style-templates.md](docs/style-templates.md) |
 | Signature blocks (§2.2) | ✅ One per party, with `legal_name` and each representative |
-| Labels following the document language (§13.7) | ✅ Built in for `en` and `cs`; any label can be set by a style |
+| Labels following the document language (§13.7) | ✅ Built in for `en`, `cs`, `de`, `fr`, `pl`, and `sk`; any label can be set by a style |
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ No tag is ever emitted. Text between an HTML block's tags renders as text until the validator's model recognises HTML blocks (see below) |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
