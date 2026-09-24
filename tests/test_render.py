@@ -352,8 +352,37 @@ def test_contents_link_the_attachments_heading_and_never_repeat_a_definition() -
     assert '<section class="ld-attachments ld-separator-page-break" id="ld:attachments">' in html
     html = render(FRONT + '# The "Term" {{def: term}}\n', standalone=False, overrides={"contents.enabled": True}).output
     nav = html[html.index("<nav"):html.index("</nav>")]
-    assert "<dfn" not in nav and '<span class="ld-term ld-style-bold">Term</span>' in nav
+    assert "<dfn" not in nav and '<span class="ld-defined ld-style-bold">Term</span>' in nav
     assert html.count("<dfn") == 1
+    html = render(FRONT + '# The "*Big* Term" {{def: term}}\n', standalone=False,
+                  overrides={"contents.enabled": True}).output
+    nav = html[html.index("<nav"):html.index("</nav>")]
+    assert '<span class="ld-defined ld-style-bold"><em>Big</em> Term</span>' in nav
+
+
+def test_an_identifier_with_a_colon_never_becomes_an_anchor() -> None:
+    source = (DOCUMENTS / "features.lgd").read_text(encoding="utf-8")
+    html = render(source + "\nText. {#ld:attachments}\n\n- item {#def:services}\n", standalone=False).output
+    assert html.count('id="ld:attachments"') == 1
+    assert html.count('id="def:services"') == 1
+
+
+def test_an_empty_attachments_label_leaves_out_the_heading() -> None:
+    html = render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), standalone=False,
+                  overrides={"labels.attachments": ""}).output
+    assert "ld-attachments-heading" not in html
+
+
+def test_a_representative_with_nothing_to_show_has_no_row() -> None:
+    front = FRONT.replace("        legal_name: Acme Corporation\n",
+                          "        legal_name: Acme Corporation\n        representatives:\n          - {}\n", 1)
+    assert "Represented by" not in render(front + "# A\n", format="text").output
+
+
+def test_a_colon_ending_in_a_no_break_space_keeps_it_after_date_and_place() -> None:
+    output = render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), format="text",
+                    overrides={"labels.colon": " \u2013\xa0"}).output
+    assert "\nDate \u2013\xa0\n" in output and "\nPlace \u2013\xa0\n" in output
 
 
 def test_final_check_reports_blanks_and_template_constructs() -> None:

@@ -192,10 +192,11 @@ class HtmlWriter:
         separator = self.style.attachments.separator
         anchor = f' id="{_attr(tree.attachments_anchor)}"' if tree.attachments_anchor else ""
         parts = [f'<section class="ld-attachments ld-separator-{separator}"{anchor}>',
-                 f'<h2 class="ld-attachments-heading">{_text(tree.attachments_label)}</h2>']
+                 f'<h2 class="ld-attachments-heading">{_text(tree.attachments_label)}</h2>' if tree.attachments_label
+                 else ""]
         parts += [self.attachment(attachment) for attachment in tree.attachments]
         parts.append("</section>")
-        return "\n".join(parts)
+        return "\n".join(part for part in parts if part)
 
     def attachment(self, attachment: AttachmentPart) -> str:
         anchor = f' id="{_attr(attachment.anchor)}"' if attachment.anchor else ""
@@ -217,7 +218,7 @@ class HtmlWriter:
                 parts.append('<div class="ld-signatory"><div class="ld-signature-line"></div>')
                 parts.append(f'<p>{_text(labels["name"] + colon)}{self.inlines(name)}</p>')
                 parts.append(f'<p>{_text(labels["title"] + colon)}{self.inlines(title)}</p></div>')
-            date, place = (_text((labels[key] + colon).rstrip()) for key in ("date", "place"))
+            date, place = (_text((labels[key] + colon).rstrip(" ")) for key in ("date", "place"))
             parts.append(f"<p>{date}</p>\n<p>{place}</p>")
             parts.append("</div>")
         parts.append("</section>")
@@ -339,9 +340,10 @@ class HtmlWriter:
                 if target is None or self._in_link:
                     return f'<span class="{classes}">{_text(text)}</span>'
                 return f'<a class="{classes}" href="#{_attr(target)}">{_text(text)}</a>'
-            case DefinedTerm(children=children, anchor=anchor, style=style):
+            case DefinedTerm(children=children, anchor=anchor, style=style, defining=defining):
+                tag = "dfn" if defining else "span"
                 anchor_attr = f' id="{_attr(anchor)}"' if anchor else ""
-                return f'<dfn class="ld-defined ld-style-{style}"{anchor_attr}>{self.inlines(children)}</dfn>'
+                return f'<{tag} class="ld-defined ld-style-{style}"{anchor_attr}>{self.inlines(children)}</{tag}>'
             case Value(kind=kind, text=text, href=href):
                 if href and is_safe_href(href) and not self._in_link:
                     return f'<a class="ld-value ld-{kind}" href="{_attr(href)}">{_text(text)}</a>'

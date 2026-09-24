@@ -174,7 +174,7 @@ class Resolver:
             attachments_label=self.labels.attachments or "",
             contents=self._contents(sections, attachments),
             contents_label=self.labels.contents or "",
-            colon=self.labels.colon if self.labels.colon is not None else ": ",
+            colon=self.labels.colon or "",
             attachments_anchor=ATTACHMENTS_ANCHOR if attachments else "",
             signatures=self._signatures(),
             signature_labels={
@@ -235,11 +235,13 @@ class Resolver:
 
     # -- anchors --------------------------------------------------------------
 
-    def _anchor(self, name: str) -> str | None:
+    def _anchor(self, name: str, *, generated: bool = False) -> str | None:
         """An output anchor for *name*, or None when an earlier unit already
         took it — alternatives in a template view share an identifier
-        (§15.4), and the first keeps the anchor."""
-        if not name or name in self.used_anchors:
+        (§15.4), and the first keeps the anchor. A name from the document
+        never holds a colon (an Error the validator reports): that form is
+        kept for the renderer's own *generated* anchors, so none can clash."""
+        if not name or name in self.used_anchors or (":" in name and not generated):
             return None
         self.used_anchors.add(name)
         return name
@@ -296,7 +298,7 @@ class Resolver:
             anchor = self._anchor(section.identifier)
             self._register(section.identifier, _Target(designation, anchor))
             # How deep the validator's own number goes ("2.1" is 2).
-            depth = indexed[index].number.count(".") + 1 if indexed[index].number else level
+            depth = indexed[index].number.count(".") + 1
             # The level is stored clamped too, so every writer nests the section
             # where its number puts it.
             out.append(replace(section, level=level, label=label, designation=designation, anchor=anchor,
@@ -470,7 +472,7 @@ class Resolver:
             case DefinitionSource(children=children):
                 identifier = self._definition_id(inline)
                 return DefinedTerm(self._resolve_inlines(children),
-                                   self._anchor(DEFINITION_ANCHOR_PREFIX + identifier),
+                                   self._anchor(DEFINITION_ANCHOR_PREFIX + identifier, generated=True),
                                    self.style.definitions.style)
             case Emphasis(children=children):
                 return Emphasis(self._resolve_inlines(children))
@@ -673,7 +675,8 @@ class Resolver:
                 for rep in party.representatives:
                     name, title = self._frontmatter(rep.name), self._frontmatter(rep.title)
                     value = name + (Text(", "),) + title if name and title else name or title
-                    details.append((self.labels.represented_by or "", value))
+                    if value:
+                        details.append((self.labels.represented_by or "", value))
                 parties.append(PartyInfo(
                     name=self._frontmatter(party.legal_name or party.label or party.name),
                     details=tuple(details),

@@ -182,7 +182,7 @@ class TextWriter:
                 f"{labels['name']}{colon}{inline_text(name)}".rstrip(),
                 f"{labels['title']}{colon}{inline_text(title)}".rstrip(),
             ]
-        lines += [f"{labels['date']}{colon}".rstrip(), f"{labels['place']}{colon}".rstrip()]
+        lines += [f"{labels['date']}{colon}".rstrip(" "), f"{labels['place']}{colon}".rstrip(" ")]
         return "\n".join(lines)
 
 

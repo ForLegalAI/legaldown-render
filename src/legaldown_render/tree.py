@@ -119,6 +119,9 @@ class DefinedTerm:
     children: tuple[Inline, ...]
     anchor: str | None
     style: str
+    #: False for a copy shown elsewhere, such as in the table of contents:
+    #: it looks the same but does not define the term.
+    defining: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,9 +473,8 @@ def unlinked(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
                 inline = replace(inline, target="")
             case TermRef():
                 inline = replace(inline, target=None)
-            case DefinedTerm(children=children, style=style):
-                # Shown in its style, but not as a second definition.
-                inline = TermRef(text=plain_text(children), target=None, style=style)
+            case DefinedTerm():
+                inline = replace(inline, anchor=None, defining=False)
             case Value():
                 inline = replace(inline, href=None)
         children = getattr(inline, "children", None)
