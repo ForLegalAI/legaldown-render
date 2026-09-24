@@ -588,3 +588,58 @@ def test_template_decision_is_the_validators() -> None:
     result = render(source, format="text")
     assert result.tree.is_template is True
     assert "[Only if: flag] Preamble para" in result.output
+
+
+# -- regressions from the seventh code review ------------------------------------------
+
+
+def test_quote_content_is_read_as_a_body() -> None:
+    body = "# A\n\n> ---\n> title: x\n> ---\n> Visible?\n\n> ## Signature Block {#signature-block}\n> after text\n"
+    output = text(body)
+    for line in ("> title: x", "> Visible?", "> Signature Block", "> after text"):
+        assert line in output
+
+
+def test_cutting_a_marker_keeps_the_space_after_a_reference() -> None:
+    assert "See 1 and more." in text("# A {#a}\n\nSee {{ref: a}} and more. {#p2}\n")
+
+
+def test_a_marker_copy_inside_a_comment_is_not_the_marker() -> None:
+    output = text("# A\n\nText here. {#p1} <!-- {#p1} -->\n\nSee {{ref: p1}}.\n")
+    assert "Text here.\n" in output
+    assert "{#p1}" not in output
+
+
+def test_an_item_opening_with_a_drafting_note_or_code() -> None:
+    output = text("# A\n\n- > [!DRAFTING]\n  > note here\n- ```\n  code\n  ```\n")
+    assert "(a) > [Drafting note]\n    > note here" in output
+    assert "(b)     code" in output
+    assert "```" not in output
+
+
+def test_html_blocks_are_dropped_whole() -> None:
+    result = render(FRONT + "# A\n\n<script>\nalert(1)\n</script>\n\n<table>\n<tr><td>Secret</td></tr>\n</table>\n",
+                    standalone=False)
+    assert "alert(1)" not in result.output
+    assert "Secret" not in result.output
+    assert "raw-html" in {d.rule for d in result.diagnostics}
+
+
+def test_a_backslash_hard_break_is_a_line_break() -> None:
+    output = render(FRONT + "# A\n\nLine one\\\nline two\n", standalone=False).output
+    assert "Line one<br>\nline two" in output
+
+
+def test_table_rows_are_as_wide_as_the_header() -> None:
+    output = text("# A\n\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\n| x |\n")
+    assert "| 1 | 2 |\n| x |  |" in output
+
+
+def test_template_decision_matches_the_validator_on_the_test_documents() -> None:
+    from legaldown import parse_document
+
+    from legaldown_render.validator_bridge import placed_markers, validator_template
+
+    for name in ("features", "template"):
+        document = parse_document((DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8"))
+        assert placed_markers(document).template == validator_template(document)

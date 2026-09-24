@@ -26,8 +26,10 @@ import secrets
 from dataclasses import dataclass, replace
 from urllib.parse import unquote
 
+import yaml
 from legaldown import Block as ModelBlock
 from legaldown import Directive, Document, ValidationResult, find_definition_anchors, parse_document, render_block
+from legaldown.markers import HTML_COMMENT_RE, split_heading
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 
@@ -65,6 +67,11 @@ _OPEN, _CLOSE = "\ue000", "\ue001"
 _HIDDEN_LEAD = "\u2e31"
 # A fenced code block's opening line (validator's model keeps the fences).
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+# The heading at which the validator's parser stops reading a body.
+_SIGNATURE_HEADING_RE = re.compile(r"^ {0,3}#{1,6}[ \t]+Signature Block[ \t]+\{#signature-block\}[ \t]*$", re.MULTILINE)
+# A CommonMark backslash hard break, after the validator joined the line
+# that ended in it to the next with a space.
+_JOINED_HARD_BREAK_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\ (?=\S)")
 
 
 def normalize_source(source: str) -> str:
@@ -143,7 +150,8 @@ class _Builder:
         self.document = document
         self.result = result
         self.language = document.metadata.language or "en"
-        # Inline parsing only: block structure is the validator's.
+        # Inline parsing only: block structure is the validator's. Its block
+        # parser only tells whether one paragraph's text is an HTML block.
         self.md = MarkdownIt("commonmark", {"html": True})
         self.env: dict = {}
         self.payloads: list[_Payload] = []
@@ -172,7 +180,7 @@ class _Builder:
         sentinel, so that Markdown cannot reinterpret directive syntax. A defined term
         becomes one sentinel and its {{def:}} another that renders nothing
         (see _DefinitionSpan). One pass over the directives, in order."""
-        lexed = lex(body)
+        lexed = self.markers.lex(body)
         spans: dict[int, _DefinitionSpan] = {}
         for anchor in find_definition_anchors(body, language=self.language, lexed=lexed):
             if anchor.term is None or anchor.pair is None:
@@ -243,8 +251,11 @@ class _Builder:
 
     def text(self, source: str) -> tuple[Inline, ...]:
         """Inline nodes for *source*, one block's text as the validator
-        holds it: directives protected, then parsed as inline Markdown."""
-        return self.inlines(self._protect(source))
+        holds it: directives protected, then parsed as inline Markdown. A
+        backslash hard break the validator joined to the next line with a
+        space is a hard break again."""
+        protected = self._protect(source)
+        return _trim(self.inlines(_JOINED_HARD_BREAK_RE.sub(lambda m: m.group(1) + "\\\n", protected)))
 
     def inlines(self, content: str) -> tuple[Inline, ...]:
         """Inline nodes for the inline Markdown *content* (sentinels included)."""
@@ -332,7 +343,9 @@ class _Builder:
             found = self.markers.placed.get((section, index, fragment_index))
             if found is None:
                 continue
-            first_line = fragment.split("\n", 1)[0]
+            # The marker ends the first line; comments may follow it (§8.6),
+            # so a copy of its text inside one is not it.
+            first_line = HTML_COMMENT_RE.sub(lambda m: " " * len(m.group()), fragment.split("\n", 1)[0])
             offset = first_line.rfind(found.source)
             if offset < 0:
                 raise InternalError(f"the validator placed '{found.source}' where the renderer cannot find it")
@@ -344,7 +357,10 @@ class _Builder:
         match block.kind:
             case "paragraph" | "definition" | "ref" | "term":
                 block, identifier, condition = _strip_markers(block, placed)
-                inlines = self.text(_paragraph_source(block))
+                source = _paragraph_source(block)
+                if self._is_html_block(source):
+                    return None  # raw HTML is never rendered (§8.7), text between tags included
+                inlines = self.text(source)
                 if not inlines and not identifier:
                     return None  # only a comment
                 return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level)
@@ -355,9 +371,13 @@ class _Builder:
             case "code":
                 return _code_block(block.text)
             case "table":
+                width = len(block.headers)
+                # Every row as wide as the header: short rows padded, extra
+                # cells dropped, as a table renders in CommonMark (GFM).
+                rows = [(list(row) + [""] * width)[:width] for row in block.rows]
                 return Table(
                     header=tuple(self.text(cell) for cell in block.headers),
-                    rows=tuple(tuple(self.text(cell) for cell in row) for row in block.rows),
+                    rows=tuple(tuple(self.text(cell) for cell in row) for row in rows),
                     align=(),
                 )
             case "rule":
@@ -374,11 +394,12 @@ class _Builder:
                 offset, identifier, condition = placed[index]
                 item = _cut_marker(item, offset)
             first, _, rest = item.partition("\n")
-            blocks: tuple[Block, ...] = (Paragraph(self.text(first)),)
-            if rest:
-                # An item keeps a fenced code block's lines (the validator's
-                # model); the validator's parser reads them.
-                blocks += self.blocks(parse_document(rest).preamble, None, markers=False)
+            if first.lstrip().startswith(">") or _FENCE_RE.match(first):
+                # The item opens with a quote or code, whose lines the
+                # validator keeps as written (a drafting note included).
+                blocks = self.fragment(item)
+            else:
+                blocks = (Paragraph(self.text(first)),) + (self.fragment(rest) if rest else ())
             items.append(ListItem(blocks=blocks, anchor_id=identifier, condition=condition))
         return List(ordered=block.kind == "ordered_list", items=tuple(items))
 
@@ -390,13 +411,44 @@ class _Builder:
         drafting = bool(quotes) and quotes[0].start == 0 and quotes[0].is_drafting_note
         if drafting:
             text = text.partition("\n")[2]
-        inner = parse_document(text)
+        blocks = self.fragment(text)
+        return DraftingNote(blocks) if drafting else Quote(blocks)
+
+    def fragment(self, text: str) -> tuple[Block, ...]:
+        """Blocks for *text* inside a quote or a list item, read by the
+        validator's parser as a body — never as a document with frontmatter,
+        and never cut short at a signature-block heading. No marker is
+        placed there (§5.7), and a heading is not a section (§4.1)."""
+        blocks: tuple[Block, ...] = ()
+        cursor = 0
+        for match in _SIGNATURE_HEADING_RE.finditer(text):
+            blocks += self._fragment_part(text[cursor:match.start()])
+            title, _marker = split_heading(match.group().strip().lstrip("#"))
+            blocks += (Paragraph((Strong(self.text(title)),)),)
+            cursor = match.end()
+        return blocks + self._fragment_part(text[cursor:])
+
+    def _fragment_part(self, text: str) -> tuple[Block, ...]:
+        try:
+            # A leading newline: text starting with "---" is not frontmatter.
+            inner = parse_document("\n" + text)
+        except (ValueError, yaml.YAMLError):
+            return (Paragraph(self.text(" ".join(text.split()))),) if text.strip() else ()
         blocks = self.blocks(inner.preamble, None, markers=False)
         for section in inner.sections:
-            # A heading inside a quote is not a section (§4.1).
             blocks += (Paragraph((Strong(self.text(section.title)),)),)
             blocks += self.blocks(section.blocks, None, markers=False)
-        return DraftingNote(blocks) if drafting else Quote(blocks)
+        return blocks
+
+    def _is_html_block(self, source: str) -> bool:
+        """True when a paragraph's text is an HTML block (CommonMark): it is
+        dropped whole and counted, unless it is only a comment."""
+        parsed = self.md.parse(source)
+        if not parsed or parsed[0].type != "html_block":
+            return False
+        if not parsed[0].content.lstrip().startswith("<!--"):
+            self.raw_html += 1
+        return True
 
     # -- document -------------------------------------------------------------
 
@@ -442,7 +494,10 @@ def _cut_marker(fragment: str, offset: int) -> str:
     comment after the marker stays (it renders nothing)."""
     first, newline, rest = fragment.partition("\n")
     end = first.index("}", offset) + 1
-    return (first[:offset].rstrip() + " " + first[end:].lstrip()).strip() + newline + rest
+    # Only the spacing around the marker goes: text before it keeps its own
+    # leading space (a lifted {{ref:}}'s suffix begins with one).
+    before, after = first[:offset].rstrip(), first[end:].strip()
+    return (f"{before} {after}" if after else before) + newline + rest
 
 
 def _paragraph_source(block: ModelBlock) -> str:
@@ -463,6 +518,17 @@ def _code_block(text: str) -> CodeBlock:
     if body and body[-1].strip().startswith(fence[0] * len(fence)) and not body[-1].strip().strip(fence[0]):
         body = body[:-1]
     return CodeBlock("\n".join(body) + ("\n" if body else ""), opening.group(2).strip())
+
+
+def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
+    """*inlines* without spacing at either end (left where a comment or a
+    marker was removed)."""
+    out = list(inlines)
+    if out and isinstance(out[-1], Text):
+        out[-1] = Text(out[-1].text.rstrip())
+    if out and isinstance(out[0], Text):
+        out[0] = Text(out[0].text.lstrip())
+    return tuple(inline for inline in out if not (isinstance(inline, Text) and not inline.text))
 
 
 def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:

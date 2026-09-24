@@ -88,3 +88,18 @@ def test_raw_html_fixture_emits_no_html() -> None:
         body = re.sub(r"<(/?)(article|header|h\d|p|span|section|div|dl|dt|dd|a|dfn|mark|em|strong|code|pre|ol|ul|li|table|thead|tbody|tr|th|td|blockquote|aside|hr|br)\b[^>]*>", "", result.output)
         assert "<" not in body, case.name
         assert "raw-html" in {d.rule for d in result.diagnostics}
+
+
+@pytest.mark.parametrize("path", EXAMPLES + FIXTURES, ids=_name)
+def test_template_decision_is_the_validators(path: Path) -> None:
+    """The renderer's copy of the validator's template formula must give the
+    validator's own answer (validator_bridge._is_template, roadmap U3)."""
+    from legaldown import parse_document
+
+    from legaldown_render.validator_bridge import placed_markers, validator_template
+
+    try:
+        document = parse_document(path.read_text(encoding="utf-8"))
+    except Exception:
+        pytest.skip("not a readable document")
+    assert placed_markers(document).template == validator_template(document)

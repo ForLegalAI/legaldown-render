@@ -53,12 +53,18 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   ([legaldown-validator#14](https://github.com/ForLegalAI/legaldown-validator/issues/14),
   roadmap U1–U2):
   - **Nested lists** render as one level of items, so an item is referenced as "2.1(c)", never
-    "2.1(b)(i)". The resolver and writers already handle nesting.
-  - **Table column alignment** is not kept.
-  - **Line breaks** within a paragraph are joined, hard breaks included.
-  - **Link reference definitions** (`[label]: url`) are not resolved.
-  - Constructs the validator reads unusually render as it reads them. For example, a heading
-    inside a multi-line HTML comment is a section, with the comment's delimiters shown as text.
+    "2.1(b)(i)" ([#14](https://github.com/ForLegalAI/legaldown-validator/issues/14), [#16](https://github.com/ForLegalAI/legaldown-validator/issues/16)). The resolver and writers already handle nesting.
+  - **`*` and `+` bullets and `1)` ordered lists** render as one paragraph ([#21](https://github.com/ForLegalAI/legaldown-validator/issues/21)).
+  - **Tables:** column alignment is not kept, and an escaped pipe (`\|`) or a pipe inside a
+    code span splits a cell ([#22](https://github.com/ForLegalAI/legaldown-validator/issues/22)). Rows are padded or trimmed to the header's width.
+  - **Line breaks** within a paragraph are joined. A backslash hard break is restored; a
+    two-space hard break is not. Link reference definitions (`[label]: url`) are not resolved
+    ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)).
+  - **A heading inside a multi-line HTML comment** is a section, with the comment's delimiters
+    shown as text ([#23](https://github.com/ForLegalAI/legaldown-validator/issues/23)).
+  - **Everything after a `# Signature Block {#signature-block}` heading** is dropped
+    ([#24](https://github.com/ForLegalAI/legaldown-validator/issues/24)).
+  - **Indented code blocks** are read as paragraphs ([#9](https://github.com/ForLegalAI/legaldown-validator/issues/9)).
 
 ## Beyond this level (Full, §17.4)
 
