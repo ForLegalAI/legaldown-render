@@ -6,7 +6,7 @@ Preferences are split in two, on purpose:
   locale, labels, typography. It is a reusable YAML file (``--style``), with
   single values overridable per job (``--set key=value``, ``overrides``);
 * **render options** say what this one job does — the output format, strict
-  mode, a full HTML page or a fragment. They never change how a document
+  mode, the final check, a full HTML page or a fragment. They never change how a document
   looks, so they are not part of the style.
 """
 from __future__ import annotations
@@ -42,6 +42,11 @@ class RenderOptions:
     #: Refuse to render (raise RenderRefused) when the document has errors,
     #: instead of rendering them as visible failure markers.
     strict: bool = False
+    #: The final check (§15.9): the document is meant for signature, so a
+    #: remaining blank (``placeholder-unfilled``) or template construct
+    #: (``template-construct-present``) is an Error. With ``strict``, such a
+    #: document is refused.
+    final: bool = False
     #: HTML only: a complete page (True) or just the ``<article>`` (False).
     standalone: bool = True
 
@@ -90,7 +95,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
 
     source = normalize_source(source)
     document = _parse(source)
-    result = validate_document(document)
+    result = validate_document(document, final=options.final)
     diagnostics = list(result.diagnostics)
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)

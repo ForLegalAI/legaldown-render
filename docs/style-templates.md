@@ -11,7 +11,7 @@ The renderer keeps two kinds of settings apart on purpose
 | | Style template | Render options |
 |---|---|---|
 | Answers | How documents look | What this one job does |
-| Examples | Numbering scheme, list enumeration, locale, labels, fonts, headings | Output format, strict mode, full page or HTML fragment |
+| Examples | Numbering scheme, list enumeration, locale, labels, fonts, headings | Output format, strict mode, final check, full page or HTML fragment |
 | Where | A YAML file, reused across documents and shared across a team | CLI flags or `RenderOptions` |
 | Override per job | `--set key=value`, `--locale`, `overrides={...}` | n/a |
 

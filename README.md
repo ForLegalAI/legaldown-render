@@ -59,6 +59,7 @@ legaldown-render contract.lgd -o contract.txt                   # plain text (fo
 legaldown-render contract.lgd --style continental --locale cs-CZ -o smlouva.html
 legaldown-render contract.lgd --set numbering.scheme=legal-outline --set enumeration.enabled=false
 legaldown-render contract.lgd --strict                          # refuse if the document has errors
+legaldown-render contract.lgd --final --strict                  # refuse if blanks or template constructs remain
 legaldown-render --print-style --style continental              # every setting, as YAML
 ```
 
@@ -97,8 +98,8 @@ definitions: { style: small-caps }
 typography: { font_family: "Georgia, serif", justify: true }
 ```
 
-**Render options** say what one job does: the output format, strict mode, a full page or an HTML
-fragment. Values layer in this order: built-in defaults, then the `extends` chain, then your
+**Render options** say what one job does: the output format, strict mode, the final check, a full
+page or an HTML fragment. Values layer in this order: built-in defaults, then the `extends` chain, then your
 style, then per-job `--set` overrides. Every value is validated before rendering starts. See
 [Styles and preferences](docs/style-templates.md).
 

@@ -35,6 +35,13 @@ def test_strict_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     assert "refused" in capsys.readouterr().err
 
 
+def test_final_with_strict_exits_1(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    template = str(DOCUMENTS / "template.lgd")
+    assert main([template, "--final", "--quiet", "-o", str(tmp_path / "out.html")]) == 0
+    assert main([template, "--final", "--strict"]) == 1
+    assert "template-construct-present" in capsys.readouterr().err
+
+
 def test_print_and_list_styles(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--print-style", "--style", "continental", "--set", "locale=de"]) == 0
     printed = capsys.readouterr().out

@@ -226,6 +226,17 @@ def test_strict_refuses_documents_with_errors() -> None:
     render(FRONT + "# A\n\nFine.\n", strict=True)
 
 
+def test_final_check_reports_blanks_and_template_constructs() -> None:
+    body = "# A\n\nPay {{placeholder: fee, type=text}}.\n\n> [!DRAFTING]\n> Check the fee.\n"
+    assert not {"placeholder-unfilled", "template-construct-present"} & {d.rule for d in render(FRONT + body).diagnostics}
+    result = render(FRONT + body, final=True)
+    assert {"placeholder-unfilled", "template-construct-present"} <= {d.rule for d in result.diagnostics}
+    assert not result.ok
+    with pytest.raises(RenderRefused):
+        render(FRONT + body, final=True, strict=True)
+    render(FRONT + "# A\n\nFine.\n", final=True, strict=True)
+
+
 def test_locale_option_and_language_hint() -> None:
     body = "# A\n\n{{date: 2026-06-01}}\n"
     assert "1. června 2026" in text(body, locale="cs-CZ")

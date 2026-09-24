@@ -38,6 +38,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the tags are dropped with the Warning, and the cell text renders as paragraph text |
 | Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
+| Final check (§15.9, SHOULD) | ✅ `--final` / `final=True`: the validator's `placeholder-unfilled` and `template-construct-present` Errors; with `--strict`, the document is refused |
 
 ## Known limitations
 
