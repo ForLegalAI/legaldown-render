@@ -406,7 +406,7 @@ def test_locale_option_and_language_hint() -> None:
 
 def test_unreadable_document() -> None:
     with pytest.raises(DocumentError):
-        render("---\n- a list\n---\n\n# A\n")
+        render("---\ntitle: [unclosed\n---\n\n# A\n")
 
 
 def test_options_object_and_keywords_are_exclusive() -> None:
@@ -726,17 +726,30 @@ def _validator_rules(source: str) -> set[str]:
     return {d.rule for d in validate_document(parse_document(source)).diagnostics}
 
 
-def test_a_heading_in_a_comment_renders_as_the_validator_reads_it() -> None:
-    # The validator reads the heading as a section; the renderer never
-    # crashes on a disagreement, because there is none to have.
-    result = render(FRONT + "# Zero\n\n<!--\n# Old clause\n-->\n", format="text")
-    assert [s.designation for s in result.tree.sections] == ["1", "2"]
-
-
-def test_a_signature_block_heading_ends_the_body_as_in_the_validator() -> None:
+def test_a_signature_block_heading_is_an_ordinary_section() -> None:
     result = render(FRONT + "# One\n\nText.\n\n# Signature Block {#signature-block}\n\nSigned\n", format="text")
-    assert [s.designation for s in result.tree.sections] == ["1"]
-    assert "Signed" not in result.output
+    assert [s.designation for s in result.tree.sections] == ["1", "2"]
+    assert "Signed" in result.output
+
+
+def test_every_list_marker_makes_a_list() -> None:
+    output = text("# A\n\n* star\n* list\n\n1) one\n2) two\n")
+    assert "(a) star\n(b) list" in output
+    assert "1. one\n2. two" in output
+
+
+def test_table_columns_keep_their_alignment() -> None:
+    html = render(FRONT + "# A\n\n| l | c | r | n |\n|:--|:-:|--:|---|\n| 1 | 2 | 3 | 4 |\n", standalone=False).output
+    assert '<th style="text-align: left">l</th>' in html
+    assert '<td style="text-align: center">2</td>' in html
+    assert '<td style="text-align: right">3</td>' in html
+    assert "<td>4</td>" in html
+
+
+def test_indented_code_renders_as_code_without_its_indent() -> None:
+    html = render(FRONT + "# A\n\nPara.\n\n    code {{ref: x}}\n      deeper\n", standalone=False).output
+    assert "<pre class=\"ld-code\"><code>code {{ref: x}}\n  deeper\n</code></pre>" in html
+    assert "BROKEN REF" not in html
 
 
 def test_markers_and_references_agree_with_the_validators_diagnostics() -> None:
@@ -794,15 +807,33 @@ def test_an_item_opening_with_a_drafting_note_or_code() -> None:
     assert "```" not in output
 
 
-def test_html_tags_are_never_emitted() -> None:
-    # Every tag is dropped and reported. Text between the tags of an HTML
-    # block stays, as the validator's model holds it as paragraph text
-    # (ForLegalAI/legaldown-validator#23); it is escaped like any text.
+def test_an_html_block_is_dropped_whole_and_reported() -> None:
     result = render(FRONT + "# A\n\n<script>\nalert(1)\n</script>\n\nAfter.\n", standalone=False)
-    assert "<script" not in result.output
-    assert "&lt;script" not in result.output
+    assert "script" not in result.output
+    assert "alert(1)" not in result.output
     assert "After." in result.output
     assert "raw-html" in {d.rule for d in result.diagnostics}
+
+
+def test_a_comment_block_renders_nothing_and_holds_no_section() -> None:
+    result = render(FRONT + "# Zero\n\n<!--\nhidden\n\n# Old clause\n-->\n\nNext.\n", format="text")
+    assert [s.designation for s in result.tree.sections] == ["1"]
+    assert "hidden" not in result.output and "Old clause" not in result.output
+    assert "Next." in result.output
+    assert "raw-html" not in {d.rule for d in result.diagnostics}
+
+
+def test_an_html_block_after_a_comment_is_still_reported() -> None:
+    result = render(FRONT + "# A\n\n<!-- note --> <b>tail</b>\n", format="text")
+    assert "tail" not in result.output
+    assert "raw-html" in {d.rule for d in result.diagnostics}
+
+
+def test_an_unclosed_comment_inside_a_paragraph_is_text() -> None:
+    # CommonMark: only a line that starts with <!-- opens an HTML block.
+    output = text("# A\n\nBefore <!-- open\n\nShown.\n")
+    assert "Before <!-- open" in output
+    assert "Shown." in output
 
 
 def test_a_hard_break_keeps_both_lines() -> None:
@@ -811,22 +842,6 @@ def test_a_hard_break_keeps_both_lines() -> None:
     output = text("# A\n\nLine one\\\nline two\n")
     assert "Line one" in output
     assert "line two" in output
-
-
-def test_a_comment_across_blocks_renders_nothing() -> None:
-    # The one place the builder reads past the validator's model
-    # (docs/architecture.md, stage 3).
-    output = text("# A\n\nBefore <!-- open\n\n- hidden item\n\nstill hidden --> after\n\nNext.\n")
-    assert "Before\n\nafter\n\nNext." in output
-    assert "hidden" not in output
-    assert "<!--" not in output and "-->" not in output
-
-
-def test_an_open_comment_ends_with_its_section() -> None:
-    output = text("# A\n\nShown <!-- never closed\n\nhidden\n\n# B\n\nVisible.\n")
-    assert "Shown" in output
-    assert "hidden" not in output
-    assert "Visible." in output
 
 
 def test_a_comment_opener_in_code_or_a_directive_does_not_open() -> None:
@@ -841,20 +856,6 @@ def test_an_escaped_or_empty_comment_opener_does_not_open() -> None:
     assert "\nNext.\n" in output
     assert "Text after." in output
     assert "A b" in output
-
-
-def test_a_comment_opened_in_a_list_item() -> None:
-    output = text("# A\n\n- a\n- b <!-- x\n- hidden\n- c --> shown\n- d\n\n- Item <!-- start\n\n  hidden too\n\n"
-                  "  end --> tail\n")
-    assert "(a) a\n(b) b\n(c) shown\n(d) d" in output
-    assert "hidden" not in output
-    assert "tail" in output
-
-
-def test_a_comment_closing_in_a_list_keeps_its_items() -> None:
-    output = text("# A\n\nText <!-- start\n\n- one\n- two -->\n- three {#three}\n- four\n\nSee {{ref: three}}.\n")
-    assert "(a) three\n(b) four" in output
-    assert "See 1(a)." in output
 
 
 def test_a_dropped_comment_or_tag_leaves_one_space() -> None:

@@ -57,7 +57,7 @@ from .tree import (
     Table,
     Text,
 )
-from .validator_bridge import block_fragments, block_quotes, is_escaped, lex, placed_markers
+from .validator_bridge import block_fragments, block_quotes, lex, placed_markers
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
 # Leads the sentinel of source that renders nothing (a {{def:}}). It is
@@ -66,9 +66,6 @@ _OPEN, _CLOSE = "\ue000", "\ue001"
 _HIDDEN_LEAD = "\u2e31"
 # A fenced code block's opening line (validator's model keeps the fences).
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-# The validator's block kinds that render as a paragraph, and as a list.
-_PARAGRAPH_KINDS = frozenset({"paragraph", "definition", "ref", "term"})
-_LIST_KINDS = frozenset({"unordered_list", "ordered_list"})
 # Stand where inline HTML or a comment was dropped, until _merge_text joins
 # the text around them. A dropped line break (<br>) still parts two words.
 _DROPPED = Text("")
@@ -330,74 +327,25 @@ class _Builder:
     def blocks(self, blocks: list[ModelBlock], section: int | None, *, markers: bool = True) -> tuple[Block, ...]:
         """Render-tree blocks for the validator's *blocks* of section index
         *section* (None for the preamble). With *markers* False — text the
-        validator reads inside a quote or an item — no marker is placed.
-
-        The one place the builder reads past the validator's model: a
-        comment (§8.6) left open in a paragraph or a list item runs on to
-        the first ``-->`` in the blocks that follow, which render nothing
-        (docs/architecture.md, stage 3; ForLegalAI/legaldown-validator#23).
-        It never runs past the end of *blocks*."""
+        validator reads inside a quote or an item — no marker is placed."""
         out: list[Block] = []
-        in_comment = False
         top_level = section is not None and markers
         for index, block in enumerate(blocks):
-            built: Block | None
-            if in_comment and block.kind not in _PARAGRAPH_KINDS | _LIST_KINDS:
-                # A quote, code, table, or rule the comment runs into: what
-                # follows its "-->" is kept as text, its structure is lost.
-                built, in_comment = self.paragraph(render_block(block), "", "", top_level=top_level, in_comment=True)
-                if built is not None:
-                    out.append(built)
+            if block.kind == "html":
+                self._html_block(block)
                 continue
             placed = self._placed(block, section, index) if markers else {}
-            if block.kind in _PARAGRAPH_KINDS:
-                block, identifier, condition = _strip_markers(block, placed)
-                built, in_comment = self.paragraph(
-                    _paragraph_source(block), identifier, condition, top_level=top_level, in_comment=in_comment)
-            elif block.kind in _LIST_KINDS:
-                built, in_comment = self.list(block, placed, in_comment=in_comment)
-            else:
-                built = self.block(block, placed)
+            built = self.block(block, placed, top_level=top_level)
             if built is not None:
                 out.append(built)
         return tuple(out)
 
-    def paragraph(
-        self, source: str, identifier: str, condition: str, *, top_level: bool, in_comment: bool,
-    ) -> tuple[Paragraph | None, bool]:
-        """A paragraph for *source*, and whether a comment is left open at
-        its end. With *in_comment*, the text up to the first ``-->`` is
-        inside a comment opened earlier; without one, the whole text is."""
-        if in_comment:
-            end = source.find("-->")
-            if end < 0:
-                return None, True
-            source = source[end + 3:]
-        opening = self._unclosed_comment(source)
-        if opening >= 0:
-            source = source[:opening]
-        inlines = self.text(source)
-        if not inlines and not identifier:
-            return None, opening >= 0  # only a comment
-        return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level), opening >= 0
-
-    def _unclosed_comment(self, source: str) -> int:
-        """Offset of a ``<!--`` in *source* that no ``-->`` closes, or -1.
-
-        The lexer's view has code spans and closed comments blanked; what
-        it leaves is literal to it. Of that, an escaped ``\\<!--``, one
-        inside a directive, and the empty comments ``<!-->`` and ``<!--->``
-        (complete in CommonMark) open nothing."""
-        lexed = self.markers.lex(source)
-        view = lexed.view
-        at = view.find("<!--")
-        while at >= 0:
-            if (not is_escaped(view, at)
-                    and not view.startswith((">", "->"), at + 4)
-                    and not any(directive.start <= at < directive.end for directive in lexed.directives)):
-                return at
-            at = view.find("<!--", at + 1)
-        return -1
+    def _html_block(self, block: ModelBlock) -> None:
+        """An HTML block renders nothing: a comment is stripped (§8.6), and
+        any other HTML is never emitted and is counted for the raw-html
+        Warning (§8.7)."""
+        if HTML_COMMENT_RE.sub("", block.text).strip():
+            self.raw_html += 1
 
     def _placed(self, block: ModelBlock, section: int | None, index: int) -> dict[int, tuple[int, str, str]]:
         """The markers the validator placed in *block*, by fragment index:
@@ -418,9 +366,16 @@ class _Builder:
             placed[fragment_index] = (offset, identifier, found.marker.condition)
         return placed
 
-    def block(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> Block:
-        """A block other than a paragraph or a list (see blocks())."""
+    def block(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]], *, top_level: bool) -> Block | None:
         match block.kind:
+            case "paragraph" | "definition" | "ref" | "term":
+                block, identifier, condition = _strip_markers(block, placed)
+                inlines = self.text(_paragraph_source(block))
+                if not inlines and not identifier:
+                    return None  # only a comment
+                return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level)
+            case "unordered_list" | "ordered_list":
+                return self.list(block, placed)
             case "quote":
                 return self.quote(block)
             case "code":
@@ -433,18 +388,13 @@ class _Builder:
                 return Table(
                     header=tuple(self.text(cell) for cell in block.headers),
                     rows=tuple(tuple(self.text(cell) for cell in row) for row in rows),
-                    align=(),
+                    align=tuple(block.align),
                 )
             case "rule":
                 return Rule()
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def list(
-        self, block: ModelBlock, placed: dict[int, tuple[int, str, str]], *, in_comment: bool,
-    ) -> tuple[List | None, bool]:
-        """A list, and whether a comment is left open at its end (see
-        blocks()). An item wholly inside a comment is left out; None when
-        every item is."""
+    def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List:
         # Items are fragments after any text, prefix, and suffix, which a
         # list block does not have.
         items: list[ListItem] = []
@@ -453,27 +403,15 @@ class _Builder:
             if index in placed:
                 offset, identifier, condition = placed[index]
                 item = _cut_marker(item, offset)
-            if in_comment:
-                end = item.find("-->")
-                if end < 0:
-                    continue
-                item, in_comment = item[end + 3:].lstrip(" "), False
-                if not item.strip() and not identifier:
-                    continue  # nothing after the comment's end
             first, _, rest = item.partition("\n")
             if first.lstrip().startswith(">") or _FENCE_RE.match(first):
                 # The item opens with a quote or code, whose lines the
                 # validator keeps as written (a drafting note included).
                 blocks = self.fragment(item)
             else:
-                opening = self._unclosed_comment(first)
-                if opening >= 0:
-                    first = first[:opening]
-                    end = rest.find("-->")
-                    rest, in_comment = ("", True) if end < 0 else (rest[end + 3:], False)
-                blocks = (Paragraph(self.text(first)),) + (self.fragment(rest) if rest.strip() else ())
+                blocks = (Paragraph(self.text(first)),) + (self.fragment(rest) if rest else ())
             items.append(ListItem(blocks=blocks, anchor_id=identifier, condition=condition))
-        return (List(ordered=block.kind == "ordered_list", items=tuple(items)) if items else None), in_comment
+        return List(ordered=block.kind == "ordered_list", items=tuple(items))
 
     def quote(self, block: ModelBlock) -> Block:
         """A block quote, its content read by the validator's parser. A
@@ -556,16 +494,28 @@ def _paragraph_source(block: ModelBlock) -> str:
 
 
 def _code_block(text: str) -> CodeBlock:
-    """A fenced code block from the validator's model, fences included."""
+    """A code block from the validator's model: fenced, fences included,
+    or indented, each line by four columns (CommonMark)."""
     lines = text.split("\n")
     opening = _FENCE_RE.match(lines[0]) if lines else None
     if opening is None:
-        return CodeBlock(text)
+        return CodeBlock("\n".join(_unindent(line) for line in lines) + "\n")
     fence = opening.group(1)
     body = lines[1:]
     if body and body[-1].strip().startswith(fence[0] * len(fence)) and not body[-1].strip().strip(fence[0]):
         body = body[:-1]
     return CodeBlock("\n".join(body) + ("\n" if body else ""), opening.group(2).strip())
+
+
+def _unindent(line: str) -> str:
+    """*line* without an indented code block's four columns of
+    indentation, a tab counting to the next multiple of four."""
+    column = 0
+    for index, char in enumerate(line):
+        if column >= 4 or char not in " \t":
+            return line[index:]
+        column = column + 4 - column % 4 if char == "\t" else column + 1
+    return ""
 
 
 def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:

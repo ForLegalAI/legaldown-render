@@ -82,28 +82,17 @@ that renders nothing, led by a punctuation character so that an emphasis closer 
 still closes. A defined term in a link title or alt text shows its term but is not the
 definition's anchor.
 
-HTML comments are dropped (§8.6), and where one stood between two spaces, one space stays. Every
-HTML tag is dropped, and each text that had one (a paragraph, a title, a table cell) counts once
-for the `raw-html` Warning (§8.7).
+An HTML block in the model (`kind="html"`), a comment block included, renders nothing (§8.6).
+One that holds anything besides comments counts once for the `raw-html` Warning (§8.7). Within a
+block's text, inline comments and tags are dropped; where one stood between two spaces, one space
+stays. Each text that had a tag (a paragraph, a title, a table cell) counts once for the Warning.
 
-The builder never works around the validator's model, with **one exception: comments**. The
-specification requires every comment to be stripped (§8.6), and the validator's model holds a
-comment that spans a blank line as ordinary blocks. So a `<!--` that a paragraph or a list item
-leaves open runs on to the first `-->`, and the blocks and items in between render nothing. The
-text before the `<!--` and after the `-->` renders. An opener counts only when it is not
-escaped, not in a code span or a directive, and not the empty comment `<!-->` or `<!--->`. The comment never runs past the end of
-the section, or of the quote or list item, it opened in: a heading inside a comment is still a
-section ([#23](https://github.com/ForLegalAI/legaldown-validator/issues/23)). Two gaps remain until
-the model drops such comments itself, listed in `CONFORMANCE.md`: a `{#id}` inside one is still a
-target, and a quote, code block, or table the comment ends in renders the rest as plain text.
-
-Everywhere else, where the model loses or misreads something, the output follows the model, and
-the gap is listed in `CONFORMANCE.md` and filed on the validator:
+The builder never works around the validator's model. Where the model loses or misreads
+something, the output follows the model, and the gap is listed in `CONFORMANCE.md` and filed on
+the validator:
 - lists have one level of items
-- table column alignment is not kept
 - a paragraph's line breaks are joined
-- the text between an HTML block's tags stays
-- content after a `Signature Block` heading is dropped
+- indented code inside a quote or a list item is paragraph text
 
 Guessing at lost structure was tried, and it traded each gap for new bugs.
 
