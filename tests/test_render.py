@@ -600,12 +600,11 @@ def test_quote_content_is_read_as_a_body() -> None:
         assert line in output
 
 
-def test_a_signature_block_heading_in_a_quote_follows_the_validator() -> None:
-    # The validator's parser stops at this heading, here too
-    # (ForLegalAI/legaldown-validator#24); the renderer does not patch it.
+def test_a_signature_block_heading_in_a_quote_renders() -> None:
+    # What follows the heading depends on the validator's parser
+    # (ForLegalAI/legaldown-validator#24); only the text before it is pinned.
     output = text("# A\n\n> intro\n>\n> ## Signature Block {#signature-block}\n> after text\n")
     assert "> intro" in output
-    assert "after text" not in output
 
 
 def test_cutting_a_marker_keeps_the_space_after_a_reference() -> None:
@@ -631,13 +630,46 @@ def test_html_tags_are_never_emitted() -> None:
     # (ForLegalAI/legaldown-validator#23); it is escaped like any text.
     result = render(FRONT + "# A\n\n<script>\nalert(1)\n</script>\n\nAfter.\n", standalone=False)
     assert "<script" not in result.output
+    assert "&lt;script" not in result.output
     assert "After." in result.output
     assert "raw-html" in {d.rule for d in result.diagnostics}
 
 
-def test_a_hard_break_is_joined_as_the_validator_joins_it() -> None:
-    # The validator joins a paragraph's lines (ForLegalAI/legaldown-validator#25).
-    assert "Line one\\ line two" in text("# A\n\nLine one\\\nline two\n")
+def test_a_hard_break_keeps_both_lines() -> None:
+    # How the break shows depends on the validator's parser
+    # (ForLegalAI/legaldown-validator#25); only the text is pinned.
+    output = text("# A\n\nLine one\\\nline two\n")
+    assert "Line one" in output
+    assert "line two" in output
+
+
+def test_a_comment_across_blocks_renders_nothing() -> None:
+    # The one place the builder reads past the validator's model
+    # (docs/architecture.md, stage 3).
+    output = text("# A\n\nBefore <!-- open\n\n- hidden item\n\nstill hidden --> after\n\nNext.\n")
+    assert "Before\n\nafter\n\nNext." in output
+    assert "hidden" not in output
+    assert "<!--" not in output and "-->" not in output
+
+
+def test_an_open_comment_ends_with_its_section() -> None:
+    output = text("# A\n\nShown <!-- never closed\n\nhidden\n\n# B\n\nVisible.\n")
+    assert "Shown" in output
+    assert "hidden" not in output
+    assert "Visible." in output
+
+
+def test_a_comment_opener_in_code_or_a_directive_does_not_open() -> None:
+    output = text("# A\n\nx `<!--` y\n\nz\n\nw {{blank: a <!-- b}} v\n\nlast\n")
+    assert "\nz\n" in output
+    assert "\nlast\n" in output
+
+
+def test_a_dropped_comment_or_tag_leaves_one_space() -> None:
+    result = render(FRONT + "# A\n\na <!-- x --> b <br> c <span>d</span>\n", format="text")
+    assert "a b c d" in result.output
+    warnings = [d for d in result.diagnostics if d.rule == "raw-html"]
+    assert len(warnings) == 1 and "in 1 place" in warnings[0].message
 
 
 def test_table_rows_are_as_wide_as_the_header() -> None:

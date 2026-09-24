@@ -20,7 +20,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `{{include:}}` below Full (§17.5) | ✅ Renders `[NOT PROCESSED: include path]` with a Warning (`render-not-processed`) |
 | Party and side display rules (§3.6) | ✅ |
 | At least one output format (§13.6) | ✅ HTML (recommended) and plain text (optional) |
-| Comment stripping (§8.6) | ✅ |
+| Comment stripping (§8.6) | ✅ Including a comment across blank lines, up to the end of its section (see below) |
 | Template view without answers (§15.8) | ✅ Conditions marked with style-defined labels; every `{{choose:}}` phrase shown as `[a / b]`; drafting notes styled; alternatives share a number |
 | `{{attach:}}` resolves to the declared title without reading the file | ✅ Linked to an attachment placeholder, or to the file when placeholders are omitted |
 
@@ -36,7 +36,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ No tag is ever emitted. Text between an HTML block's tags renders as text until the validator's model recognises HTML blocks (see below) |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
-| Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML is dropped with the Warning |
+| Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the tags are dropped with the Warning, and the cell text renders as paragraph text |
 | Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
 
 ## Known limitations
@@ -60,8 +60,8 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   - **Line breaks** within a paragraph are joined, and a backslash hard break shows as a literal
     backslash. Link reference definitions (`[label]: url`) are not resolved
     ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)).
-  - **A heading inside a multi-line HTML comment** is a section, with the comment's delimiters
-    shown as text. In an **HTML block**, every tag is dropped and reported (`raw-html`), but the
+  - **A heading inside a multi-line HTML comment** is a section: the comment ends at the heading,
+    and its closing `-->` shows as text. In an **HTML block**, every tag is dropped and reported (`raw-html`), but the
     text between the tags renders as paragraph text ([#23](https://github.com/ForLegalAI/legaldown-validator/issues/23)).
   - **Everything after a `# Signature Block {#signature-block}` heading** is dropped
     ([#24](https://github.com/ForLegalAI/legaldown-validator/issues/24)).

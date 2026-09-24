@@ -53,6 +53,9 @@ module, `validator_bridge.py`. That module is the list for roadmap item U3.
   - a paragraph's line breaks are joined
   - constructs the validator reads unusually, such as a heading inside an HTML comment, render
     as the validator reads them
+- One deliberate exception: a comment left open in a paragraph runs on to its `-->` across the
+  following blocks, because §8.6 requires every comment to be stripped. It never crosses a
+  section boundary (docs/architecture.md, stage 3).
 - When the validator keeps nested lists (#14), the renderer gains them with no parser of its
   own. The resolver and writers already handle nested lists.
 - The build stage is smaller: about 100 lines of position rules and special cases are gone.

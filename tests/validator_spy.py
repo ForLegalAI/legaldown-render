@@ -2,6 +2,7 @@
 renderer's copy of its formula (validator_bridge._is_template)."""
 from __future__ import annotations
 
+import inspect
 from unittest import mock
 
 from legaldown import Document, validate_document
@@ -14,9 +15,12 @@ def validator_template(document: Document) -> bool:
     (ForLegalAI/legaldown-validator#26)."""
     seen: list[bool] = []
     original = core.Units
+    signature = inspect.signature(original)
+    assert "template" in signature.parameters, "Units no longer takes 'template'; update this spy"
 
     def spy(*args: object, **kwargs: object) -> object:
-        seen.append(bool(kwargs["template"]))
+        # However the validator passes it, by position or by name.
+        seen.append(bool(signature.bind(*args, **kwargs).arguments["template"]))
         return original(*args, **kwargs)
 
     with mock.patch.object(core, "Units", spy):

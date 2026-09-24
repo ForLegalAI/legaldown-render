@@ -66,6 +66,11 @@ _OPEN, _CLOSE = "\ue000", "\ue001"
 _HIDDEN_LEAD = "\u2e31"
 # A fenced code block's opening line (validator's model keeps the fences).
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+# The validator's block kinds that render as a paragraph.
+_PARAGRAPH_KINDS = frozenset({"paragraph", "definition", "ref", "term"})
+# Stands where inline HTML or a comment was dropped, until _merge_text
+# joins the text around it.
+_DROPPED = Text("")
 
 
 def normalize_source(source: str) -> str:
@@ -144,12 +149,13 @@ class _Builder:
         self.document = document
         self.result = result
         self.language = document.metadata.language or "en"
-        # Inline parsing only: block structure is the validator's. Its block
-        # parser only tells whether one paragraph's text is an HTML block.
+        # Inline parsing only: block structure is the validator's.
         self.md = MarkdownIt("commonmark", {"html": True})
         self.env: dict = {}
         self.payloads: list[_Payload] = []
+        # Texts in which raw HTML was dropped (§8.7), counted once each.
         self.raw_html = 0
+        self._dropped_html = False
         self.markers = placed_markers(document)
         nonce = secrets.token_hex(8)
         # A hidden sentinel has its own form ("h"), so the lead character is
@@ -246,7 +252,11 @@ class _Builder:
     def text(self, source: str) -> tuple[Inline, ...]:
         """Inline nodes for *source*, one block's text as the validator
         holds it: directives protected, then parsed as inline Markdown."""
-        return _trim(self.inlines(self._protect(source)))
+        self._dropped_html = False
+        inlines = _trim(self.inlines(self._protect(source)))
+        if self._dropped_html:
+            self.raw_html += 1
+        return inlines
 
     def inlines(self, content: str) -> tuple[Inline, ...]:
         """Inline nodes for the inline Markdown *content* (sentinels included)."""
@@ -284,8 +294,8 @@ class _Builder:
                 return [Image(src, self._inline_children(node), self._title(node))]
             case "html_inline":
                 if not node.content.startswith("<!--"):
-                    self.raw_html += 1  # never emitted (§8.7)
-                return []
+                    self._dropped_html = True  # never emitted (§8.7)
+                return [_DROPPED]
             case _:
                 return [Text(self._restore(node.content))] if node.content else []
 
@@ -316,14 +326,60 @@ class _Builder:
     def blocks(self, blocks: list[ModelBlock], section: int | None, *, markers: bool = True) -> tuple[Block, ...]:
         """Render-tree blocks for the validator's *blocks* of section index
         *section* (None for the preamble). With *markers* False — text the
-        validator reads inside a quote or an item — no marker is placed."""
+        validator reads inside a quote or an item — no marker is placed.
+
+        The one place the builder reads past the validator's model: a
+        comment (§8.6) left open in a paragraph runs on to the first ``-->``
+        in the blocks that follow, which render nothing
+        (docs/architecture.md, stage 3; ForLegalAI/legaldown-validator#23).
+        It never runs past the end of *blocks*."""
         out: list[Block] = []
+        in_comment = False
         for index, block in enumerate(blocks):
             placed = self._placed(block, section, index) if markers else {}
-            built = self.block(block, placed, top_level=section is not None and markers)
+            top_level = section is not None and markers
+            if block.kind in _PARAGRAPH_KINDS:
+                block, identifier, condition = _strip_markers(block, placed)
+                built, in_comment = self.paragraph(
+                    _paragraph_source(block), identifier, condition, top_level=top_level, in_comment=in_comment)
+            elif in_comment:
+                built, in_comment = self.paragraph(render_block(block), "", "", top_level=top_level, in_comment=True)
+            else:
+                built = self.block(block, placed)
             if built is not None:
                 out.append(built)
         return tuple(out)
+
+    def paragraph(
+        self, source: str, identifier: str, condition: str, *, top_level: bool, in_comment: bool,
+    ) -> tuple[Paragraph | None, bool]:
+        """A paragraph for *source*, and whether a comment is left open at
+        its end. With *in_comment*, the text up to the first ``-->`` is
+        inside a comment opened earlier; without one, the whole text is."""
+        if in_comment:
+            end = source.find("-->")
+            if end < 0:
+                return None, True
+            source = source[end + 3:]
+        opening = self._unclosed_comment(source)
+        if opening >= 0:
+            source = source[:opening]
+        inlines = self.text(source)
+        if not inlines and not identifier:
+            return None, opening >= 0  # only a comment
+        return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level), opening >= 0
+
+    def _unclosed_comment(self, source: str) -> int:
+        """Offset of a ``<!--`` in *source* that no ``-->`` closes, outside
+        code spans and directives, or -1. The lexer's view has code spans
+        and closed comments blanked already."""
+        lexed = self.markers.lex(source)
+        at = lexed.view.find("<!--")
+        while at >= 0:
+            if not any(directive.start <= at < directive.end for directive in lexed.directives):
+                return at
+            at = lexed.view.find("<!--", at + 1)
+        return -1
 
     def _placed(self, block: ModelBlock, section: int | None, index: int) -> dict[int, tuple[int, str, str]]:
         """The markers the validator placed in *block*, by fragment index:
@@ -344,14 +400,9 @@ class _Builder:
             placed[fragment_index] = (offset, identifier, found.marker.condition)
         return placed
 
-    def block(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]], *, top_level: bool) -> Block | None:
+    def block(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> Block:
+        """A block other than a paragraph (see blocks())."""
         match block.kind:
-            case "paragraph" | "definition" | "ref" | "term":
-                block, identifier, condition = _strip_markers(block, placed)
-                inlines = self.text(_paragraph_source(block))
-                if not inlines and not identifier:
-                    return None  # only a comment
-                return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level)
             case "unordered_list" | "ordered_list":
                 return self.list(block, placed)
             case "quote":
@@ -496,18 +547,29 @@ def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
 
 
 def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
+    """*inlines* with adjacent text joined. Where HTML or a comment was
+    dropped between two spaces, one of them goes: ``a <!-- x --> b`` reads
+    "a b"."""
     merged: list[Inline] = []
+    dropped = False
     for inline in inlines:
+        if inline is _DROPPED:
+            dropped = True
+            continue
         if isinstance(inline, Text) and merged and isinstance(merged[-1], Text):
-            merged[-1] = Text(merged[-1].text + inline.text)
+            text = inline.text
+            if dropped and merged[-1].text.endswith(" "):
+                text = text.lstrip(" ")
+            merged[-1] = Text(merged[-1].text + text)
         else:
             merged.append(inline)
+        dropped = False
     return tuple(merged)
 
 
 def build_tree(document: Document, result: ValidationResult) -> tuple[RenderTree, int]:
-    """The render tree for *document*, and the number of raw HTML
-    constructs that were dropped (§8.7)."""
+    """The render tree for *document*, and the number of texts — a
+    paragraph, a title, a table cell — in which raw HTML was dropped (§8.7)."""
     builder = _Builder(document, result)
     tree = builder.tree()
     return tree, builder.raw_html

@@ -124,7 +124,7 @@ def _resolve(document: Document, result: ValidationResult, style: Style) -> tupl
         diagnostics.append(Diagnostic(
             rule="raw-html",
             level="warning",
-            message=f"{raw_html} raw HTML construct(s) in the body are not rendered; HTML does not render "
+            message=f"Raw HTML in {raw_html} place(s) in the body is not rendered; HTML does not render "
                     f"portably (§8.7).",
         ))
     locale = parse_locale(style.locale) if style.locale else None

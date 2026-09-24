@@ -32,8 +32,8 @@ dependencies = [
     # The only LegalDown parser (docs/decisions/0002). A minor bump may change
     # the model, so the range is pinned to one minor version.
     "legaldown-validator>=0.2.0,<0.3",
-    # CommonMark block and inline structure the validator's model does not
-    # keep yet (nested lists, inline formatting).
+    # Inline Markdown (emphasis, links, code spans) within the validator's
+    # blocks, parsed in inline mode only (docs/decisions/0007).
     "markdown-it-py>=3.0,<5",
     # CLDR locale data for dates, money, and durations (docs/decisions/0005).
     "babel>=2.14,<3",
