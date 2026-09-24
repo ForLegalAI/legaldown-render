@@ -37,7 +37,7 @@ def test_money_is_padded_never_rounded() -> None:
 
 
 def test_money_display_styles() -> None:
-    assert formatter("en-US", money="code").money("10", "USD") == "USD 10.00"
+    assert formatter("en-US", money="code").money("10", "USD") == "USD\xa010.00"
     assert formatter("en-US", money="name").money("10", "USD") == "10.00 US dollars"
 
 
@@ -45,7 +45,7 @@ def test_locales() -> None:
     cs = formatter("cs-CZ")
     assert cs.date("2026-06-01") == "1. června 2026"
     assert cs.duration("12", "MO") == "12 měsíců"
-    assert cs.money("10000", "CZK") == "10 000,00 Kč"
+    assert cs.money("10000", "CZK") == "10\xa0000,00\xa0Kč"
     assert formatter("de").duration("1", "Y") == "1 Jahr"
     assert formatter("en-GB", date="short").date("2026-06-01") == "01/06/2026"
 

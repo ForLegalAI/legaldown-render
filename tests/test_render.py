@@ -409,7 +409,7 @@ def test_sentinels_percent_encoded_in_urls_stay_as_written() -> None:
 
 
 def test_emphasis_wrapping_only_the_term_is_left_to_the_style() -> None:
-    body = '# D\n\n*"Fee"* {{def:}} means the fee, and "Tax" {{def:}} means tax.\n'
+    body = '# D\n\n*"Fee"* {{def:}} means the fee, and "Tax"\xa0{{def:}} means tax.\n'
     output = render(FRONT + body, standalone=False, overrides={"definitions.style": "plain"}).output
     assert '<dfn class="ld-defined ld-style-plain" id="def:fee">Fee</dfn> means the fee' in output
     assert '<dfn class="ld-defined ld-style-plain" id="def:tax">Tax</dfn> means tax.' in output
