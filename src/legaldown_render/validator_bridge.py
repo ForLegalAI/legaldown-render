@@ -17,12 +17,12 @@ from functools import cache
 
 from legaldown import Document
 from legaldown.definitions import block_fragments, text_fragments
-from legaldown.directives import Lexed, lex
+from legaldown.directives import Lexed, is_escaped, lex
 from legaldown.validator.core import _frontmatter_fields
 from legaldown.validator.templates import block_quotes
 from legaldown.validator.units import FoundMarker, find_markers
 
-__all__ = ["PlacedMarkers", "block_fragments", "block_quotes", "lex", "placed_markers"]
+__all__ = ["PlacedMarkers", "block_fragments", "block_quotes", "is_escaped", "lex", "placed_markers"]
 
 
 @dataclass(frozen=True, slots=True)

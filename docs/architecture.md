@@ -88,11 +88,14 @@ for the `raw-html` Warning (§8.7).
 
 The builder never works around the validator's model, with **one exception: comments**. The
 specification requires every comment to be stripped (§8.6), and the validator's model holds a
-comment that spans a blank line as ordinary blocks. So a `<!--` that a paragraph leaves open (one
-outside code spans and directives) runs on to the first `-->`, and the blocks in between render
-nothing. The text before the `<!--` and after the `-->` renders. The comment never runs past the
-end of the section, or of the quote or list item, it opened in: a heading inside a comment is
-still a section ([#23](https://github.com/ForLegalAI/legaldown-validator/issues/23)).
+comment that spans a blank line as ordinary blocks. So a `<!--` that a paragraph or a list item
+leaves open runs on to the first `-->`, and the blocks and items in between render nothing. The
+text before the `<!--` and after the `-->` renders. An opener counts only when it is not
+escaped, not in a code span or a directive, and not the empty comment `<!-->` or `<!--->`. The comment never runs past the end of
+the section, or of the quote or list item, it opened in: a heading inside a comment is still a
+section ([#23](https://github.com/ForLegalAI/legaldown-validator/issues/23)). Two gaps remain until
+the model drops such comments itself, listed in `CONFORMANCE.md`: a `{#id}` inside one is still a
+target, and a quote, code block, or table the comment ends in renders the rest as plain text.
 
 Everywhere else, where the model loses or misreads something, the output follows the model, and
 the gap is listed in `CONFORMANCE.md` and filed on the validator:

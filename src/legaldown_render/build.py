@@ -57,7 +57,7 @@ from .tree import (
     Table,
     Text,
 )
-from .validator_bridge import block_fragments, block_quotes, lex, placed_markers
+from .validator_bridge import block_fragments, block_quotes, is_escaped, lex, placed_markers
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
 # Leads the sentinel of source that renders nothing (a {{def:}}). It is
@@ -66,11 +66,14 @@ _OPEN, _CLOSE = "\ue000", "\ue001"
 _HIDDEN_LEAD = "\u2e31"
 # A fenced code block's opening line (validator's model keeps the fences).
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-# The validator's block kinds that render as a paragraph.
+# The validator's block kinds that render as a paragraph, and as a list.
 _PARAGRAPH_KINDS = frozenset({"paragraph", "definition", "ref", "term"})
-# Stands where inline HTML or a comment was dropped, until _merge_text
-# joins the text around it.
+_LIST_KINDS = frozenset({"unordered_list", "ordered_list"})
+# Stand where inline HTML or a comment was dropped, until _merge_text joins
+# the text around them. A dropped line break (<br>) still parts two words.
 _DROPPED = Text("")
+_DROPPED_BREAK = Text("")
+_BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 
 def normalize_source(source: str) -> str:
@@ -293,9 +296,10 @@ class _Builder:
                 src = self._restore_url(str(node.attrs.get("src", "")))
                 return [Image(src, self._inline_children(node), self._title(node))]
             case "html_inline":
-                if not node.content.startswith("<!--"):
-                    self._dropped_html = True  # never emitted (§8.7)
-                return [_DROPPED]
+                if node.content.startswith("<!--"):
+                    return [_DROPPED]
+                self._dropped_html = True  # never emitted (§8.7)
+                return [_DROPPED_BREAK if _BREAK_TAG_RE.fullmatch(node.content) else _DROPPED]
             case _:
                 return [Text(self._restore(node.content))] if node.content else []
 
@@ -329,21 +333,29 @@ class _Builder:
         validator reads inside a quote or an item — no marker is placed.
 
         The one place the builder reads past the validator's model: a
-        comment (§8.6) left open in a paragraph runs on to the first ``-->``
-        in the blocks that follow, which render nothing
+        comment (§8.6) left open in a paragraph or a list item runs on to
+        the first ``-->`` in the blocks that follow, which render nothing
         (docs/architecture.md, stage 3; ForLegalAI/legaldown-validator#23).
         It never runs past the end of *blocks*."""
         out: list[Block] = []
         in_comment = False
+        top_level = section is not None and markers
         for index, block in enumerate(blocks):
+            built: Block | None
+            if in_comment and block.kind not in _PARAGRAPH_KINDS | _LIST_KINDS:
+                # A quote, code, table, or rule the comment runs into: what
+                # follows its "-->" is kept as text, its structure is lost.
+                built, in_comment = self.paragraph(render_block(block), "", "", top_level=top_level, in_comment=True)
+                if built is not None:
+                    out.append(built)
+                continue
             placed = self._placed(block, section, index) if markers else {}
-            top_level = section is not None and markers
             if block.kind in _PARAGRAPH_KINDS:
                 block, identifier, condition = _strip_markers(block, placed)
                 built, in_comment = self.paragraph(
                     _paragraph_source(block), identifier, condition, top_level=top_level, in_comment=in_comment)
-            elif in_comment:
-                built, in_comment = self.paragraph(render_block(block), "", "", top_level=top_level, in_comment=True)
+            elif block.kind in _LIST_KINDS:
+                built, in_comment = self.list(block, placed, in_comment=in_comment)
             else:
                 built = self.block(block, placed)
             if built is not None:
@@ -370,15 +382,21 @@ class _Builder:
         return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level), opening >= 0
 
     def _unclosed_comment(self, source: str) -> int:
-        """Offset of a ``<!--`` in *source* that no ``-->`` closes, outside
-        code spans and directives, or -1. The lexer's view has code spans
-        and closed comments blanked already."""
+        """Offset of a ``<!--`` in *source* that no ``-->`` closes, or -1.
+
+        The lexer's view has code spans and closed comments blanked; what
+        it leaves is literal to it. Of that, an escaped ``\\<!--``, one
+        inside a directive, and the empty comments ``<!-->`` and ``<!--->``
+        (complete in CommonMark) open nothing."""
         lexed = self.markers.lex(source)
-        at = lexed.view.find("<!--")
+        view = lexed.view
+        at = view.find("<!--")
         while at >= 0:
-            if not any(directive.start <= at < directive.end for directive in lexed.directives):
+            if (not is_escaped(view, at)
+                    and not view.startswith((">", "->"), at + 4)
+                    and not any(directive.start <= at < directive.end for directive in lexed.directives)):
                 return at
-            at = lexed.view.find("<!--", at + 1)
+            at = view.find("<!--", at + 1)
         return -1
 
     def _placed(self, block: ModelBlock, section: int | None, index: int) -> dict[int, tuple[int, str, str]]:
@@ -401,10 +419,8 @@ class _Builder:
         return placed
 
     def block(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> Block:
-        """A block other than a paragraph (see blocks())."""
+        """A block other than a paragraph or a list (see blocks())."""
         match block.kind:
-            case "unordered_list" | "ordered_list":
-                return self.list(block, placed)
             case "quote":
                 return self.quote(block)
             case "code":
@@ -423,7 +439,12 @@ class _Builder:
                 return Rule()
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List:
+    def list(
+        self, block: ModelBlock, placed: dict[int, tuple[int, str, str]], *, in_comment: bool,
+    ) -> tuple[List | None, bool]:
+        """A list, and whether a comment is left open at its end (see
+        blocks()). An item wholly inside a comment is left out; None when
+        every item is."""
         # Items are fragments after any text, prefix, and suffix, which a
         # list block does not have.
         items: list[ListItem] = []
@@ -432,15 +453,27 @@ class _Builder:
             if index in placed:
                 offset, identifier, condition = placed[index]
                 item = _cut_marker(item, offset)
+            if in_comment:
+                end = item.find("-->")
+                if end < 0:
+                    continue
+                item, in_comment = item[end + 3:].lstrip(" "), False
+                if not item.strip() and not identifier:
+                    continue  # nothing after the comment's end
             first, _, rest = item.partition("\n")
             if first.lstrip().startswith(">") or _FENCE_RE.match(first):
                 # The item opens with a quote or code, whose lines the
                 # validator keeps as written (a drafting note included).
                 blocks = self.fragment(item)
             else:
-                blocks = (Paragraph(self.text(first)),) + (self.fragment(rest) if rest else ())
+                opening = self._unclosed_comment(first)
+                if opening >= 0:
+                    first = first[:opening]
+                    end = rest.find("-->")
+                    rest, in_comment = ("", True) if end < 0 else (rest[end + 3:], False)
+                blocks = (Paragraph(self.text(first)),) + (self.fragment(rest) if rest.strip() else ())
             items.append(ListItem(blocks=blocks, anchor_id=identifier, condition=condition))
-        return List(ordered=block.kind == "ordered_list", items=tuple(items))
+        return (List(ordered=block.kind == "ordered_list", items=tuple(items)) if items else None), in_comment
 
     def quote(self, block: ModelBlock) -> Block:
         """A block quote, its content read by the validator's parser. A
@@ -549,21 +582,31 @@ def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
 def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
     """*inlines* with adjacent text joined. Where HTML or a comment was
     dropped between two spaces, one of them goes: ``a <!-- x --> b`` reads
-    "a b"."""
+    "a b". A dropped ``<br>`` between two words leaves one space."""
     merged: list[Inline] = []
-    dropped = False
+    dropped = parted = False
     for inline in inlines:
-        if inline is _DROPPED:
+        if inline is _DROPPED or inline is _DROPPED_BREAK:
             dropped = True
+            parted = parted or inline is _DROPPED_BREAK
             continue
-        if isinstance(inline, Text) and merged and isinstance(merged[-1], Text):
-            text = inline.text
-            if dropped and merged[-1].text.endswith(" "):
-                text = text.lstrip(" ")
-            merged[-1] = Text(merged[-1].text + text)
+        before = merged[-1] if merged else None
+        if dropped and isinstance(inline, Text) and isinstance(before, Text) and before.text.endswith(" "):
+            inline = Text(inline.text.lstrip(" "))
+        elif parted and before is not None and not isinstance(inline, SoftBreak | HardBreak):
+            if isinstance(before, Text):
+                if not before.text.endswith(" ") and not (isinstance(inline, Text) and inline.text.startswith(" ")):
+                    merged[-1] = before = Text(before.text + " ")
+            elif isinstance(inline, Text):
+                if not inline.text.startswith(" "):
+                    inline = Text(" " + inline.text)
+            else:
+                merged.append(Text(" "))
+        dropped = parted = False
+        if isinstance(inline, Text) and isinstance(before, Text):
+            merged[-1] = Text(before.text + inline.text)
         else:
             merged.append(inline)
-        dropped = False
     return tuple(merged)
 
 

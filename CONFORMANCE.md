@@ -63,6 +63,13 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   - **A heading inside a multi-line HTML comment** is a section: the comment ends at the heading,
     and its closing `-->` shows as text. In an **HTML block**, every tag is dropped and reported (`raw-html`), but the
     text between the tags renders as paragraph text ([#23](https://github.com/ForLegalAI/legaldown-validator/issues/23)).
+  - **A comment across blank lines** is stripped up to its `-->` (the one place the renderer
+    reads past the model), but the model still holds its content as blocks. So a `{#id}` inside
+    it is still a valid target for the validator, and a reference to it renders
+    `[BROKEN REF: id]` with no Error. When the comment ends inside a quote, code block, or table,
+    the rest of that block renders as plain paragraph text ([#23](https://github.com/ForLegalAI/legaldown-validator/issues/23)).
+  - **After an empty comment** (`<!-->`, `<!--->`), a directive before a later `-->` on the same
+    line is shown as its source text, unresolved and unchecked ([#28](https://github.com/ForLegalAI/legaldown-validator/issues/28)).
   - **Everything after a `# Signature Block {#signature-block}` heading** is dropped
     ([#24](https://github.com/ForLegalAI/legaldown-validator/issues/24)).
   - **Indented code blocks** are read as paragraphs ([#9](https://github.com/ForLegalAI/legaldown-validator/issues/9)).

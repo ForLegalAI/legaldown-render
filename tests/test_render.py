@@ -665,9 +665,32 @@ def test_a_comment_opener_in_code_or_a_directive_does_not_open() -> None:
     assert "\nlast\n" in output
 
 
+def test_an_escaped_or_empty_comment_opener_does_not_open() -> None:
+    output = text("# A\n\nLiteral \\<!-- not a comment --> here.\n\nNext.\n\nText <!--> after.\n\nA <!---> b\n")
+    assert "Literal <!-- not a comment --> here." in output
+    assert "\nNext.\n" in output
+    assert "Text after." in output
+    assert "A b" in output
+
+
+def test_a_comment_opened_in_a_list_item() -> None:
+    output = text("# A\n\n- a\n- b <!-- x\n- hidden\n- c --> shown\n- d\n\n- Item <!-- start\n\n  hidden too\n\n"
+                  "  end --> tail\n")
+    assert "(a) a\n(b) b\n(c) shown\n(d) d" in output
+    assert "hidden" not in output
+    assert "tail" in output
+
+
+def test_a_comment_closing_in_a_list_keeps_its_items() -> None:
+    output = text("# A\n\nText <!-- start\n\n- one\n- two -->\n- three {#three}\n- four\n\nSee {{ref: three}}.\n")
+    assert "(a) three\n(b) four" in output
+    assert "See 1(a)." in output
+
+
 def test_a_dropped_comment_or_tag_leaves_one_space() -> None:
-    result = render(FRONT + "# A\n\na <!-- x --> b <br> c <span>d</span>\n", format="text")
-    assert "a b c d" in result.output
+    result = render(FRONT + "# A\n\na <!-- x --> b <br> c <span>d</span> Line<br>two Word<b>bold</b>word\n",
+                    format="text")
+    assert "a b c d Line two Wordboldword" in result.output
     warnings = [d for d in result.diagnostics if d.rule == "raw-html"]
     assert len(warnings) == 1 and "in 1 place" in warnings[0].message
 
