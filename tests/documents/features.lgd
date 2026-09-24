@@ -1,0 +1,101 @@
+---
+legaldown: "0.2"
+title: Services Agreement
+subtitle: Test document covering every rendered construct
+document_type: contract
+effective_date: 2026-06-01
+field_types:
+  vat-id: VAT identification number
+sides:
+  - name: providers
+    label: Provider
+    parties:
+      - name: acme
+        label: Acme
+        type: legal_entity
+        legal_name: Acme Corporation
+        identification_number: DE-12345678
+        address: 123 Main Street, Dover, DE 19901
+        representatives:
+          - name: John Smith
+            title: Chief Executive Officer
+  - name: client-group
+    parties:
+      - name: beta
+        type: legal_entity
+        legal_name: Beta Industries Inc.
+language: en
+attachments:
+  - id: schedule-a
+    title: "Schedule A: Service Description"
+    file: attachments/service-description.lgd
+  - id: exhibit-1
+    title: "Exhibit 1: Price List"
+    file: attachments/price-list.pdf
+---
+
+This Services Agreement (this "Agreement" {{def: agreement}}) is made between {{party: acme}}
+and {{party: beta}} (together with its affiliates, the {{side: client-group}}).
+
+<!-- A comment is never rendered. -->
+
+# Definitions {#definitions}
+
+"Services" {{def: services}} means the services described in {{attach: schedule-a}}.
+
+"Business Day" {{def:}} means a day on which banks are open in Delaware.
+
+# Services {#services}
+
+## Performance {#performance}
+
+{{party: acme, label=The Provider}} shall perform the {{term: services}} on each
+{{term: business-day, label=business day}}, and shall:
+
+- keep records of all work performed {#records}
+- notify the Client of any delay, including: {#delay}
+  - the cause of the delay {#delay-cause}
+  - its expected duration
+- comply with the policies in {{attach: exhibit-1, label=the price list}}.
+
+The steps of the escalation procedure are:
+
+7. contact the account manager
+7. contact the service director {#escalation-director}
+
+## Changes
+
+A change under item {{ref: delay-cause}} or step {{ref: escalation-director}} is made in
+writing under Section {{ref: performance}}.
+
+# Fees {#fees}
+
+The Client shall pay {{money: 10000, currency=USD}} per month, and {{money: 1234.5, currency=EUR}}
+for setup, within {{duration: 30, unit=D}} of {{date: 2026-07-01}}. The Provider's VAT number is
+{{field: DE123456789, type=vat-id}}.
+
+| Service | Fee | Notes |
+|:---|---:|:---:|
+| Hosting | {{money: 500, currency=USD}} | per *month* |
+| Support | {{money: 250.75, currency=USD}} | see {{ref: fees}} |
+
+> The fees are fixed for the first year.
+
+```text
+{{ref: not-a-directive-in-code}} stays literal
+```
+
+Inline code keeps `{{term: services}}` literal.
+
+---
+
+# Broken References {#broken}
+
+These are deliberately wrong: {{ref: nowhere}}, {{term: nothing}}, {{date: 2026-13-45}},
+{{money: 12,000, currency=USD}}, {{money: 100, currency=XYZ}}, {{party: nobody, label=Someone}},
+{{party: Bad_Name}}, {{side: nobody}}, {{duration: -1, unit=D}}, {{duration: 3, unit=M}},
+{{field: value}}, {{trem: services}}, {{attach: schedule-z}}, {{placeholder: fee, type=widget}},
+and {{include: includes/extra.lgd}}.
+
+<span class="raw">Raw HTML</span> is dropped. [A safe link](https://example.com) stays;
+[an unsafe one](javascript:alert(1)) does not.

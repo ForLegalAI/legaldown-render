@@ -1,0 +1,96 @@
+Services Agreement
+
+Test document covering every rendered construct
+
+Effective date: June 1, 2026
+
+Provider
+    Acme Corporation
+    Registration No.: DE-12345678
+    Address: 123 Main Street, Dover, DE 19901
+    Represented by: John Smith, Chief Executive Officer
+
+Client Group
+    Beta Industries Inc.
+
+This Services Agreement (this Agreement) is made between Acme and Beta Industries Inc. (together with its affiliates, the Client Group).
+
+I. Definitions
+
+Services means the services described in Schedule A: Service Description.
+
+Business Day means a day on which banks are open in Delaware.
+
+II. Services
+
+A. Performance
+
+The Provider shall perform the Services on each business day, and shall:
+
+(a) keep records of all work performed
+(b) notify the Client of any delay, including:
+(c) the cause of the delay
+(d) its expected duration
+(e) comply with the policies in the price list.
+
+The steps of the escalation procedure are:
+
+1. contact the account manager
+2. contact the service director
+
+B. Changes
+
+A change under item II.A(c) or step II.A(2) is made in writing under Section II.A.
+
+III. Fees
+
+The Client shall pay $10,000.00 per month, and €1,234.50 for setup, within 30 days of July 1, 2026. The Provider's VAT number is DE123456789.
+
+| Service | Fee | Notes |
+|---|---|---|
+| Hosting | $500.00 | per month |
+| Support | $250.75 | see III |
+
+> The fees are fixed for the first year.
+
+    {{ref: not-a-directive-in-code}} stays literal
+
+Inline code keeps {{term: services}} literal.
+
+---
+
+IV. Broken References
+
+These are deliberately wrong: [BROKEN REF: nowhere], [UNDEFINED: nothing], [INVALID DATE: 2026-13-45], [INVALID AMOUNT], [UNKNOWN CURRENCY: XYZ], [UNKNOWN PARTY: nobody], [INVALID PARTY: Bad_Name], [UNKNOWN SIDE: nobody], [INVALID DURATION: -1], [INVALID DURATION UNIT: M], [INVALID FIELD: value], [UNKNOWN DIRECTIVE: trem], [UNKNOWN ATTACHMENT: schedule-z], [INVALID PLACEHOLDER: fee], and [NOT PROCESSED: include includes/extra.lgd].
+
+Raw HTML is dropped. A safe link <https://example.com> stays; [an unsafe one](javascript:alert(1)) does not.
+
+---
+
+Attachments
+
+Schedule A: Service Description
+File: attachments/service-description.lgd
+
+Exhibit 1: Price List
+File: attachments/price-list.pdf
+
+---
+
+Provider
+Acme Corporation
+
+______________________________
+Name: John Smith
+Title: Chief Executive Officer
+Date:
+Place:
+
+Client Group
+Beta Industries Inc.
+
+______________________________
+Name:
+Title:
+Date:
+Place:

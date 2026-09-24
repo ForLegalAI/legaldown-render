@@ -1,0 +1,24 @@
+# Continental drafting: numbered articles, section-qualified list items
+# (5.1, 5.2, ...), and numbered paragraphs, so that "Article 5(2)"-style
+# references can target untitled provisions (§13.2).
+version: 1
+name: continental
+extends: default
+
+numbering:
+  scheme: decimal
+  levels:
+    - { counter: decimal, label: "{n}.", ref: "{n}" }
+
+enumeration:
+  levels:
+    - { counter: decimal, label: "{section}.{n}", ref: ".{n}" }
+    - { counter: lower-alpha, label: "{n})", ref: "({n})" }
+    - { counter: lower-roman, label: "{n})", ref: "({n})" }
+
+paragraphs:
+  numbered: true
+  format: { counter: decimal, label: "({n})", ref: "({n})" }
+
+headings:
+  1: { size: 1.1em, transform: none, align: center }
