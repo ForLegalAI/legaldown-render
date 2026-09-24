@@ -277,8 +277,22 @@ def test_contents_label_follows_the_language_and_marks_conditions() -> None:
 
 
 def test_contents_follow_the_numbering_depth_not_the_heading_level() -> None:
-    output = text("# A\n\n### B\n\n###### C\n", overrides={"contents.enabled": True})
-    assert "Contents\n1. A\n    1.1 B\n\n" in output
+    body = "# A\n\n### B\n\n## C\n"
+    assert "Contents\n1. A\n    1.2 C\n\n" in text(body, overrides={"contents.enabled": True})
+    assert "Contents\n1. A\n        1.1.1 B\n    1.2 C\n\n" in text(
+        body, overrides={"contents.enabled": True, "contents.depth": 3})
+
+
+@pytest.mark.parametrize("body", [
+    "# A\n\n### B\n\n## C\n\n### D\n",
+    "## A\n\n### B\n\n## C\n",
+    "# A\n\n###### B\n\n# C\n",
+])
+def test_section_numbers_are_the_validators(body: str) -> None:
+    from legaldown import parse_document, validate_document
+    result = render(FRONT + body, format="text")
+    expected = [entry.number for entry in validate_document(parse_document(FRONT + body)).sections]
+    assert [section.designation for section in result.tree.sections] == expected
 
 
 def test_contents_group_attachments_under_their_heading() -> None:

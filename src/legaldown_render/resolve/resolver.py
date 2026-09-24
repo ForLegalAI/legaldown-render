@@ -255,54 +255,38 @@ class Resolver:
     def _number_sections(self) -> list[Section]:
         """Number the sections, and record each one's presence (§15.3).
 
-        Which sections are alternatives, sharing their previous sibling's
-        number (§15.8), is taken from the validator: it numbers them itself,
-        with the full presence of each, so the rendered numbers always
-        agree with ``ValidationResult.sections``.
+        The numbers are the validator's own (``ValidationResult.sections``),
+        so a rendered number and a reference to it always agree with the
+        validator: alternatives share a number (§15.8), and a skipped
+        heading level counts as 1. The style only formats them, the n-th
+        part of a number ("2.1" has two) with the n-th level format.
         """
         levels = heading_levels(self.style.numbering)
-        counters = [0] * 6  # index 1-5: one counter per heading level
-        previous: dict[int, int] = {}  # level -> index of the previous sibling
         presences: dict[int, Presence] = {}  # level -> presence of the open section
-        indexed = self.result.sections
         out: list[Section] = []
-        for index, section in enumerate(self.tree.sections):
-            # Numbered with its level clamped to 1-5, as the validator numbers it.
+        for section, indexed in zip(self.tree.sections, self.result.sections, strict=True):
+            # Stored clamped to 1-5 (§4.1), so every writer nests the section
+            # where the validator reads it.
             level = min(max(section.level, 1), 5)
-            sibling = previous.get(level)
-            alternative = (
-                sibling is not None
-                and self.tree.sections[sibling].identifier == section.identifier
-                and indexed[sibling].number == indexed[index].number
-            )
-            if not alternative:
-                counters[level] += 1
-            counters[level + 1:] = [0] * (5 - level)
-            previous = {lvl: i for lvl, i in previous.items() if lvl < level}
-            previous[level] = index
             enclosing = max((lvl for lvl in presences if lvl < level), default=None)
             presences = {lvl: p for lvl, p in presences.items() if lvl < level}
             presences[level] = (presences[enclosing] if enclosing is not None else ALWAYS) | self._presence(section.condition)
             self.section_presences.append(presences[level])
+            parts = [int(part) for part in indexed.number.split(".")]
             if self.textual:
                 label, designation = None, self._title_text(section.title)
             else:
                 designation = ""
-                for depth in range(1, level + 1):
-                    if counters[depth]:
-                        fmt = levels[depth - 1]
-                        designation = extend(designation, fill(fmt.ref, n=format_counter(counters[depth], fmt.counter)),
-                                             textual=False)
-                fmt = levels[level - 1]
-                label = fill(fmt.label, n=format_counter(counters[level], fmt.counter), path=designation)
+                for position, counter in enumerate(parts):
+                    fmt = levels[min(position, len(levels) - 1)]
+                    designation = extend(designation, fill(fmt.ref, n=format_counter(counter, fmt.counter)),
+                                         textual=False)
+                fmt = levels[min(len(parts), len(levels)) - 1]
+                label = fill(fmt.label, n=format_counter(parts[-1], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
             self._register(section.identifier, _Target(designation, anchor))
-            # How deep the validator's own number goes ("2.1" is 2).
-            depth = indexed[index].number.count(".") + 1
-            # The level is stored clamped too, so every writer nests the section
-            # where its number puts it.
             out.append(replace(section, level=level, label=label, designation=designation, anchor=anchor,
-                               depth=depth))
+                               depth=len(parts)))
         return out
 
     def _presence(self, condition: str) -> Presence:

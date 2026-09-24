@@ -102,10 +102,11 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 
 1. **Survey.** It collects which definitions exist, whether template constructs are used, and
    which placeholder ids are used with conflicting types (§10.7).
-2. **Structure.** It numbers sections under the style's level formats. **Alternatives** share a
-   number (§15.8). For sections, which ones are alternatives is taken from the validator's own
-   numbering, so rendered numbers always match `ValidationResult.sections`. For paragraphs and
-   list items, the validator's rule is applied the same way: an alternative directly follows its
+2. **Structure.** Section numbers are the validator's own (`ValidationResult.sections`), so a
+   rendered number always matches the validator's: **alternatives** share a number (§15.8), and
+   a skipped heading level counts as 1. The style only formats them, the n-th part of a number
+   with the n-th level format. For paragraphs and list items, **alternatives** follow the
+   validator's rule, applied the same way: an alternative directly follows its
    sibling, has the same identifier and a valid condition, and its full presence (its own condition
    and every enclosing one) excludes that of every unit already holding the number (§15.4, the
    validator's `exclusive()`). It then labels
