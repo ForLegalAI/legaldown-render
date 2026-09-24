@@ -149,6 +149,17 @@ class Attachments:
 
 
 @dataclass(frozen=True, slots=True)
+class Contents:
+    """A table of contents, after the title block."""
+
+    enabled: bool = False
+    #: The deepest heading level listed.
+    depth: Literal[1, 2, 3, 4, 5] = 2
+    #: List the attachment placeholders after the sections.
+    attachments: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class Signatures:
     """Generated signature blocks (§2.2). The document's
     ``include_signatures: false`` always wins."""
@@ -182,6 +193,7 @@ class Labels:
     effective_date: str | None = None
     version: str | None = None
     attachments: str | None = None
+    contents: str | None = None
     #: ``{file}`` is the attachment's declared file.
     attachment_file: str | None = None
     signatures: str | None = None
@@ -258,6 +270,7 @@ class Style:
     values: Values = field(default_factory=Values)
     placeholders: Placeholders = field(default_factory=Placeholders)
     title_block: TitleBlock = field(default_factory=TitleBlock)
+    contents: Contents = field(default_factory=Contents)
     attachments: Attachments = field(default_factory=Attachments)
     signatures: Signatures = field(default_factory=Signatures)
     template_view: TemplateView = field(default_factory=TemplateView)

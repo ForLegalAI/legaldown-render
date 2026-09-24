@@ -28,6 +28,7 @@ here.
 - Every directive, with every failure marker
 - Template view: conditions, `{{choose:}}`, drafting notes, alternatives sharing a number
 - Title block, attachment placeholders, signature blocks
+- A table of contents (`contents` style setting) and the final check (`--final`, §15.9)
 - Style templates: layering, `extends`, `--set`, validation, and three built-in styles; labels in
   English and Czech
 - `text` and `html` writers; the `legaldown-render` CLI

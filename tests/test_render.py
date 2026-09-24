@@ -226,6 +226,32 @@ def test_strict_refuses_documents_with_errors() -> None:
     render(FRONT + "# A\n\nFine.\n", strict=True)
 
 
+def test_contents_lists_sections_to_their_depth_then_attachments() -> None:
+    body = "# One {#one}\n\nText.\n\n## Sub {#sub}\n\n### Deep\n\n# Two with **bold**\n"
+    assert "Contents" not in text(body)
+    output = text(body, overrides={"contents.enabled": True})
+    assert "Contents\n1. One\n    1.1 Sub\n2. Two with bold\n\n" in output
+    output = text(body, overrides={"contents.enabled": True, "contents.depth": 3})
+    assert "        1.1.1 Deep" in output
+
+
+def test_contents_in_html_links_each_entry_without_repeating_anchors() -> None:
+    body = "# One {#one}\n\n\"Services\" {{def: services}} means work.\n\n# Uses {{term: services}}\n"
+    html = render(FRONT + body, standalone=False, overrides={"contents.enabled": True}).output
+    nav = html[html.index("<nav"):html.index("</nav>")]
+    assert '<a href="#one"><span class="ld-number">1.</span> <span class="ld-contents-text">One</span></a>' in nav
+    assert "<dfn" not in nav and nav.count("<a ") == 2
+    assert 'id="' not in nav
+
+
+def test_contents_label_follows_the_language_and_marks_conditions() -> None:
+    output = render((DOCUMENTS / "template.lgd").read_text(encoding="utf-8"), format="text",
+                    overrides={"contents.enabled": True}).output
+    contents = output[output.index("Contents\n"):].split("\n\n", 1)[0]
+    assert "2. Non-Solicitation [Only if: non-solicit]" in contents
+    assert text("# A\n", overrides={"contents.enabled": True, "labels.contents": "Obsah"}).count("Obsah") == 1
+
+
 def test_final_check_reports_blanks_and_template_constructs() -> None:
     body = "# A\n\nPay {{placeholder: fee, type=text}}.\n\n> [!DRAFTING]\n> Check the fee.\n"
     assert not {"placeholder-unfilled", "template-construct-present"} & {d.rule for d in render(FRONT + body).diagnostics}

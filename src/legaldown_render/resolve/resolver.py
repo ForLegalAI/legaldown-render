@@ -39,6 +39,7 @@ from ..tree import (
     Block,
     Choice,
     CodeBlock,
+    ContentsEntry,
     CrossRef,
     DefinedTerm,
     DefinitionSource,
@@ -155,6 +156,7 @@ class Resolver:
             )
             for section in sections
         )
+        attachments = tuple(replace(a, title=resolve(a.title)) for a in attachments)
         resolved = replace(
             self.tree,
             title=resolve(self.tree.title),
@@ -164,8 +166,10 @@ class Resolver:
             sections=sections,
             header=self._header(),
             sides=self._sides() if self.style.title_block.parties else (),
-            attachments=tuple(replace(a, title=resolve(a.title)) for a in attachments),
+            attachments=attachments,
             attachments_label=self.labels.attachments or "",
+            contents=self._contents(sections, attachments),
+            contents_label=self.labels.contents or "",
             signatures=self._signatures(),
             signature_labels={
                 "date": self.labels.signature_date or "",
@@ -179,6 +183,27 @@ class Resolver:
         # given an anchor: definitions in titles or alt text are not, and a
         # definition may live in an attachment or an amended original.
         return map_tree_inlines(resolved, self._settle_term_target)
+
+    def _contents(
+        self, sections: tuple[Section, ...], attachments: tuple[AttachmentPart, ...],
+    ) -> tuple[ContentsEntry, ...]:
+        """The table of contents, when the style enables it: every section
+        down to its depth, then the attachment placeholders."""
+        settings = self.style.contents
+        if not settings.enabled:
+            return ()
+        entries = [
+            ContentsEntry(section.level, section.label, plain_text(section.title), section.anchor,
+                          section.condition_label)
+            for section in sections
+            if section.level <= settings.depth
+        ]
+        if settings.attachments:
+            entries += [
+                ContentsEntry(1, None, plain_text(attachment.title), attachment.anchor, attachment.condition_label)
+                for attachment in attachments
+            ]
+        return tuple(entries)
 
     def _settle_term_target(self, inline: Inline) -> Inline:
         if isinstance(inline, TermRef) and inline.target and inline.target not in self.used_anchors:

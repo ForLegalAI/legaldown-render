@@ -58,6 +58,7 @@ legaldown-render contract.lgd -o contract.html                  # HTML page
 legaldown-render contract.lgd -o contract.txt                   # plain text (format from extension)
 legaldown-render contract.lgd --style continental --locale cs-CZ -o smlouva.html
 legaldown-render contract.lgd --set numbering.scheme=legal-outline --set enumeration.enabled=false
+legaldown-render contract.lgd --set contents.enabled=true --set contents.depth=3   # table of contents
 legaldown-render contract.lgd --strict                          # refuse if the document has errors
 legaldown-render contract.lgd --final --strict                  # refuse if blanks or template constructs remain
 legaldown-render --print-style --style continental              # every setting, as YAML

@@ -104,6 +104,7 @@ placeholders:
   show_prompt: false         # show the question's prompt next to the blank (§15.8)
 
 title_block: { parties: true, effective_date: true, version: false }
+contents: { enabled: false, depth: 2, attachments: true }     # table of contents after the title block; depth 1-5
 attachments: { render: placeholder, separator: page-break }   # placeholder | omit; page-break | rule | none
 signatures: { enabled: true }                                 # the document's include_signatures: false wins
 template_view: { choice_separator: " / ", empty_choice: "" }
@@ -112,7 +113,7 @@ labels:                      # every word the renderer generates; unset: built-i
   drafting_note: Drafting note
   condition: "Only if: {condition}"
   # identification_number, date_of_birth, address, represented_by, effective_date, version,
-  # attachments, attachment_file ("{file}"), signatures, signature_date, signature_place,
+  # attachments, contents, attachment_file ("{file}"), signatures, signature_date, signature_place,
   # signature_name, signature_title
 
 typography:

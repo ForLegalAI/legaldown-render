@@ -88,6 +88,14 @@ class TextWriter:
                 for name, title in party.representatives:
                     lines.append(_INDENT + ", ".join(filter(None, (inline_text(name), inline_text(title)))))
             chunks.append("\n".join(lines))
+        if tree.contents:
+            lines = [tree.contents_label]
+            for entry in tree.contents:
+                line = _INDENT * (entry.level - 1) + " ".join(filter(None, (entry.label, entry.text)))
+                if entry.condition_label:
+                    line += f" [{entry.condition_label}]"
+                lines.append(line)
+            chunks.append("\n".join(lines))
         chunks += [self.block(block) for block in tree.preamble]
         for section in tree.sections:
             heading = " ".join(filter(None, (section.label, inline_text(section.title))))

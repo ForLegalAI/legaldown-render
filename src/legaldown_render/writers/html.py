@@ -92,6 +92,8 @@ class HtmlWriter:
     def write(self, tree: RenderTree) -> str:
         parts: list[str] = [f'<article class="ld-document{" ld-template" if tree.is_template else ""}">']
         parts.append(self.title_block(tree))
+        if tree.contents:
+            parts.append(self.contents(tree))
         if tree.preamble:
             parts.append('<div class="ld-preamble">')
             parts += [self.block(block) for block in tree.preamble]
@@ -141,6 +143,22 @@ class HtmlWriter:
                 parts.append("</div>")
             parts.append("</div>")
         parts.append("</header>")
+        return "\n".join(parts)
+
+    def contents(self, tree: RenderTree) -> str:
+        """The table of contents: one link per entry, indented by level."""
+        parts = [f'<nav class="ld-contents" aria-label="{_attr(tree.contents_label)}">',
+                 f'<h2 class="ld-contents-heading">{_text(tree.contents_label)}</h2>',
+                 '<ol class="ld-contents-list">']
+        for entry in tree.contents:
+            number = f'<span class="ld-number">{_text(entry.label)}</span> ' if entry.label else ""
+            text = f'{number}<span class="ld-contents-text">{_text(entry.text)}</span>'
+            if entry.anchor:
+                text = f'<a href="#{_attr(entry.anchor)}">{text}</a>'
+            if entry.condition_label:
+                text += f' <span class="ld-condition">{_text(entry.condition_label)}</span>'
+            parts.append(f'<li class="ld-contents-level-{entry.level}">{text}</li>')
+        parts += ["</ol>", "</nav>"]
         return "\n".join(parts)
 
     def sections(self, sections: tuple[Section, ...]) -> list[str]:
@@ -387,6 +405,14 @@ dfn { font-style: normal; }
 p.ld-condition { margin: 0 0 0.5em; }
 .ld-conditional { border-left: 2px dashed #b9a6e8; padding-left: 0.6em; }
 .ld-choice { background: #efe9fb; border-radius: 3px; padding: 0 0.2em; }
+.ld-contents { margin: 2em 0; }
+.ld-contents-list { list-style: none; padding-left: 0; }
+.ld-contents-list li { margin: 0.2em 0; }
+.ld-contents-list a { color: inherit; text-decoration: none; }
+.ld-contents-level-2 { padding-left: 1.5em; }
+.ld-contents-level-3 { padding-left: 3em; }
+.ld-contents-level-4 { padding-left: 4.5em; }
+.ld-contents-level-5 { padding-left: 6em; }
 .ld-attachments { margin-top: 3em; }
 .ld-attachment-file { color: var(--ld-muted); }
 .ld-signatures { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 2rem; margin-top: 3em; }

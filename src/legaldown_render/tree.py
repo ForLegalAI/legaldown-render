@@ -291,6 +291,18 @@ class SignatureParty:
 
 
 @dataclass(frozen=True, slots=True)
+class ContentsEntry:
+    """One line of the table of contents: a section or an attachment. Its
+    text is plain, so that no link or anchor is repeated from the body."""
+
+    level: int
+    label: str | None
+    text: str
+    anchor: str | None
+    condition_label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RenderTree:
     """The whole document. Built with source inlines; resolved in place of
     them by :mod:`.resolve`."""
@@ -311,6 +323,9 @@ class RenderTree:
     attachments_label: str = ""
     signatures: tuple[SignatureParty, ...] = ()
     signature_labels: dict[str, str] = field(default_factory=dict)
+    #: The table of contents; empty unless the style enables it.
+    contents: tuple[ContentsEntry, ...] = ()
+    contents_label: str = ""
 
 
 # ---------------------------------------------------------------------------
