@@ -22,7 +22,7 @@ from legaldown.validator.core import _frontmatter_fields
 from legaldown.validator.templates import block_quotes
 from legaldown.validator.units import FoundMarker, find_markers
 
-__all__ = ["PlacedMarkers", "block_fragments", "block_quotes", "lex", "placed_markers", "validator_template"]
+__all__ = ["PlacedMarkers", "block_fragments", "block_quotes", "lex", "placed_markers"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,33 +54,11 @@ def placed_markers(document: Document) -> PlacedMarkers:
     return PlacedMarkers(template, placed, lexer)
 
 
-def validator_template(document: Document) -> bool:
-    """Whether the validator itself treats *document* as a template: the
-    value validate_document computes and passes to its Units. Used by the
-    tests to check that _is_template stays the validator's formula."""
-    from legaldown import validate_document
-    from legaldown.validator import core
-
-    seen: list[bool] = []
-    original = core.Units
-
-    def spy(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        seen.append(kwargs["template"])
-        return original(*args, **kwargs)
-
-    core.Units = spy
-    try:
-        validate_document(document)
-    finally:
-        core.Units = original
-    return seen[-1]
-
-
 def _is_template(document: Document, markers: list[FoundMarker], lexer: Callable[[str], Lexed]) -> bool:
     """The validator's template test (legaldown.validator.core,
     validate_document), over the validator's own findings. A copy, until the
     validator exposes the decision (roadmap U3); the tests compare it with
-    the validator's own value (validator_template) on every document."""
+    the value validate_document itself computes, on every document."""
     metadata = document.metadata
 
     def names(texts: list[str]) -> set[str]:

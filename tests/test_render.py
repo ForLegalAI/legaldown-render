@@ -594,10 +594,18 @@ def test_template_decision_is_the_validators() -> None:
 
 
 def test_quote_content_is_read_as_a_body() -> None:
-    body = "# A\n\n> ---\n> title: x\n> ---\n> Visible?\n\n> ## Signature Block {#signature-block}\n> after text\n"
-    output = text(body)
-    for line in ("> title: x", "> Visible?", "> Signature Block", "> after text"):
+    # Text starting with "---" inside a quote is not frontmatter.
+    output = text("# A\n\n> ---\n> title: x\n> ---\n> Visible?\n")
+    for line in ("> title: x", "> Visible?"):
         assert line in output
+
+
+def test_a_signature_block_heading_in_a_quote_follows_the_validator() -> None:
+    # The validator's parser stops at this heading, here too
+    # (ForLegalAI/legaldown-validator#24); the renderer does not patch it.
+    output = text("# A\n\n> intro\n>\n> ## Signature Block {#signature-block}\n> after text\n")
+    assert "> intro" in output
+    assert "after text" not in output
 
 
 def test_cutting_a_marker_keeps_the_space_after_a_reference() -> None:
@@ -617,17 +625,19 @@ def test_an_item_opening_with_a_drafting_note_or_code() -> None:
     assert "```" not in output
 
 
-def test_html_blocks_are_dropped_whole() -> None:
-    result = render(FRONT + "# A\n\n<script>\nalert(1)\n</script>\n\n<table>\n<tr><td>Secret</td></tr>\n</table>\n",
-                    standalone=False)
-    assert "alert(1)" not in result.output
-    assert "Secret" not in result.output
+def test_html_tags_are_never_emitted() -> None:
+    # Every tag is dropped and reported. Text between the tags of an HTML
+    # block stays, as the validator's model holds it as paragraph text
+    # (ForLegalAI/legaldown-validator#23); it is escaped like any text.
+    result = render(FRONT + "# A\n\n<script>\nalert(1)\n</script>\n\nAfter.\n", standalone=False)
+    assert "<script" not in result.output
+    assert "After." in result.output
     assert "raw-html" in {d.rule for d in result.diagnostics}
 
 
-def test_a_backslash_hard_break_is_a_line_break() -> None:
-    output = render(FRONT + "# A\n\nLine one\\\nline two\n", standalone=False).output
-    assert "Line one<br>\nline two" in output
+def test_a_hard_break_is_joined_as_the_validator_joins_it() -> None:
+    # The validator joins a paragraph's lines (ForLegalAI/legaldown-validator#25).
+    assert "Line one\\ line two" in text("# A\n\nLine one\\\nline two\n")
 
 
 def test_table_rows_are_as_wide_as_the_header() -> None:
@@ -637,8 +647,9 @@ def test_table_rows_are_as_wide_as_the_header() -> None:
 
 def test_template_decision_matches_the_validator_on_the_test_documents() -> None:
     from legaldown import parse_document
+    from validator_spy import validator_template
 
-    from legaldown_render.validator_bridge import placed_markers, validator_template
+    from legaldown_render.validator_bridge import placed_markers
 
     for name in ("features", "template"):
         document = parse_document((DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8"))

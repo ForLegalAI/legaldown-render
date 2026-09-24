@@ -82,14 +82,19 @@ that renders nothing, led by a punctuation character so that an emphasis closer 
 still closes. A defined term in a link title or alt text shows its term but is not the
 definition's anchor.
 
-HTML comments are dropped (§8.6). Raw HTML is dropped and counted for a `raw-html` Warning
+HTML comments are dropped (§8.6). Every HTML tag is dropped and counted for a `raw-html` Warning
 (§8.7).
 
-Until the validator's model keeps them, some structure is rendered as the validator holds it
-(see `CONFORMANCE.md`):
+The builder never works around the validator's model. Where the model loses or misreads
+something, the output follows the model, and the gap is listed in `CONFORMANCE.md` and filed on
+the validator:
 - lists have one level of items
 - table column alignment is not kept
 - a paragraph's line breaks are joined
+- the text between an HTML block's tags stays
+- content after a `Signature Block` heading is dropped
+
+Guessing at lost structure was tried, and it traded each gap for new bugs.
 
 ### 4. Resolve (`resolve/`)
 

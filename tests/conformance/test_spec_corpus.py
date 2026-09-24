@@ -95,8 +95,9 @@ def test_template_decision_is_the_validators(path: Path) -> None:
     """The renderer's copy of the validator's template formula must give the
     validator's own answer (validator_bridge._is_template, roadmap U3)."""
     from legaldown import parse_document
+    from validator_spy import validator_template
 
-    from legaldown_render.validator_bridge import placed_markers, validator_template
+    from legaldown_render.validator_bridge import placed_markers
 
     try:
         document = parse_document(path.read_text(encoding="utf-8"))
