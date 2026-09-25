@@ -432,10 +432,12 @@ def test_assembly_errors_refuse_the_render(answers: dict, rule: str) -> None:
 
 
 def test_a_template_with_errors_is_not_assembled() -> None:
-    broken = TEMPLATE.replace("{{ref: disputes}}", "{{ref: nowhere}}")
+    broken = TEMPLATE.replace("{{ref: disputes}}", "{{ref: nowhere}}").replace("# Relief", "# Relief\n\n# Привет")
     with pytest.raises(RenderRefused, match="only a template without errors") as caught:
         render(broken, answers=ANSWERS)
-    assert "ref-broken" in {d.rule for d in caught.value.diagnostics}
+    levels = {d.rule: d.level for d in caught.value.diagnostics}
+    assert levels.get("ref-broken") == "error"
+    assert "warning" in levels.values()
 
 
 def test_unanswered_blanks_stay_and_the_final_check_catches_them() -> None:
@@ -807,6 +809,22 @@ def test_table_columns_keep_their_alignment() -> None:
     assert "<td>4</td>" in html
 
 
+def test_a_fence_s_indent_is_removed_from_its_lines() -> None:
+    html = render(FRONT + "# A\n\n   ```py\n   a\n  b\n     c\n   ```\n", standalone=False).output
+    assert '<code class="language-py">a\nb\n  c\n</code>' in html
+
+
+def test_a_fence_indented_four_columns_does_not_close_code() -> None:
+    html = render(FRONT + "# A\n\n```\ncode\n    ```\n", standalone=False).output
+    assert "<code>code\n    ```\n</code>" in html
+
+
+def test_a_section_s_level_is_its_number_s_depth() -> None:
+    html = render(FRONT + "## A\n\n### B\n", standalone=False, style="continental").output
+    assert '<section class="ld-section ld-level-1" id="a">\n<h2 class="ld-heading"><span class="ld-number">1.</span>' in html
+    assert '<section class="ld-section ld-level-2" id="b">\n<h3 class="ld-heading"><span class="ld-number">1.1</span>' in html
+
+
 def test_indented_code_renders_as_code_without_its_indent() -> None:
     html = render(FRONT + "# A\n\nPara.\n\n    code {{ref: x}}\n      deeper\n", standalone=False).output
     assert "<pre class=\"ld-code\"><code>code {{ref: x}}\n  deeper\n</code></pre>" in html
@@ -933,11 +951,11 @@ def test_table_rows_are_as_wide_as_the_header() -> None:
 
 
 def test_template_decision_matches_the_validator_on_the_test_documents() -> None:
+    from conftest import validator_template
     from legaldown import parse_document
-    from legaldown.validator.core import is_template
 
     from legaldown_render.validator_bridge import placed_markers
 
     for name in ("features", "template"):
         document = parse_document((DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8"))
-        assert placed_markers(document).template == is_template(document)
+        assert placed_markers(document).template == validator_template(document)

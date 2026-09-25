@@ -12,12 +12,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from . import __version__
 from .api import RenderOptions, render
 from .errors import DocumentError, InternalError, RenderRefused
 from .style import StyleError, builtin_styles, dump_style, load_style, parse_override
+from .validator_bridge import read_answers
 from .writers import FORMATS, format_for_path
 
 
@@ -93,7 +92,8 @@ def main(argv: list[str] | None = None) -> int:
 
     answers = None
     if args.answers:
-        answers, failure = _read_answers(args.answers)
+        # Read as legaldown-validator's `legaldown assemble` reads it (§15.7.1).
+        answers, failure = read_answers(Path(args.answers))
         if failure:
             print(f"legaldown-render: {failure}", file=sys.stderr)
             return 1
@@ -122,22 +122,6 @@ def main(argv: list[str] | None = None) -> int:
     else:
         sys.stdout.write(result.output)
     return 0
-
-
-def _read_answers(path: str) -> tuple[dict | None, str | None]:
-    """The answers set in *path* (§15.7.1): a YAML mapping (JSON is YAML
-    too), or a message saying why it cannot be read."""
-    try:
-        answers = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    except OSError as error:
-        return None, f"cannot read {path}: {error.strerror or error}"
-    except (yaml.YAMLError, ValueError) as error:  # ValueError: a date such as 2026-13-45
-        return None, f"cannot read the answers in {path}: {error}"
-    if answers is None:
-        return {}, None
-    if not isinstance(answers, dict):
-        return None, f"the answers in {path} must be a mapping of question ids to answers"
-    return answers, None
 
 
 def _report(name: str, diagnostics: list, *, quiet: bool) -> None:

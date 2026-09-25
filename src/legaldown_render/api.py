@@ -131,10 +131,11 @@ def _assemble(source: str, answers: Mapping[str, Any]) -> tuple[str, list[Diagno
     no output, or the answers do (``answer-invalid``, ``answer-missing``),
     or the template needs files a renderer below Full does not read
     (includes, LegalDown attachments, translations; §17.6)."""
-    errors = [d for d in validate_document(_parse(source)).diagnostics if d.level == "error"]
+    findings = validate_document(_parse(source)).diagnostics
+    errors = sum(1 for d in findings if d.level == "error")
     if errors:
-        raise RenderRefused(errors, f"Assembly refused: the template has {len(errors)} error(s), "
-                                    "and only a template without errors can be assembled (§15.7.2).")
+        raise RenderRefused(findings, f"Assembly refused: the template has {errors} error(s), "
+                                      "and only a template without errors can be assembled (§15.7.2).")
     try:
         result = assemble(source, answers)
     except AssemblyError as error:
@@ -143,7 +144,8 @@ def _assemble(source: str, answers: Mapping[str, Any]) -> tuple[str, list[Diagno
         errors = [d for d in result.diagnostics if d.level == "error"]
         raise RenderRefused(result.diagnostics, f"Assembly refused: {len(errors)} error(s) in the answers or "
                                                 "the template (§15.7).")
-    return normalize_source(result.output), list(result.diagnostics)
+    # The source was normalized, and assembly keeps its line breaks.
+    return result.output, list(result.diagnostics)
 
 
 def _parse(source: str) -> Document:

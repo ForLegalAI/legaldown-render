@@ -16,13 +16,26 @@ from dataclasses import dataclass
 from functools import cache
 
 from legaldown import Document
+from legaldown.cli import _read_answers as read_answers
 from legaldown.definitions import block_fragments
 from legaldown.directives import Lexed, lex
+from legaldown.markdown import FENCE_OPEN_RE, closes_fence, dedent, indent_width
 from legaldown.validator.core import is_template
 from legaldown.validator.templates import block_quotes
 from legaldown.validator.units import FoundMarker, find_markers
 
-__all__ = ["PlacedMarkers", "block_fragments", "block_quotes", "lex", "placed_markers"]
+__all__ = [
+    "FENCE_OPEN_RE",
+    "PlacedMarkers",
+    "block_fragments",
+    "block_quotes",
+    "closes_fence",
+    "dedent",
+    "indent_width",
+    "lex",
+    "placed_markers",
+    "read_answers",
+]
 
 
 @dataclass(frozen=True, slots=True)

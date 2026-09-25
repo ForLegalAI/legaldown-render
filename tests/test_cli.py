@@ -57,7 +57,7 @@ def test_answers_file(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> Non
 
 @pytest.mark.parametrize(("content", "message"), [
     (None, "cannot read"),
-    ("- a list\n", "must be a mapping"),
+    ("- a list\n", "mapping"),
     ("date: 2026-13-45\n", "cannot read the answers"),
 ])
 def test_unreadable_answers_exit_1(capsys: pytest.CaptureFixture[str], tmp_path: Path, content: str | None,

@@ -200,10 +200,10 @@ class Resolver:
         if not settings.enabled:
             return ()
         entries = [
-            ContentsEntry(section.depth, section.label, unlinked(section.title), section.anchor,
+            ContentsEntry(section.level, section.label, unlinked(section.title), section.anchor,
                           section.condition_label)
             for section in sections
-            if section.depth <= settings.depth
+            if section.level <= settings.depth
         ]
         if settings.attachments and attachments:
             # Under the attachments heading, unless a style blanks its label.
@@ -259,14 +259,16 @@ class Resolver:
         so a rendered number and a reference to it always agree with the
         validator: alternatives share a number (§15.8), and a skipped
         heading level counts as 1. The style only formats them, the n-th
-        part of a number ("2.1" has two) with the n-th level format.
+        part of a number ("2.1" has two) with the n-th level format. A
+        section's rendered level is how many parts its number has, so its
+        number format, heading, and heading style always go together.
         """
         levels = heading_levels(self.style.numbering)
         presences: dict[int, Presence] = {}  # level -> presence of the open section
         out: list[Section] = []
         for section, indexed in zip(self.tree.sections, self.result.sections, strict=True):
-            # Stored clamped to 1-5 (§4.1), so every writer nests the section
-            # where the validator reads it.
+            # The heading's own level, clamped to 1-5 (§4.1), decides which
+            # sections enclose it, and so its presence (§15.3).
             level = min(max(section.level, 1), 5)
             enclosing = max((lvl for lvl in presences if lvl < level), default=None)
             presences = {lvl: p for lvl, p in presences.items() if lvl < level}
@@ -285,8 +287,8 @@ class Resolver:
                 label = fill(fmt.label, n=format_counter(parts[-1], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
             self._register(section.identifier, _Target(designation, anchor))
-            out.append(replace(section, level=level, label=label, designation=designation, anchor=anchor,
-                               depth=len(parts)))
+            out.append(replace(section, level=min(len(parts), 5), label=label, designation=designation,
+                               anchor=anchor))
         return out
 
     def _presence(self, condition: str) -> Presence:

@@ -28,3 +28,25 @@ def spec_root() -> Path | None:
         if candidate and (Path(candidate) / "fixtures").is_dir():
             return Path(candidate)
     return None
+
+
+def validator_template(document: object) -> bool:
+    """The template decision validate_document itself makes: what its own
+    call to is_template returns, captured. The renderer asks is_template
+    too; this checks that validate_document still decides the same way."""
+    from unittest import mock
+
+    from legaldown import validate_document
+    from legaldown.validator import core
+
+    seen: list[bool] = []
+    original = core.is_template
+
+    def spy(*args: object, **kwargs: object) -> bool:
+        seen.append(original(*args, **kwargs))
+        return seen[-1]
+
+    with mock.patch.object(core, "is_template", spy):
+        validate_document(document)
+    assert seen, "validate_document no longer calls is_template; update this helper"
+    return seen[-1]

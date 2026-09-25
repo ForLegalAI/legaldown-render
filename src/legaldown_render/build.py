@@ -57,15 +57,22 @@ from .tree import (
     Table,
     Text,
 )
-from .validator_bridge import block_fragments, block_quotes, lex, placed_markers
+from .validator_bridge import (
+    FENCE_OPEN_RE,
+    block_fragments,
+    block_quotes,
+    closes_fence,
+    dedent,
+    indent_width,
+    lex,
+    placed_markers,
+)
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
 # Leads the sentinel of source that renders nothing (a {{def:}}). It is
 # Unicode punctuation, so an emphasis closer just before it still counts as
 # right-flanking and closes (CommonMark); a bare sentinel reads like a letter.
 _HIDDEN_LEAD = "\u2e31"
-# A fenced code block's opening line (validator's model keeps the fences).
-_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 # Stand where inline HTML or a comment was dropped, until _merge_text joins
 # the text around them. A dropped line break (<br>) still parts two words.
 _DROPPED = Text("")
@@ -404,7 +411,7 @@ class _Builder:
                 offset, identifier, condition = placed[index]
                 item = _cut_marker(item, offset)
             first, _, rest = item.partition("\n")
-            if first.lstrip().startswith(">") or _FENCE_RE.match(first):
+            if first.lstrip().startswith(">") or FENCE_OPEN_RE.match(first):
                 # The item opens with a quote or code, whose lines the
                 # validator keeps as written (a drafting note included).
                 blocks = self.fragment(item)
@@ -494,28 +501,20 @@ def _paragraph_source(block: ModelBlock) -> str:
 
 
 def _code_block(text: str) -> CodeBlock:
-    """A code block from the validator's model: fenced, fences included,
-    or indented, each line by four columns (CommonMark)."""
+    """A code block from the validator's model, read by the validator's
+    CommonMark rules: an indented block loses four columns from each line;
+    a fenced one loses its fences, and from each line as much indentation
+    as its opening fence had."""
     lines = text.split("\n")
-    opening = _FENCE_RE.match(lines[0]) if lines else None
+    opening = FENCE_OPEN_RE.match(lines[0]) if lines else None
     if opening is None:
-        return CodeBlock("\n".join(_unindent(line) for line in lines) + "\n")
-    fence = opening.group(1)
+        return CodeBlock("\n".join(dedent(line, 4) for line in lines) + "\n")
     body = lines[1:]
-    if body and body[-1].strip().startswith(fence[0] * len(fence)) and not body[-1].strip().strip(fence[0]):
+    if body and closes_fence(body[-1], opening.group("fence")):
         body = body[:-1]
-    return CodeBlock("\n".join(body) + ("\n" if body else ""), opening.group(2).strip())
-
-
-def _unindent(line: str) -> str:
-    """*line* without an indented code block's four columns of
-    indentation, a tab counting to the next multiple of four."""
-    column = 0
-    for index, char in enumerate(line):
-        if column >= 4 or char not in " \t":
-            return line[index:]
-        column = column + 4 - column % 4 if char == "\t" else column + 1
-    return ""
+    indent = indent_width(lines[0])
+    body = [dedent(line, indent) for line in body]
+    return CodeBlock("\n".join(body) + ("\n" if body else ""), lines[0][opening.end():].strip())
 
 
 def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
