@@ -399,6 +399,53 @@ def test_a_colon_ending_in_a_no_break_space_keeps_it_after_date_and_place() -> N
     assert "\nDate \u2013\xa0\n" in output and "\nPlace \u2013\xa0\n" in output
 
 
+TEMPLATE = (DOCUMENTS / "template.lgd").read_text(encoding="utf-8")
+ANSWERS = {"client-name": "Beta Ltd", "fee": "5000.00", "non-solicit": False, "forum": "arbitration"}
+
+
+def test_a_template_with_answers_renders_its_assembled_document() -> None:
+    result = render(TEMPLATE, answers=ANSWERS, format="text")
+    assert not result.tree.is_template
+    assert "Consulting Agreement with Beta Ltd" in result.output
+    assert "Non-Solicitation" not in result.output
+    assert "Disputes are resolved by arbitration." in result.output
+    assert "courts" not in result.output
+    assert "a competent court or an emergency arbitrator" in result.output
+    assert "Drafting note" not in result.output and "partner in charge" not in result.output
+    assert "Only if" not in result.output
+
+
+def test_assembly_warnings_are_reported_with_the_rest() -> None:
+    result = render(TEMPLATE, answers={**ANSWERS, "stray": "x"}, format="text")
+    assert "answer-unknown" in {d.rule for d in result.diagnostics}
+    assert result.ok
+
+
+@pytest.mark.parametrize(("answers", "rule"), [
+    ({key: value for key, value in ANSWERS.items() if key != "forum"}, "answer-missing"),
+    ({**ANSWERS, "forum": "mediation"}, "answer-invalid"),
+])
+def test_assembly_errors_refuse_the_render(answers: dict, rule: str) -> None:
+    with pytest.raises(RenderRefused, match="Assembly refused") as caught:
+        render(TEMPLATE, answers=answers)
+    assert rule in {d.rule for d in caught.value.diagnostics}
+
+
+def test_a_template_with_errors_is_not_assembled() -> None:
+    broken = TEMPLATE.replace("{{ref: disputes}}", "{{ref: nowhere}}")
+    with pytest.raises(RenderRefused, match="only a template without errors") as caught:
+        render(broken, answers=ANSWERS)
+    assert "ref-broken" in {d.rule for d in caught.value.diagnostics}
+
+
+def test_unanswered_blanks_stay_and_the_final_check_catches_them() -> None:
+    answers = {key: value for key, value in ANSWERS.items() if key != "fee"}
+    result = render(TEMPLATE, answers=answers, format="text", final=True)
+    assert "[_____]" in result.output
+    assert "placeholder-unfilled" in {d.rule for d in result.diagnostics}
+    assert "template-construct-present" not in {d.rule for d in result.diagnostics}
+
+
 def test_final_check_reports_blanks_and_template_constructs() -> None:
     body = "# A\n\nPay {{placeholder: fee, type=text}}.\n\n> [!DRAFTING]\n> Check the fee.\n"
     assert not {"placeholder-unfilled", "template-construct-present"} & {d.rule for d in render(FRONT + body).diagnostics}

@@ -13,6 +13,10 @@ This page describes how the renderer is built. The decisions behind it are in
       │  normalize_source(): strip BOM, unify line endings
       ▼
  ┌─────────────────────────┐
+ │ 2. Assemble (answers)   │  only with an answers set: legaldown-validator's assemble() turns
+ └───────────┬─────────────┘  the template into its assembled document, which the rest renders
+             ▼
+ ┌─────────────────────────┐
  │ 1. Parse & validate     │  legaldown-validator: Document, ValidationResult (Core diagnostics,
  └───────────┬─────────────┘  resolved identifiers, party/side/definition/attachment lookups)
              ▼
@@ -31,9 +35,20 @@ This page describes how the renderer is built. The decisions behind it are in
  RenderResult(output, diagnostics, format, tree, style)
 ```
 
-Stage 2, assembly with an answers set (§15.7), is not implemented. It belongs in the core
-package, and `legaldown-validator` 0.2.0 does not provide it yet ([roadmap](roadmap.md)). A
-template is always rendered as its **template view** (§15.8).
+Stage 2, **assembly** with an answers set (§15.7), runs only when the job has answers, before
+the document is parsed for rendering. A template rendered with answers is assembled first and the
+assembled document rendered; without answers, it renders as its **template view** (§15.8).
+Assembly is the core package's (`legaldown.assemble`), exact to the byte as §15.7.2 requires; the
+renderer only decides when to refuse:
+
+- the template has Errors: §15.7.2 defines assembly only for a template without them
+- the answers do (`answer-invalid`, `answer-missing`)
+- the template needs other files (include fragments, LegalDown attachment files, translations),
+  which the renderer does not read below the Full level (§17.6)
+
+A refusal raises `RenderRefused` with the findings. Assembly Warnings, such as `answer-unknown`,
+are reported with the rest. Blanks left unanswered stay, and render as blanks: the result is a
+draft (§15.1), which `--final` reports.
 
 `api.render()` runs the pipeline. Each stage returns frozen values. Only stage 4 reads the style's
 semantic settings, and only stage 5 knows about file formats.

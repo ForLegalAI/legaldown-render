@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from . import __version__
 from .api import RenderOptions, render
 from .errors import DocumentError, InternalError, RenderRefused
@@ -47,6 +49,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--locale", help="formatting locale, e.g. en-US or cs-CZ (default: the style's, else the document language)")
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
+    parser.add_argument("--answers", metavar="FILE",
+                        help="a YAML or JSON answers set (§15.7.1): the template is assembled with it and the "
+                             "assembled document rendered")
     parser.add_argument("--final", action="store_true",
                         help="the document is meant for signature: a remaining blank, questions key, condition, "
                              "choice, or drafting note is an error (§15.9); with --strict, it is refused")
@@ -86,8 +91,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"legaldown-render: cannot read {name}: {error.strerror or error}", file=sys.stderr)
         return 1
 
+    answers = None
+    if args.answers:
+        answers, failure = _read_answers(args.answers)
+        if failure:
+            print(f"legaldown-render: {failure}", file=sys.stderr)
+            return 1
+
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,
-                            strict=args.strict, final=args.final, standalone=not args.fragment)
+                            strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment)
     try:
         result = render(source, options)
     except StyleError as error:
@@ -110,6 +122,22 @@ def main(argv: list[str] | None = None) -> int:
     else:
         sys.stdout.write(result.output)
     return 0
+
+
+def _read_answers(path: str) -> tuple[dict | None, str | None]:
+    """The answers set in *path* (§15.7.1): a YAML mapping (JSON is YAML
+    too), or a message saying why it cannot be read."""
+    try:
+        answers = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except OSError as error:
+        return None, f"cannot read {path}: {error.strerror or error}"
+    except (yaml.YAMLError, ValueError) as error:  # ValueError: a date such as 2026-13-45
+        return None, f"cannot read the answers in {path}: {error}"
+    if answers is None:
+        return {}, None
+    if not isinstance(answers, dict):
+        return None, f"the answers in {path} must be a mapping of question ids to answers"
+    return answers, None
 
 
 def _report(name: str, diagnostics: list, *, quiet: bool) -> None:

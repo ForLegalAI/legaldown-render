@@ -11,18 +11,19 @@ class RenderError(Exception):
 
 
 class DocumentError(RenderError):
-    """The document cannot be read at all, e.g. its frontmatter is not a
-    YAML mapping."""
+    """The document cannot be read at all, e.g. its frontmatter is not
+    valid YAML."""
 
 
 class RenderRefused(RenderError):
-    """Rendering was refused because the document has errors and strict
-    mode is on. ``diagnostics`` holds every finding."""
+    """Rendering was refused: the document has errors and strict mode is on,
+    or a template could not be assembled with its answers (§15.7).
+    ``diagnostics`` holds every finding."""
 
-    def __init__(self, diagnostics: list[Diagnostic]) -> None:
+    def __init__(self, diagnostics: list[Diagnostic], reason: str | None = None) -> None:
         self.diagnostics = diagnostics
         errors = sum(1 for diagnostic in diagnostics if diagnostic.level == "error")
-        super().__init__(f"Rendering refused in strict mode: the document has {errors} error(s).")
+        super().__init__(reason or f"Rendering refused in strict mode: the document has {errors} error(s).")
 
 
 class InternalError(RenderError):

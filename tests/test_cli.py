@@ -42,6 +42,33 @@ def test_final_with_strict_exits_1(capsys: pytest.CaptureFixture[str], tmp_path:
     assert "template-construct-present" in capsys.readouterr().err
 
 
+def test_answers_file(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    template = str(DOCUMENTS / "template.lgd")
+    answers = tmp_path / "answers.yaml"
+    answers.write_text("client-name: Beta Ltd\nfee: '5000.00'\nnon-solicit: false\nforum: courts\n", encoding="utf-8")
+    assert main([template, "--answers", str(answers), "-f", "text", "-q"]) == 0
+    output = capsys.readouterr().out
+    assert "Disputes are resolved by the courts." in output and "arbitration" not in output
+
+    answers.write_text("forum: mediation\n", encoding="utf-8")
+    assert main([template, "--answers", str(answers), "-f", "text"]) == 1
+    assert "answer-invalid" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("content", "message"), [
+    (None, "cannot read"),
+    ("- a list\n", "must be a mapping"),
+    ("date: 2026-13-45\n", "cannot read the answers"),
+])
+def test_unreadable_answers_exit_1(capsys: pytest.CaptureFixture[str], tmp_path: Path, content: str | None,
+                                   message: str) -> None:
+    answers = tmp_path / "answers.yaml"
+    if content is not None:
+        answers.write_text(content, encoding="utf-8")
+    assert main([str(DOCUMENTS / "template.lgd"), "--answers", str(answers)]) == 1
+    assert message in capsys.readouterr().err
+
+
 def test_print_and_list_styles(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--print-style", "--style", "continental", "--set", "locale=de"]) == 0
     printed = capsys.readouterr().out

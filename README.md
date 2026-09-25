@@ -31,8 +31,9 @@ gives "1. června 2026", "10 000,00 Kč", and "12 měsíců", and amounts are ne
 🎨 **Applies a style template**, so the same source renders as a US-style contract or a
 continental one without editing the text (§13.7).
 
-📝 **Shows templates as templates.** Conditional clauses are marked, every `{{choose:}}` phrase is
-shown, drafting notes are styled, and placeholders render as blanks (§15.8).
+📝 **Shows templates as templates, or fills them in.** Without answers, conditional clauses are
+marked, every `{{choose:}}` phrase is shown, drafting notes are styled, and placeholders render as
+blanks. With an answers set, the template is assembled and the finished document rendered (§15.8).
 
 🚩 **Never hides a problem.** Anything unresolved renders as a visible marker, such as
 `[BROKEN REF: id]`, and is reported with the specification's stable rule id. Nothing is dropped
@@ -63,12 +64,14 @@ legaldown-render contract.lgd --set numbering.scheme=legal-outline --set enumera
 legaldown-render contract.lgd --set contents.enabled=true --set contents.depth=3   # table of contents
 legaldown-render contract.lgd --strict                          # refuse if the document has errors
 legaldown-render contract.lgd --final --strict                  # refuse if blanks or template constructs remain
+legaldown-render template.lgd --answers answers.yaml -o nda.html # fill in a template, then render it
 legaldown-render --print-style --style continental              # every setting, as YAML
 ```
 
 Diagnostics go to stderr, one per line with its rule id. The exit code is 0 when the document
-rendered, even if it has errors (they show as markers), 1 when rendering was refused or the file
-cannot be read, and 2 for an invalid style or setting.
+rendered, even if it has errors (they show as markers), 1 when rendering was refused (strict mode,
+or a template that cannot be assembled with its answers) or a file cannot be read, and 2 for an
+invalid style or setting.
 
 ## Python
 
@@ -81,8 +84,9 @@ for diagnostic in result.diagnostics:
 open("contract.html", "w").write(result.output)
 ```
 
-`render()` also accepts a `RenderOptions`. Problems in the document never raise. Only an invalid
-style (`StyleError`), an unreadable document (`DocumentError`), or strict mode
+`render()` also accepts a `RenderOptions`. Pass `answers={...}` to render a template filled in.
+Problems in the document never raise. Only an invalid style (`StyleError`), an unreadable document
+(`DocumentError`), strict mode, or a template that cannot be assembled with its answers
 (`RenderRefused`) do.
 
 ## Styles and preferences
@@ -101,8 +105,8 @@ definitions: { style: small-caps }
 typography: { font_family: "Georgia, serif", justify: true }
 ```
 
-**Render options** say what one job does: the output format, strict mode, the final check, a full
-page or an HTML fragment. Values layer in this order: built-in defaults, then the `extends` chain, then your
+**Render options** say what one job does: the output format, strict mode, the final check, the
+answers to a template, a full page or an HTML fragment. Values layer in this order: built-in defaults, then the `extends` chain, then your
 style, then per-job `--set` overrides. Every value is validated before rendering starts. See
 [Styles and preferences](docs/style-templates.md).
 

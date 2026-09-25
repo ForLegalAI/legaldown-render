@@ -44,7 +44,8 @@ At Rendering level (§17.3) the renderer MUST:
 - apply the party and side display rules (§3.6)
 - produce at least one of PDF, DOCX, or HTML (§13.6)
 - strip comments (§8.6)
-- render the template view when a template is rendered without answers (§15.8)
+- render the template view when a template is rendered without answers, and assemble it first
+  when it is rendered with answers (§15.8)
 
 List enumeration (§13.2), style templates (§13.7), and signature blocks (§2.2) are SHOULD. We
 plan to support all three, because a legal renderer without them is not usable in practice.

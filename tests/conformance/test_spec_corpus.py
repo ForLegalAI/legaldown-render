@@ -104,3 +104,29 @@ def test_template_decision_is_the_validators(path: Path) -> None:
     except Exception:
         pytest.skip("not a readable document")
     assert placed_markers(document).template == is_template(document)
+
+
+ASSEMBLY = sorted(path for path in (SPEC / "fixtures" / "assembly").iterdir() if path.is_dir()) \
+    if (SPEC / "fixtures" / "assembly").is_dir() else []
+
+
+@pytest.mark.parametrize("case", ASSEMBLY, ids=lambda case: case.name)
+def test_rendering_with_answers_renders_the_assembled_document(case: Path) -> None:
+    """A template rendered with answers is its assembled document rendered
+    (§15.8); a case that needs Full, reading other files, is refused."""
+    import yaml
+
+    from legaldown_render import RenderRefused
+
+    template = (case / "template.lgd").read_text(encoding="utf-8")
+    answers = yaml.safe_load((case / "answers.yaml").read_text(encoding="utf-8")) or {}
+    level = json.loads((case / "case.json").read_text(encoding="utf-8")).get("requires_level") \
+        if (case / "case.json").exists() else "core"
+    if level == "full":
+        with pytest.raises(RenderRefused):
+            render(template, answers=answers)
+        return
+    expected = (case / "expected.lgd").read_text(encoding="utf-8")
+    for output_format in ("text", "html"):
+        assert render(template, answers=answers, format=output_format).output == \
+            render(expected, format=output_format).output

@@ -15,7 +15,7 @@ here.
 | U3 | validator | **Public API** ([#26](https://github.com/ForLegalAI/legaldown-validator/issues/26)) for what the renderer imports from submodules (all in `validator_bridge.py`): the lexer, markers, frontmatter splitting, value checks, conditions, `IDENTIFIER_RE`, `KNOWN_CURRENCIES`, the frontmatter fields it reads. Better still, expose the validator's own **placed markers** and **template decision**, so the renderer uses them instead of mirroring those rules | Partly done: the template decision is the validator's `is_template()` (not yet public). Until the rest is public, the dependency is pinned to one minor version |
 | U1b | validator | **Parser gaps** the renderer inherits. List markers (#21), tables (#22), comments and HTML blocks (#23), the signature-block cutoff (#24), empty comments (#28), and indented code (#9) are fixed in [validator#49](https://github.com/ForLegalAI/legaldown-validator/pull/49). Still open: hard breaks ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)), indented code in quotes and items ([#41](https://github.com/ForLegalAI/legaldown-validator/issues/41)), tables without a leading pipe ([#44](https://github.com/ForLegalAI/legaldown-validator/issues/44)), empty list items ([#46](https://github.com/ForLegalAI/legaldown-validator/issues/46)) | Partly done. The renderer adopts #49 when it is released. Listed in `CONFORMANCE.md` |
 | U4a | validator | **Specification 0.2** (templates, §15) | Done in 0.2.0 |
-| U4b | validator | Template **assembly** with an answers set (§15.7, [#30](https://github.com/ForLegalAI/legaldown-validator/issues/30)) | Open. It blocks rendering templates with answers |
+| U4b | validator | Template **assembly** with an answers set (§15.7, [#30](https://github.com/ForLegalAI/legaldown-validator/issues/30)) | Done in [validator#55](https://github.com/ForLegalAI/legaldown-validator/pull/55); the renderer uses it (v0.2) |
 | U5 | specification | A **rendering fixtures corpus**: source + style settings → expected plain-text output | Not started. The plain-text writer is designed to be its oracle |
 
 ## Milestones
@@ -36,8 +36,9 @@ here.
 
 ### v0.2 — Templates with answers
 
-- Rendering with an answers set, through the core package's assembly (U4b)
-- `--answers answers.yaml` on the CLI
+- Rendering with an answers set, through the core package's assembly (U4b): done
+- `--answers answers.yaml` on the CLI: done
+- Released together with the validator release that ships the CommonMark block model and assembly
 
 ### v0.3 — DOCX
 

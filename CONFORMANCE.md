@@ -21,6 +21,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Party and side display rules (§3.6) | ✅ |
 | At least one output format (§13.6) | ✅ HTML (recommended) and plain text (optional) |
 | Comment stripping (§8.6) | ✅ Inline comments, and comment blocks across any number of lines. As in CommonMark, a comment block left unclosed runs to the end of the document |
+| Templates with answers (§15.8) | ✅ Assembled first with `legaldown-validator`'s Assembly capability (§15.7), then rendered: `answers=` / `--answers answers.yaml`. A template that needs other files is refused (see below) |
 | Template view without answers (§15.8) | ✅ Conditions marked with style-defined labels; every `{{choose:}}` phrase shown as `[a / b]`; drafting notes styled; alternatives share a number |
 | `{{attach:}}` resolves to the declared title without reading the file | ✅ Linked to an attachment placeholder, or to the file when placeholders are omitted |
 
@@ -42,8 +43,9 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 
 ## Known limitations
 
-- **Templates with answers.** Assembly (§15.7) is a Core capability that `legaldown-validator`
-  0.2.0 does not provide yet, so a template always renders as its template view.
+- **Assembly reads no other files.** A template with include fragments, LegalDown attachment
+  files, or `translations` is refused when rendered with answers, as §17.6 requires below Full.
+  A template with Errors is refused too, since §15.7.2 defines no output for one.
 - **Diagnostics have no line numbers**, because the validator's diagnostics do not carry them yet.
 - **Malformed directives** (a §11.2 grammar violation) render their type's marker without a value,
   for example `[INVALID AMOUNT]`. The specification defines no marker for this case.
