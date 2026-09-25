@@ -887,10 +887,10 @@ def test_table_rows_are_as_wide_as_the_header() -> None:
 
 def test_template_decision_matches_the_validator_on_the_test_documents() -> None:
     from legaldown import parse_document
-    from validator_spy import validator_template
+    from legaldown.validator.core import is_template
 
     from legaldown_render.validator_bridge import placed_markers
 
     for name in ("features", "template"):
         document = parse_document((DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8"))
-        assert placed_markers(document).template == validator_template(document)
+        assert placed_markers(document).template == is_template(document)

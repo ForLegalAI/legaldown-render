@@ -30,7 +30,8 @@ The render tree is built **from the validator's `Document` only**:
 - **Block structure:** sections, blocks, list items, quotes, tables, and code all come from the
   validator's model.
 - **Markers:** placed exactly where the validator's own `find_markers()` places them.
-- **Template decision:** the validator's own formula over those markers.
+- **Template decision:** the validator's own formula over those markers. Since the validator
+  exposed it as `is_template()`, the renderer calls it instead of keeping a copy.
 - **Quote content, and code inside list items:** read with the validator's parser too.
 
 markdown-it-py stays, in **inline mode only**, for the Markdown inside one block's text: emphasis,

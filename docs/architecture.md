@@ -64,7 +64,7 @@ never decides a structural or LegalDown question itself:
 | Sections, headings, identifiers | `Document.sections`, `ValidationResult.sections` |
 | Blocks: paragraphs, lists and items, quotes, tables, code, rules | `Document` blocks; quote content and code inside items are read by the validator's parser too |
 | Where a marker (`{#id when=…}`) is placed, and what it means | The validator's `find_markers()`, with its own `placed(template)` |
-| Whether the document is a template | The validator's own formula over those markers |
+| Whether the document is a template | The validator's `is_template()`, over those markers |
 | Whether a quote is a drafting note | The validator's `block_quotes()` |
 | A lifted definition, `{{ref:}}` or `{{term:}}` block's source | The validator's `render_block()` |
 
