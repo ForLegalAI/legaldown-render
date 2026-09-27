@@ -764,10 +764,44 @@ def test_nested_lists_line_up_with_their_item_s_text() -> None:
     assert "1. one\n   more\n   (i) child" in output
 
 
-def test_a_list_nested_thousands_deep_is_a_document_error_not_a_crash() -> None:
-    body = "# A\n\n" + "".join("  " * depth + f"- l{depth}\n" for depth in range(1500))
-    with pytest.raises(DocumentError, match="too deeply"):
-        render(FRONT + body, format="html")
+def _nested_list(levels: int) -> str:
+    return "# A\n\n" + "".join("  " * depth + f"- l{depth}\n" for depth in range(levels))
+
+
+@pytest.mark.parametrize("output_format", ["html", "text"])
+def test_lists_and_quotes_nested_to_the_limit_render(output_format: str) -> None:
+    from legaldown_render.build import MAX_NESTING
+    assert "l99" in render(FRONT + _nested_list(MAX_NESTING), format=output_format).output
+    quotes = FRONT + "# A\n\n" + "> " * MAX_NESTING + "deepest\n"
+    assert "deepest" in render(quotes, format=output_format).output
+    with pytest.raises(DocumentError):
+        render(FRONT + "# A\n\n" + "> " * (MAX_NESTING + 1) + "deepest\n", format=output_format)
+
+
+def test_nesting_past_the_limit_is_refused_up_front() -> None:
+    import time
+
+    from legaldown_render.build import MAX_NESTING
+    with pytest.raises(DocumentError, match=f"more than {MAX_NESTING} levels"):
+        render(FRONT + _nested_list(MAX_NESTING + 1))
+    start = time.monotonic()
+    with pytest.raises(DocumentError, match="levels deep"):
+        render(FRONT + "# A\n\n" + "> " * 2000 + "x\n")
+    assert time.monotonic() - start < 10
+
+
+def test_a_list_of_empty_items_renders_nothing() -> None:
+    output = text("# A\n\n- \n  - \n\nAfter.\n")
+    assert "1. A\n\nAfter." in output
+
+
+def test_sibling_lists_in_one_item_never_share_a_designation() -> None:
+    body = "# A\n\n- one\n  1. sub a {#x}\n  - sub b {#y}\n\nSee {{ref: x}} and {{ref: y}}.\n"
+    output = text(body, overrides={"enumeration.ordered": "enumerate"})
+    assert "(a) one\n    (i) sub a\n    (ii) sub b" in output
+    assert "See 1(a)(i) and 1(a)(ii)." in output
+    # Lists in different formats are told apart by their format already.
+    assert "See 1(a)(1) and 1(a)(i)." in text(body)
 
 
 def test_a_later_paragraph_in_a_list_item_is_the_item_s() -> None:

@@ -109,17 +109,13 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
-    try:
-        tree, extra = _resolve(document, result, style)
-        diagnostics += [d for d in extra if d not in diagnostics]
-        if options.strict and any(d.level == "error" for d in diagnostics):
-            raise RenderRefused(diagnostics)
-        assert_resolved(tree)
-        output = _writer(options, style).write(tree)
-    except RecursionError as error:
-        # Lists and quotes nested thousands deep: the tree is walked
-        # recursively, as deep as the document nests.
-        raise DocumentError("The document nests lists or quotes too deeply to render.") from error
+    tree, extra = _resolve(document, result, style)
+    diagnostics += [d for d in extra if d not in diagnostics]
+    if options.strict and any(d.level == "error" for d in diagnostics):
+        raise RenderRefused(diagnostics)
+
+    assert_resolved(tree)
+    output = _writer(options, style).write(tree)
     return RenderResult(output, diagnostics, options.format, tree, style)
 
 

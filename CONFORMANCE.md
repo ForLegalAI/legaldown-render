@@ -47,6 +47,8 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   files, or `translations` is refused when rendered with answers, as §17.6 requires below Full.
   A template with Errors is refused too, since §15.7.2 defines no output for one.
 - **Diagnostics have no line numbers**, because the validator's diagnostics do not carry them yet.
+- **Nesting limit.** Lists and quotes nested more than 100 levels deep, together, are refused
+  (`DocumentError`) before rendering starts, so that no document can exhaust the stack or the CPU.
 - **Malformed directives** (a §11.2 grammar violation) render their type's marker without a value,
   for example `[INVALID AMOUNT]`. The specification defines no marker for this case.
 - **One parser.** The renderer builds from the validator's document model only

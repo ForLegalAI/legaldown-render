@@ -376,7 +376,10 @@ class Resolver:
                 return block
 
     def _structure_list(self, block: List, *, section: Section | None, depth: int, parent: str,
-                        presence: Presence) -> List:
+                        presence: Presence, counters: dict[LevelFormat | None, _Counter] | None = None) -> List:
+        """*block* numbered under *parent*. Sibling lists nested in the same
+        item share *counters*: a second list in the same format goes on from
+        the first, so no two of their items get the same designation."""
         enumeration = self.style.enumeration
         fmt: LevelFormat | None
         if block.ordered and enumeration.ordered == "renumber":
@@ -387,7 +390,7 @@ class Resolver:
             fmt = None
         base = section.designation if section else ""
         items: list[ListItem] = []
-        counter = _Counter(self._exclusive)
+        counter = _Counter(self._exclusive) if counters is None else counters.setdefault(fmt, _Counter(self._exclusive))
         for item in block.items:
             index = counter.next(item.anchor_id, self._own_presence(item.condition, presence))
             # An item's nested blocks are present only when the item is.
@@ -402,8 +405,10 @@ class Resolver:
             anchor = self._anchor(item.anchor_id)
             if item.anchor_id and section is not None:
                 self._register(item.anchor_id, replace(target, anchor=anchor))
+            siblings: dict[LevelFormat | None, _Counter] = {}
             children = tuple(
-                self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner)
+                self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner,
+                                     counters=siblings)
                 if isinstance(child, List)
                 else self._structure(child, section=section, depth=depth + 1, presence=inner)
                 for child in item.blocks

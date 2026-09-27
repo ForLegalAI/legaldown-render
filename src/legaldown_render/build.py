@@ -32,7 +32,7 @@ from legaldown.markers import HTML_COMMENT_RE
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 
-from .errors import InternalError
+from .errors import DocumentError, InternalError
 from .tree import (
     Block,
     Code,
@@ -80,6 +80,15 @@ _HIDDEN_LEAD = "\u2e31"
 _DROPPED = Text("")
 _DROPPED_BREAK = Text("")
 _BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+#: How deep lists and quotes may nest, together. Far beyond any real
+#: document, and far enough below Python's recursion limit that resolving
+#: and writing the tree never reach it. Deeper documents are refused up
+#: front, before the work that grows with the depth.
+MAX_NESTING = 100
+# The quote markers that open a line: an upper bound on how deep the quotes
+# in a text nest, cheap to take before the validator reads them (its reading
+# costs more the deeper they go). Only a safety limit, never a reading.
+_QUOTE_MARKERS_RE = re.compile(r"^(?:[ \t]{0,3}>)+", re.MULTILINE)
 
 
 def normalize_source(source: str) -> str:
@@ -166,6 +175,7 @@ class _Builder:
         self.raw_html = 0
         self._dropped_html = False
         self.markers = placed_markers(document)
+        self.depth = 0  # quotes and list items the builder is inside
         nonce = secrets.token_hex(8)
         # A hidden sentinel has its own form ("h"), so the lead character is
         # taken only with one, never from the source before another sentinel.
@@ -403,13 +413,17 @@ class _Builder:
                 return Rule()
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List:
+    def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List | None:
         """A list, nested as the validator reads it. Its items are the
         validator's listed items, in order, each with its depth and the kind
         of the list it is in; they are block_fragments' fragments too, as a
         list block has no text, prefix, or suffix, so a marker's fragment
-        index is the item's index here."""
+        index is the item's index here. None when every item is empty."""
         listed = listed_items(block)
+        if not listed:
+            return None
+        nesting = [(level, kind) for _item, level, kind in listed]
+        self._check_depth(max(level for level, _kind in nesting) + 1)
         items: list[ListItem] = []
         for index, (item, _level, _kind) in enumerate(listed):
             identifier = condition = ""
@@ -417,7 +431,14 @@ class _Builder:
                 offset, identifier, condition = placed[index]
                 item = _cut_marker(item, offset)
             items.append(ListItem(blocks=self._item_blocks(item), anchor_id=identifier, condition=condition))
-        return _nest(items, [(level, kind) for _item, level, kind in listed])
+        return _nest(items, nesting)
+
+    def _check_depth(self, more: int) -> None:
+        """Refuse a document that nests lists and quotes deeper than
+        MAX_NESTING, *more* levels below where the builder is."""
+        if self.depth + more > MAX_NESTING:
+            raise DocumentError(f"The document nests lists and quotes more than {MAX_NESTING} levels deep, "
+                                "which is not rendered.")
 
     def _item_blocks(self, item: str) -> tuple[Block, ...]:
         first, _, rest = item.partition("\n")
@@ -431,6 +452,8 @@ class _Builder:
         """A block quote, its content read by the validator's parser. A
         drafting note is decided by the validator's own test (§15.6)."""
         text = block.text
+        self._check_depth(1 + max((match.group().count(">") for match in _QUOTE_MARKERS_RE.finditer(text)),
+                                  default=0))
         quotes = block_quotes(block)
         drafting = bool(quotes) and quotes[0].start == 0 and quotes[0].is_drafting_note
         if drafting:
@@ -443,11 +466,16 @@ class _Builder:
         validator's parser — as a body, so that text starting with ``---``
         is not frontmatter. No marker is placed there (§5.7), and a heading
         is not a section (§4.1)."""
-        inner = parse_document("\n" + text)
-        blocks = self.blocks(inner.preamble, None, markers=False)
-        for section in inner.sections:
-            blocks += (Paragraph((Strong(self.text(section.title)),)),)
-            blocks += self.blocks(section.blocks, None, markers=False)
+        self._check_depth(1)
+        self.depth += 1
+        try:
+            inner = parse_document("\n" + text)
+            blocks = self.blocks(inner.preamble, None, markers=False)
+            for section in inner.sections:
+                blocks += (Paragraph((Strong(self.text(section.title)),)),)
+                blocks += self.blocks(section.blocks, None, markers=False)
+        finally:
+            self.depth -= 1
         return blocks
 
     # -- document -------------------------------------------------------------
@@ -492,20 +520,19 @@ def _nest(items: list[ListItem], nesting: list[tuple[int, str]]) -> List:
         members[run].append(index)
         del last[level:]
         last.append(index)
-    nested: dict[int, list[List]] = {}  # item -> the lists nested in it, in order
-    built: dict[int, List] = {}
-    # A nested list starts after the item it is nested in, so its number is
-    # higher: building from the last list up, every nested list is ready
-    # before the item that holds it.
-    for run in sorted(members, reverse=True):
-        built[run] = List(
+    nested: dict[int, list[List]] = {}  # item -> the lists nested in it, last first
+    # list_runs numbers lists in order of their first item, and a nested list
+    # starts after the item holding it: from the last list back, every
+    # nested list is built before that item. The last one built is the top.
+    for run in reversed(members):
+        built = List(
             ordered=nesting[members[run][0]][1] == "ordered_list",
-            items=tuple(replace(items[i], blocks=items[i].blocks + tuple(reversed(nested.get(i, []))))
-                        for i in members[run]),
+            items=tuple(replace(items[i], blocks=items[i].blocks + tuple(reversed(nested[i]))) if i in nested
+                        else items[i] for i in members[run]),
         )
         if run in parent:
-            nested.setdefault(parent[run], []).append(built[run])
-    return built[0]
+            nested.setdefault(parent[run], []).append(built)
+    return built
 
 
 def _strip_markers(block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> tuple[ModelBlock, str, str]:
