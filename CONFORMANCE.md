@@ -29,7 +29,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 
 | Feature | Status |
 |---|---|
-| List enumeration (§13.2) | ✅ Configurable per depth; can be disabled. Ordered lists are always renumbered. Lists have one level until the validator keeps nesting (see below) |
+| List enumeration (§13.2) | ✅ Configurable per depth; can be disabled. Ordered lists are always renumbered. Nested lists keep their structure, so a nested item is referenced as "2.1(b)(i)" |
 | Paragraph numbering and section-qualified items (§13.2) | ✅ Style settings; the `continental` style uses both |
 | Style templates in a separate file (§13.7) | ✅ YAML, layered and validated; see [docs/style-templates.md](docs/style-templates.md) |
 | Signature blocks (§2.2) | ✅ One per party, with `legal_name` and each representative |
@@ -52,11 +52,8 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 - **One parser.** The renderer builds from the validator's document model only
   ([ADR 0007](docs/decisions/0007-one-parser-validator-model.md)). Anchors, markers, and the
   template view therefore always agree with the validator's diagnostics. The price is that some
-  structure renders as the validator's model holds it, until that model keeps more
-  ([legaldown-validator#14](https://github.com/ForLegalAI/legaldown-validator/issues/14),
-  roadmap U1–U2):
-  - **Nested lists** render as one level of items, so an item is referenced as "2.1(c)", never
-    "2.1(b)(i)" ([#14](https://github.com/ForLegalAI/legaldown-validator/issues/14), [#16](https://github.com/ForLegalAI/legaldown-validator/issues/16)). The resolver and writers already handle nesting.
+  structure renders as the validator's model holds it, until that model keeps more (roadmap
+  U1b–U2):
   - **Line breaks** within a paragraph are joined, and a backslash hard break shows as a literal
     backslash. Link reference definitions (`[label]: url`) are not resolved
     ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)).

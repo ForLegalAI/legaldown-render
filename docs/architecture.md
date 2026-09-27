@@ -105,7 +105,6 @@ stays. Each text that had a tag (a paragraph, a title, a table cell) counts once
 The builder never works around the validator's model. Where the model loses or misreads
 something, the output follows the model, and the gap is listed in `CONFORMANCE.md` and filed on
 the validator:
-- lists have one level of items
 - a paragraph's line breaks are joined
 - indented code inside a quote or a list item is paragraph text
 

@@ -10,7 +10,7 @@ here.
 
 | # | Where | Change | Status |
 |---|---|---|---|
-| U1 | validator | **Keep nested list structure** in the model ([#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)) | Open. Until then lists render with one level of items (ADR 0007); the resolver and writers already handle nesting |
+| U1 | validator | **Keep nested list structure** in the model ([#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)) | Done in [validator#61](https://github.com/ForLegalAI/legaldown-validator/pull/61); the renderer nests lists from it (v0.2) |
 | U2 | validator | **Source positions** (line numbers) on sections, blocks, and diagnostics ([#27](https://github.com/ForLegalAI/legaldown-validator/issues/27)) | Open. Diagnostics have no line numbers in either package |
 | U3 | validator | **Public API** ([#26](https://github.com/ForLegalAI/legaldown-validator/issues/26)) for what the renderer imports from submodules (all in `validator_bridge.py`): the lexer, markers, value checks, conditions, `is_template`, the CommonMark fence and indentation helpers, the answers-file reader, `IDENTIFIER_RE`, `KNOWN_CURRENCIES`. Better still, expose the validator's own **placed markers** and **template decision**, so the renderer uses them instead of mirroring those rules | Partly done: the template decision is the validator's `is_template()` (not yet public). Until the rest is public, the dependency is pinned to one minor version |
 | U1b | validator | **Parser gaps** the renderer inherits. List markers (#21), tables (#22), comments and HTML blocks (#23), the signature-block cutoff (#24), empty comments (#28), and indented code (#9) are fixed in [validator#49](https://github.com/ForLegalAI/legaldown-validator/pull/49). Still open: hard breaks ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)), indented code in quotes and items ([#41](https://github.com/ForLegalAI/legaldown-validator/issues/41)), tables without a leading pipe ([#44](https://github.com/ForLegalAI/legaldown-validator/issues/44)), empty list items ([#46](https://github.com/ForLegalAI/legaldown-validator/issues/46)) | Partly done. The renderer adopts #49 when it is released. Listed in `CONFORMANCE.md` |
@@ -24,7 +24,7 @@ here.
 
 - The full pipeline: parse and validate, build, resolve, write
 - All four numbering schemes; list enumeration; paragraph numbering; item and paragraph anchors
-  with designations ("2.1(b)"), one list level until U1
+  with designations ("2.1(b)")
 - Every directive, with every failure marker
 - Template view: conditions, `{{choose:}}`, drafting notes, alternatives sharing a number
 - Title block, attachment placeholders, signature blocks
@@ -38,7 +38,9 @@ here.
 
 - Rendering with an answers set, through the core package's assembly (U4b): done
 - `--answers answers.yaml` on the CLI: done
-- Released together with the validator release that ships the CommonMark block model and assembly
+- Nested lists, with designations such as "2.1(b)(i)" (U1)
+- Released together with the validator release that ships the CommonMark block model, nested
+  lists, and assembly
 
 ### v0.3 — DOCX
 

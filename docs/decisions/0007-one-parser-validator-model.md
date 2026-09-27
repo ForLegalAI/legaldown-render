@@ -60,5 +60,7 @@ module, `validator_bridge.py`. That module is the list for roadmap item U3.
   decision expects: the fix lands in the validator, and the renderer drops its workaround.
   Table alignment came with the same change.
 - When the validator keeps nested lists (#14), the renderer gains them with no parser of its
-  own. The resolver and writers already handle nested lists.
+  own. The resolver and writers already handle nested lists. This happened with validator #61:
+  the builder turns its listed items and their depths into nested lists, and "2.1(b)(i)"
+  replaced "2.1(c)".
 - The build stage is smaller: about 100 lines of position rules and special cases are gone.

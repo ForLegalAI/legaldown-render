@@ -16,8 +16,8 @@ syntax, and put back as tree nodes afterwards. The nonce is random for every
 build, so no text in a document — written out, as an entity, or
 percent-encoded — can pass for a sentinel.
 
-Until the validator keeps nested lists (ForLegalAI/legaldown-validator#14),
-lists render as the validator holds them: one level of items.
+Lists nest as the validator reads them: its listed items, each with a depth
+and the kind of its list (ForLegalAI/legaldown-validator#61).
 """
 from __future__ import annotations
 
@@ -65,6 +65,7 @@ from .validator_bridge import (
     dedent,
     indent_width,
     lex,
+    listed_items,
     placed_markers,
 )
 
@@ -402,23 +403,29 @@ class _Builder:
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
     def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List:
-        # Items are fragments after any text, prefix, and suffix, which a
-        # list block does not have.
-        items: list[ListItem] = []
-        for index, item in enumerate(item for item in block.items if item):
+        """A list, nested as the validator reads it. Its items are the
+        validator's listed items, in order, each with its depth and the kind
+        of the list it is in; they are block_fragments' fragments too, as a
+        list block has no text, prefix, or suffix, so a marker's fragment
+        index is the item's index here."""
+        entries: list[tuple[ListItem, int, str]] = []
+        for index, (item, level, kind) in enumerate(listed_items(block)):
             identifier = condition = ""
             if index in placed:
                 offset, identifier, condition = placed[index]
                 item = _cut_marker(item, offset)
-            first, _, rest = item.partition("\n")
-            if first.lstrip().startswith(">") or FENCE_OPEN_RE.match(first):
-                # The item opens with a quote or code, whose lines the
-                # validator keeps as written (a drafting note included).
-                blocks = self.fragment(item)
-            else:
-                blocks = (Paragraph(self.text(first)),) + (self.fragment(rest) if rest else ())
-            items.append(ListItem(blocks=blocks, anchor_id=identifier, condition=condition))
-        return List(ordered=block.kind == "ordered_list", items=tuple(items))
+            entries.append((ListItem(blocks=self._item_blocks(item), anchor_id=identifier, condition=condition),
+                            level, kind))
+        nested, _ = _nest(entries, 0, 0, block.kind)
+        return nested
+
+    def _item_blocks(self, item: str) -> tuple[Block, ...]:
+        first, _, rest = item.partition("\n")
+        if first.lstrip().startswith(">") or FENCE_OPEN_RE.match(first):
+            # The item opens with a quote or code, whose lines the validator
+            # keeps as written (a drafting note included).
+            return self.fragment(item)
+        return (Paragraph(self.text(first)),) + (self.fragment(rest) if rest.strip() else ())
 
     def quote(self, block: ModelBlock) -> Block:
         """A block quote, its content read by the validator's parser. A
@@ -466,6 +473,26 @@ class _Builder:
             sections=sections,
             is_template=self.markers.template,
         )
+
+
+def _nest(entries: list[tuple[ListItem, int, str]], start: int, level: int, kind: str) -> tuple[List, int]:
+    """The list of *kind* at depth *level* that starts at ``entries[start]``,
+    and where it ends. Deeper items form lists nested in the item before
+    them; at a depth below the top, an item of the other kind starts another
+    list (CommonMark)."""
+    items: list[ListItem] = []
+    index = start
+    while index < len(entries):
+        item, depth, item_kind = entries[index]
+        if depth < level or (depth == level and items and level and item_kind != kind):
+            break
+        if depth == level:
+            items.append(item)
+            index += 1
+        else:
+            nested, index = _nest(entries, index, depth, item_kind)
+            items[-1] = replace(items[-1], blocks=items[-1].blocks + (nested,))
+    return List(ordered=kind == "ordered_list", items=tuple(items)), index
 
 
 def _strip_markers(block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> tuple[ModelBlock, str, str]:

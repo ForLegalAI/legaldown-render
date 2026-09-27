@@ -70,14 +70,6 @@ def test_ordered_lists_are_renumbered() -> None:
     assert "1. first\n2. second" in output
 
 
-def test_nested_lists_render_flat_until_the_validator_keeps_them() -> None:
-    # One parser: lists are the validator's, which keeps one level of items
-    # (ForLegalAI/legaldown-validator#14).
-    output = text("# A\n\n- one {#one}\n  - nested {#nested}\n- two\n\nSee {{ref: nested}}.\n")
-    assert "(a) one\n(b) nested\n(c) two" in output
-    assert "See 1(b)." in output
-
-
 def test_ref_to_unenumerated_item_falls_back_with_warning() -> None:
     result = render(FRONT + NUMBERED, format="text", overrides={"enumeration.enabled": False})
     assert "See 1.1, 1.1, and 1.1." in result.output
@@ -765,11 +757,25 @@ def test_the_first_definition_in_document_order_keeps_the_anchor() -> None:
     assert 'id="def:fee"' not in sections
 
 
-def test_a_later_paragraph_in_a_list_item_is_the_validators_paragraph() -> None:
-    # The validator ends the list at the blank line and reads "second" as a
-    # top-level paragraph, whose marker it places; so does the renderer.
-    output = text("# A\n\n- item one\n\n  second {#sec}\n\nSee {{ref: sec}}.\n")
-    assert "(a) item one\n\nsecond\n\nSee 1." in output
+def test_a_later_paragraph_in_a_list_item_is_the_item_s() -> None:
+    # Indented after a blank line, "second" is the item's (CommonMark), so
+    # its marker is misplaced (§5.7) and a reference to it is broken, as the
+    # validator reports.
+    result = render(FRONT + "# A\n\n- item one\n\n  second {#sec}\n\nSee {{ref: sec}}.\n", format="text")
+    assert "(a) item one\n    second" in result.output
+    assert "[BROKEN REF: sec]" in result.output
+    assert {"anchor-misplaced", "ref-broken"} <= {d.rule for d in result.diagnostics}
+
+
+def test_nested_lists_keep_their_structure_and_designations() -> None:
+    body = ("# A\n\n- one\n  1. sub a {#suba}\n  2. sub b\n     - deep {#deep}\n  - bullet after ordered\n"
+            "- two\n\nSee {{ref: suba}} and {{ref: deep}}.\n")
+    output = text(body)
+    assert ("(a) one\n    1. sub a\n    2. sub b\n        (A) deep\n    (i) bullet after ordered\n(b) two"
+            in output)
+    assert "See 1(a)(1) and 1(a)(2)(A)." in output
+    html = render(FRONT + body, standalone=False).output
+    assert html.count("<ol") + html.count("<ul") == 4
 
 
 def test_a_level_six_heading_nests_where_its_number_puts_it() -> None:
@@ -835,7 +841,7 @@ def test_markers_and_references_agree_with_the_validators_diagnostics() -> None:
     cases = [
         ("1. item\n   ```\n   code\n   ```\n   after {#x}\n\nSee {{ref: x}}.\n", True),
         ("1. # Heading {#x}\n\nSee {{ref: x}}.\n", False),
-        ("- item one\n\n  second {#x}\n\nSee {{ref: x}}.\n", False),
+        ("- item one\n\n  second {#x}\n\nSee {{ref: x}}.\n", True),
     ]
     for body, broken in cases:
         source = FRONT + "# One\n\n" + body
