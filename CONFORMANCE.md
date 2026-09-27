@@ -57,6 +57,11 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   - **Line breaks** within a paragraph are joined, and a backslash hard break shows as a literal
     backslash. Link reference definitions (`[label]: url`) are not resolved
     ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)).
+  - **Content after a nested list** in an item (a paragraph, a quote, more nested items) ends
+    the list; what follows starts a new top-level list, renumbered
+    ([#64](https://github.com/ForLegalAI/legaldown-validator/issues/64)). A nested list whose
+    bullet character or ordered delimiter changes is kept as one list
+    ([#65](https://github.com/ForLegalAI/legaldown-validator/issues/65)).
   - **Indented code inside a quote or a list item** is read as paragraph text
     ([#41](https://github.com/ForLegalAI/legaldown-validator/issues/41)). At the top level it is
     code.

@@ -124,7 +124,7 @@ class TextWriter:
                     text = f"{label} {text}"
                 return f"[{condition}] {text}" if condition else text
             case List():
-                return "\n".join(self.list(block, 0))
+                return "\n".join(self.list(block, ""))
             case Quote(blocks=blocks):
                 return _prefix("\n\n".join(self.block(child) for child in blocks), "> ")
             case DraftingNote(blocks=blocks, label=label):
@@ -138,13 +138,15 @@ class TextWriter:
                 return "---"
         return ""
 
-    def list(self, block: List, depth: int) -> list[str]:
+    def list(self, block: List, indent: str) -> list[str]:
+        """The lines of *block*, each item's label at *indent*. Everything
+        else in an item, a nested list included, lines up with its text."""
         lines: list[str] = []
-        indent = _INDENT * depth
         for item in block.items:
             marker = item.label if item.label else "-"
             if item.condition_label:
                 marker = f"{marker} [{item.condition_label}]"
+            content = indent + " " * (len(marker) + 1)
             first = True
             for child in item.blocks:
                 if isinstance(child, List):
@@ -153,14 +155,14 @@ class TextWriter:
                         # still comes first, on a line of its own.
                         lines.append(indent + marker)
                         first = False
-                    lines += self.list(child, depth + 1)
+                    lines += self.list(child, content)
                     continue
                 text = self.block(child)
                 if first:
                     lines.append(_prefix(f"{marker} {text}", indent, hanging=" " * (len(marker) + 1)))
                     first = False
                 else:
-                    lines.append(_prefix(text, indent + " " * (len(marker) + 1)))
+                    lines.append(_prefix(text, content))
             if first:
                 lines.append(indent + marker)
         return lines

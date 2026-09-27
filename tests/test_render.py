@@ -522,8 +522,10 @@ def test_source_holding_sentinel_characters_renders_them() -> None:
 
 
 def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
-    # The text writer, on a tree with nesting (as the validator will give
-    # once it keeps nested lists): the item's label comes first.
+    # The writer's own case, on a hand-built tree: the validator never gives
+    # an item that opens with a nested list (an empty item is dropped and
+    # its items move up, models.listed_items), but a tree built in code can.
+    # The item's label comes first; nested lists line up with its text.
     from legaldown_render.tree import List, ListItem, Paragraph, RenderTree, Section, Text
     from legaldown_render.writers import TextWriter
 
@@ -532,7 +534,7 @@ def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
     outer = List(True, (ListItem((Paragraph((Text("first"),)),), label="1."), ListItem((middle,), label="2.")),
                  enumerated=True)
     tree = RenderTree((), (), "en", (), (Section(1, (Text("A"),), "a", "", (outer,), label="1."),))
-    assert "1. first\n2.\n    (i)\n        (A) deep" in TextWriter().write(tree)
+    assert "1. first\n2.\n   (i)\n       (A) deep" in TextWriter().write(tree)
 
 
 def test_an_unresolved_node_is_an_internal_error() -> None:
@@ -757,6 +759,17 @@ def test_the_first_definition_in_document_order_keeps_the_anchor() -> None:
     assert 'id="def:fee"' not in sections
 
 
+def test_nested_lists_line_up_with_their_item_s_text() -> None:
+    output = text("# A\n\n1. one\n\n   more\n\n   - child\n")
+    assert "1. one\n   more\n   (i) child" in output
+
+
+def test_a_list_nested_thousands_deep_is_a_document_error_not_a_crash() -> None:
+    body = "# A\n\n" + "".join("  " * depth + f"- l{depth}\n" for depth in range(1500))
+    with pytest.raises(DocumentError, match="too deeply"):
+        render(FRONT + body, format="html")
+
+
 def test_a_later_paragraph_in_a_list_item_is_the_item_s() -> None:
     # Indented after a blank line, "second" is the item's (CommonMark), so
     # its marker is misplaced (§5.7) and a reference to it is broken, as the
@@ -771,7 +784,7 @@ def test_nested_lists_keep_their_structure_and_designations() -> None:
     body = ("# A\n\n- one\n  1. sub a {#suba}\n  2. sub b\n     - deep {#deep}\n  - bullet after ordered\n"
             "- two\n\nSee {{ref: suba}} and {{ref: deep}}.\n")
     output = text(body)
-    assert ("(a) one\n    1. sub a\n    2. sub b\n        (A) deep\n    (i) bullet after ordered\n(b) two"
+    assert ("(a) one\n    1. sub a\n    2. sub b\n       (A) deep\n    (i) bullet after ordered\n(b) two"
             in output)
     assert "See 1(a)(1) and 1(a)(2)(A)." in output
     html = render(FRONT + body, standalone=False).output

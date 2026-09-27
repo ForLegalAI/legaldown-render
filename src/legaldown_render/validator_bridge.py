@@ -21,6 +21,7 @@ from legaldown.definitions import block_fragments
 from legaldown.directives import Lexed, lex
 from legaldown.markdown import FENCE_OPEN_RE, closes_fence, dedent, indent_width
 from legaldown.models import listed_items
+from legaldown.serializer import list_runs
 from legaldown.validator.core import is_template
 from legaldown.validator.templates import block_quotes
 from legaldown.validator.units import FoundMarker, find_markers
@@ -34,6 +35,7 @@ __all__ = [
     "dedent",
     "indent_width",
     "lex",
+    "list_runs",
     "listed_items",
     "placed_markers",
     "read_answers",

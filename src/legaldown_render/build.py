@@ -65,6 +65,7 @@ from .validator_bridge import (
     dedent,
     indent_width,
     lex,
+    list_runs,
     listed_items,
     placed_markers,
 )
@@ -408,16 +409,15 @@ class _Builder:
         of the list it is in; they are block_fragments' fragments too, as a
         list block has no text, prefix, or suffix, so a marker's fragment
         index is the item's index here."""
-        entries: list[tuple[ListItem, int, str]] = []
-        for index, (item, level, kind) in enumerate(listed_items(block)):
+        listed = listed_items(block)
+        items: list[ListItem] = []
+        for index, (item, _level, _kind) in enumerate(listed):
             identifier = condition = ""
             if index in placed:
                 offset, identifier, condition = placed[index]
                 item = _cut_marker(item, offset)
-            entries.append((ListItem(blocks=self._item_blocks(item), anchor_id=identifier, condition=condition),
-                            level, kind))
-        nested, _ = _nest(entries, 0, 0, block.kind)
-        return nested
+            items.append(ListItem(blocks=self._item_blocks(item), anchor_id=identifier, condition=condition))
+        return _nest(items, [(level, kind) for _item, level, kind in listed])
 
     def _item_blocks(self, item: str) -> tuple[Block, ...]:
         first, _, rest = item.partition("\n")
@@ -475,24 +475,37 @@ class _Builder:
         )
 
 
-def _nest(entries: list[tuple[ListItem, int, str]], start: int, level: int, kind: str) -> tuple[List, int]:
-    """The list of *kind* at depth *level* that starts at ``entries[start]``,
-    and where it ends. Deeper items form lists nested in the item before
-    them; at a depth below the top, an item of the other kind starts another
-    list (CommonMark)."""
-    items: list[ListItem] = []
-    index = start
-    while index < len(entries):
-        item, depth, item_kind = entries[index]
-        if depth < level or (depth == level and items and level and item_kind != kind):
-            break
-        if depth == level:
-            items.append(item)
-            index += 1
-        else:
-            nested, index = _nest(entries, index, depth, item_kind)
-            items[-1] = replace(items[-1], blocks=items[-1].blocks + (nested,))
-    return List(ordered=kind == "ordered_list", items=tuple(items)), index
+def _nest(items: list[ListItem], nesting: list[tuple[int, str]]) -> List:
+    """*items*, with their depths and kinds (*nesting*), as the tree of lists
+    the validator's ``list_runs`` groups them into: each list nested in the
+    item before its first one, one level up. Built without recursion, so a
+    deep list costs no stack here."""
+    runs = list_runs(nesting)
+    members: dict[int, list[int]] = {}  # list -> its items, by index
+    parent: dict[int, int] = {}  # nested list -> the item it is nested in
+    last: list[int] = []  # the last item at each depth
+    for index, ((level, _kind), run) in enumerate(zip(nesting, runs, strict=True)):
+        if run not in members:
+            members[run] = []
+            if level:
+                parent[run] = last[level - 1]
+        members[run].append(index)
+        del last[level:]
+        last.append(index)
+    nested: dict[int, list[List]] = {}  # item -> the lists nested in it, in order
+    built: dict[int, List] = {}
+    # A nested list starts after the item it is nested in, so its number is
+    # higher: building from the last list up, every nested list is ready
+    # before the item that holds it.
+    for run in sorted(members, reverse=True):
+        built[run] = List(
+            ordered=nesting[members[run][0]][1] == "ordered_list",
+            items=tuple(replace(items[i], blocks=items[i].blocks + tuple(reversed(nested.get(i, []))))
+                        for i in members[run]),
+        )
+        if run in parent:
+            nested.setdefault(parent[run], []).append(built[run])
+    return built[0]
 
 
 def _strip_markers(block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> tuple[ModelBlock, str, str]:

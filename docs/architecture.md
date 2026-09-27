@@ -107,6 +107,8 @@ something, the output follows the model, and the gap is listed in `CONFORMANCE.m
 the validator:
 - a paragraph's line breaks are joined
 - indented code inside a quote or a list item is paragraph text
+- content after a nested list leaves its item, and a nested list that changes its marker stays
+  one list
 
 Guessing at lost structure was tried, and it traded each gap for new bugs.
 
