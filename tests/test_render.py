@@ -786,9 +786,9 @@ def test_deep_quotes_are_refused_before_the_validator_reads_them(body: str) -> N
     from unittest import mock
 
     from legaldown_render import build
-    with mock.patch.object(build, "block_quotes", wraps=build.block_quotes) as reading:
-        with pytest.raises(DocumentError, match="levels deep"):
-            render(FRONT + "# A\n\n" + body)
+    with (mock.patch.object(build, "block_quotes", wraps=build.block_quotes) as reading,
+          pytest.raises(DocumentError, match="levels deep")):
+        render(FRONT + "# A\n\n" + body)
     assert reading.call_count == 0
 
 
