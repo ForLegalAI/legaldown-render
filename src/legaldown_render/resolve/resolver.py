@@ -20,6 +20,7 @@ constructs beyond the Rendering level (§17.5).
 """
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -130,6 +131,8 @@ class Resolver:
         self.diagnostics: list[Diagnostic] = []
         self.targets: dict[str, _Target] = {}
         self.used_anchors: set[str] = set()
+        # Item designation -> the numbered slots that read that way (render-ref-ambiguous).
+        self.item_slots: dict[str, set[tuple[int, int]]] = {}
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
         self.inconsistent_placeholders: set[str] = set()
@@ -376,10 +379,11 @@ class Resolver:
                 return block
 
     def _structure_list(self, block: List, *, section: Section | None, depth: int, parent: str,
-                        presence: Presence, counters: dict[LevelFormat | None, _Counter] | None = None) -> List:
+                        presence: Presence, counters: dict[tuple[str, str] | None, _Counter] | None = None) -> List:
         """*block* numbered under *parent*. Sibling lists nested in the same
-        item share *counters*: a second list in the same format goes on from
-        the first, so no two of their items get the same designation."""
+        item share *counters*, one per way of writing a designation (counter
+        style and reference form): a second list whose designations would
+        read like the first's goes on from it, so none repeats."""
         enumeration = self.style.enumeration
         fmt: LevelFormat | None
         if block.ordered and enumeration.ordered == "renumber":
@@ -390,7 +394,12 @@ class Resolver:
             fmt = None
         base = section.designation if section else ""
         items: list[ListItem] = []
-        counter = _Counter(self._exclusive) if counters is None else counters.setdefault(fmt, _Counter(self._exclusive))
+        if counters is None:
+            counter = _Counter(self._exclusive)
+        else:
+            key = (fmt.counter, fmt.ref) if fmt is not None else None
+            counter = counters.setdefault(key, _Counter(self._exclusive))
+            counter.new_list()
         for item in block.items:
             index = counter.next(item.anchor_id, self._own_presence(item.condition, presence))
             # An item's nested blocks are present only when the item is.
@@ -400,12 +409,14 @@ class Resolver:
                 designation = extend(parent, fill(fmt.ref, n=n, section=base), textual=self.textual)
                 label = fill(fmt.label, n=n, section=base, path=designation)
                 target = _Target(designation, None)
+                # Which numbered slot reads this way; alternatives share one.
+                self.item_slots.setdefault(designation, set()).add((counter.key, index))
             else:
                 designation, label, target = parent, None, _Target(base, None, enumerated=False)
             anchor = self._anchor(item.anchor_id)
             if item.anchor_id and section is not None:
                 self._register(item.anchor_id, replace(target, anchor=anchor))
-            siblings: dict[LevelFormat | None, _Counter] = {}
+            siblings: dict[tuple[str, str] | None, _Counter] = {}
             children = tuple(
                 self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner,
                                      counters=siblings)
@@ -498,6 +509,13 @@ class Resolver:
                 "ref-not-enumerated",
                 f"'{{{{ref: {target_id}}}}}' targets an item or paragraph that the style does not number; "
                 f"it renders as its section's designation, '{target.designation}' (§6.3).",
+            )
+        elif len(self.item_slots.get(target.designation, ())) > 1:
+            self._warn(
+                "render-ref-ambiguous",
+                f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which more than one list item "
+                f"in the document reads as: each list starts again at its first number. Number the "
+                f"paragraphs (paragraphs.numbered) or make it one list to tell them apart.",
             )
         text = self.style.references.format.replace("{designation}", target.designation)
         return CrossRef(text, target.anchor or "")
@@ -737,6 +755,9 @@ _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
 }
 
 
+_COUNTER_KEYS = itertools.count()
+
+
 class _Counter:
     """Numbers sibling units in order (§13.2, §15.8). A unit joins the
     previous unit's number when it is an alternative to it: the same
@@ -746,9 +767,18 @@ class _Counter:
 
     def __init__(self, exclusive: Callable[[Presence, Presence], bool]) -> None:
         self.exclusive = exclusive
+        #: Tells counters apart for as long as the render runs (an id() may
+        #: be reused once a counter is gone).
+        self.key = next(_COUNTER_KEYS)
         self.count = 0
         self.identifier = ""
         self.holders: list[Presence] = []
+
+    def new_list(self) -> None:
+        """Go on counting in another list: its first unit is no alternative
+        to the last unit of the list before, which is not its sibling."""
+        self.identifier = ""
+        self.holders = []
 
     def next(self, identifier: str, presence: Presence | None) -> int:
         """The number for the next unit. *presence* is None for a unit with

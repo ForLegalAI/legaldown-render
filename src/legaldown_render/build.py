@@ -80,15 +80,17 @@ _HIDDEN_LEAD = "\u2e31"
 _DROPPED = Text("")
 _DROPPED_BREAK = Text("")
 _BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
-#: How deep lists and quotes may nest, together. Far beyond any real
-#: document, and far enough below Python's recursion limit that resolving
-#: and writing the tree never reach it. Deeper documents are refused up
-#: front, before the work that grows with the depth.
+#: How deep lists, quotes, and inline formatting (emphasis, links) may nest,
+#: together. Far beyond any real document, and far enough below Python's
+#: recursion limit that building, resolving, and writing the tree never
+#: reach it. Deeper documents are refused up front, before the work that
+#: grows with the depth.
 MAX_NESTING = 100
-# The quote markers that open a line: an upper bound on how deep the quotes
-# in a text nest, cheap to take before the validator reads them (its reading
-# costs more the deeper they go). Only a safety limit, never a reading.
-_QUOTE_MARKERS_RE = re.compile(r"^(?:[ \t]{0,3}>)+", re.MULTILINE)
+# The quote markers that open a line, however far apart: an upper bound on
+# how deep the quotes in a text nest, cheap to take before the validator
+# reads them (its reading costs more the deeper they go). Taken on the
+# lexer's view, so code lines do not count. A safety limit, never a reading.
+_QUOTE_MARKERS_RE = re.compile(r"^(?:[ \t]*>)+", re.MULTILINE)
 
 
 def normalize_source(source: str) -> str:
@@ -282,6 +284,7 @@ class _Builder:
         tokens = self.md.parseInline(content, self.env)
         if not tokens or not tokens[0].children:
             return ()
+        self._check_depth(max(token.level for token in tokens[0].children))
         root = SyntaxTreeNode(tokens[0].children, create_root=True)
         return self._inline_children(root)
 
@@ -425,20 +428,26 @@ class _Builder:
         nesting = [(level, kind) for _item, level, kind in listed]
         self._check_depth(max(level for level, _kind in nesting) + 1)
         items: list[ListItem] = []
-        for index, (item, _level, _kind) in enumerate(listed):
+        for index, (item, level, _kind) in enumerate(listed):
             identifier = condition = ""
             if index in placed:
                 offset, identifier, condition = placed[index]
                 item = _cut_marker(item, offset)
-            items.append(ListItem(blocks=self._item_blocks(item), anchor_id=identifier, condition=condition))
+            # The item's content is as deep as the item, for the nesting limit.
+            self.depth += level
+            try:
+                blocks = self._item_blocks(item)
+            finally:
+                self.depth -= level
+            items.append(ListItem(blocks=blocks, anchor_id=identifier, condition=condition))
         return _nest(items, nesting)
 
     def _check_depth(self, more: int) -> None:
-        """Refuse a document that nests lists and quotes deeper than
-        MAX_NESTING, *more* levels below where the builder is."""
+        """Refuse a document that nests lists, quotes, and inline formatting
+        deeper than MAX_NESTING, *more* levels below where the builder is."""
         if self.depth + more > MAX_NESTING:
-            raise DocumentError(f"The document nests lists and quotes more than {MAX_NESTING} levels deep, "
-                                "which is not rendered.")
+            raise DocumentError(f"The document nests lists, quotes, and inline formatting more than "
+                                f"{MAX_NESTING} levels deep, which is not rendered.")
 
     def _item_blocks(self, item: str) -> tuple[Block, ...]:
         first, _, rest = item.partition("\n")
@@ -452,7 +461,8 @@ class _Builder:
         """A block quote, its content read by the validator's parser. A
         drafting note is decided by the validator's own test (§15.6)."""
         text = block.text
-        self._check_depth(1 + max((match.group().count(">") for match in _QUOTE_MARKERS_RE.finditer(text)),
+        view = self.markers.lex(text).view
+        self._check_depth(1 + max((match.group().count(">") for match in _QUOTE_MARKERS_RE.finditer(view)),
                                   default=0))
         quotes = block_quotes(block)
         drafting = bool(quotes) and quotes[0].start == 0 and quotes[0].is_drafting_note

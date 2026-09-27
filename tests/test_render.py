@@ -778,16 +778,68 @@ def test_lists_and_quotes_nested_to_the_limit_render(output_format: str) -> None
         render(FRONT + "# A\n\n" + "> " * (MAX_NESTING + 1) + "deepest\n", format=output_format)
 
 
-def test_nesting_past_the_limit_is_refused_up_front() -> None:
-    import time
+@pytest.mark.parametrize("body", [
+    "> " * 2000 + "x\n",
+    ">    " * 2000 + "x\n",  # markers four columns apart count too
+])
+def test_deep_quotes_are_refused_before_the_validator_reads_them(body: str) -> None:
+    from unittest import mock
 
+    from legaldown_render import build
+    with mock.patch.object(build, "block_quotes", wraps=build.block_quotes) as reading:
+        with pytest.raises(DocumentError, match="levels deep"):
+            render(FRONT + "# A\n\n" + body)
+    assert reading.call_count == 0
+
+
+def test_nesting_past_the_limit_is_refused() -> None:
     from legaldown_render.build import MAX_NESTING
     with pytest.raises(DocumentError, match=f"more than {MAX_NESTING} levels"):
         render(FRONT + _nested_list(MAX_NESTING + 1))
-    start = time.monotonic()
+
+
+def test_lists_and_quotes_count_together() -> None:
+    # A list 60 deep whose deepest item holds a quote with another list 60
+    # deep nests 121 levels.
+    deepest = "  " * 60
+    inner = "".join(f"{deepest}> {'  ' * depth}- m{depth}\n" for depth in range(60))
     with pytest.raises(DocumentError, match="levels deep"):
-        render(FRONT + "# A\n\n" + "> " * 2000 + "x\n")
-    assert time.monotonic() - start < 10
+        render(FRONT + _nested_list(60) + inner, format="html")
+
+
+def test_deep_inline_formatting_is_refused_and_shallow_renders() -> None:
+    with pytest.raises(DocumentError, match="levels deep"):
+        render(FRONT + "# A\n\n" + "*a " * 300 + "x" + "*" * 300 + "\n")
+    assert "x" in text("# A\n\n" + "*a " * 30 + "x" + "*" * 30 + "\n")
+
+
+def test_quote_markers_in_code_do_not_count_as_depth() -> None:
+    assert "&gt;&gt;&gt;" in render(FRONT + "# A\n\n> ```\n> " + ">" * 150 + "\n> ```\n", standalone=False).output
+
+
+def test_a_reference_to_an_item_another_list_also_numbers_is_ambiguous() -> None:
+    result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b {#y}\n\nSee {{ref: x}}.\n", format="text")
+    assert "See 1(a)." in result.output
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+    single = render(FRONT + "# A\n\n- a {#x}\n- b\n\nSee {{ref: x}}.\n", format="text")
+    assert "render-ref-ambiguous" not in {d.rule for d in single.diagnostics}
+
+
+def test_alternatives_are_not_ambiguous() -> None:
+    body = ("# A\n\n- first {#alt when=forum:courts}\n- second {#alt when=forum:arbitration}\n\n"
+            "See {{ref: alt}}.\n")
+    front = FRONT.replace("---\n", "---\nquestions:\n  forum:\n    type: choice\n    choices:\n"
+                          "      courts: Courts\n      arbitration: Arbitration\n", 1)
+    result = render(front + body, format="text")
+    assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
+
+
+def test_sibling_lists_are_told_apart_by_how_their_designations_read() -> None:
+    body = "# A\n\n- one\n  1. sub a {#x}\n  - sub b {#y}\n\nSee {{ref: x}} and {{ref: y}}.\n"
+    levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+              {"counter": "decimal", "label": "{n})", "ref": "({n})"}]
+    output = text(body, overrides={"enumeration.levels": levels})
+    assert "See 1(a)(1) and 1(a)(2)." in output
 
 
 def test_a_list_of_empty_items_renders_nothing() -> None:

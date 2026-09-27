@@ -47,8 +47,12 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   files, or `translations` is refused when rendered with answers, as §17.6 requires below Full.
   A template with Errors is refused too, since §15.7.2 defines no output for one.
 - **Diagnostics have no line numbers**, because the validator's diagnostics do not carry them yet.
-- **Nesting limit.** Lists and quotes nested more than 100 levels deep, together, are refused
-  (`DocumentError`) before rendering starts, so that no document can exhaust the stack or the CPU.
+- **Nesting limit.** Lists, quotes, and inline formatting (emphasis, links) nested more than 100
+  levels deep, together, are refused (`DocumentError`). The check runs before the work that grows
+  with the depth, so a deeply nested document is refused quickly and cannot exhaust the stack.
+- **Ambiguous references.** Each list starts again at its first number, as contracts are usually
+  drafted, so two lists in one section can both have an item "(a)". A `{{ref:}}` to such an item
+  renders with a `render-ref-ambiguous` Warning; numbered paragraphs tell them apart.
 - **Malformed directives** (a §11.2 grammar violation) render their type's marker without a value,
   for example `[INVALID AMOUNT]`. The specification defines no marker for this case.
 - **One parser.** The renderer builds from the validator's document model only
