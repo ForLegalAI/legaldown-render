@@ -77,10 +77,11 @@ never decides a structural or LegalDown question itself:
 | Question | Answered by |
 |---|---|
 | Sections, headings, identifiers | `Document.sections`, `ValidationResult.sections` |
-| Blocks: paragraphs, lists and items, quotes, tables, code, rules | `Document` blocks; quote content and code inside items are read by the validator's parser too |
+| Blocks: paragraphs, lists and items, quotes, tables, code, rules | `Document` blocks. List items hold blocks (nested lists, code, quotes, tables), and a quote's content is the validator's `quote_content()` |
 | Where a marker (`{#id when=…}`) is placed, and what it means | The validator's `find_markers()`, with its own `placed(template)` |
 | Whether the document is a template | The validator's `is_template()`, over those markers |
-| Whether a quote is a drafting note | The validator's `block_quotes()` |
+| Whether a quote is a drafting note | The validator's `is_drafting_note()` |
+| Which list item a marker belongs to | The validator's `list_fragments()`: the items each fragment is in, numbered in document order |
 | A lifted definition, `{{ref:}}` or `{{term:}}` block's source | The validator's `render_block()` |
 
 The imports beyond the validator's public API are all in `validator_bridge.py`, which is the
@@ -106,9 +107,7 @@ The builder never works around the validator's model. Where the model loses or m
 something, the output follows the model, and the gap is listed in `CONFORMANCE.md` and filed on
 the validator:
 - a paragraph's line breaks are joined
-- indented code inside a quote or a list item is paragraph text
-- content after a nested list leaves its item, and a nested list that changes its marker stays
-  one list
+- a heading inside a quote or a list item is paragraph text
 
 Guessing at lost structure was tried, and it traded each gap for new bugs.
 

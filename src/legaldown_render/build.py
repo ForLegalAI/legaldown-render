@@ -16,18 +16,21 @@ syntax, and put back as tree nodes afterwards. The nonce is random for every
 build, so no text in a document — written out, as an entity, or
 percent-encoded — can pass for a sentinel.
 
-Lists nest as the validator reads them: its listed items, each with a depth
-and the kind of its list (ForLegalAI/legaldown-validator#61).
+Lists and quotes are built as the validator's model holds them: list items
+hold blocks, nested lists included, and a quote's content is the blocks the
+validator reads in it (ForLegalAI/legaldown-validator#71, #72).
 """
 from __future__ import annotations
 
+import itertools
 import re
 import secrets
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from urllib.parse import unquote
 
 from legaldown import Block as ModelBlock
-from legaldown import Directive, Document, ValidationResult, find_definition_anchors, parse_document, render_block
+from legaldown import Directive, Document, ValidationResult, find_definition_anchors, render_block
 from legaldown.markers import HTML_COMMENT_RE
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
@@ -59,15 +62,17 @@ from .tree import (
 )
 from .validator_bridge import (
     FENCE_OPEN_RE,
+    MAX_QUOTE_DEPTH,
     block_fragments,
-    block_quotes,
     closes_fence,
     dedent,
     indent_width,
+    is_drafting_note,
     lex,
-    list_runs,
-    listed_items,
+    list_fragments,
+    list_items,
     placed_markers,
+    quote_content,
 )
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
@@ -86,11 +91,6 @@ _BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 #: reach it. Deeper documents are refused up front, before the work that
 #: grows with the depth.
 MAX_NESTING = 100
-# The quote markers that open a line, however far apart: an upper bound on
-# how deep the quotes in a text nest, cheap to take before the validator
-# reads them (its reading costs more the deeper they go). Taken on the
-# lexer's view, so code lines do not count. A safety limit, never a reading.
-_QUOTE_MARKERS_RE = re.compile(r"^(?:[ \t]*>)+", re.MULTILINE)
 
 
 def normalize_source(source: str) -> str:
@@ -416,31 +416,43 @@ class _Builder:
                 return Rule()
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List | None:
-        """A list, nested as the validator reads it. Its items are the
-        validator's listed items, in order, each with its depth and the kind
-        of the list it is in; they are block_fragments' fragments too, as a
-        list block has no text, prefix, or suffix, so a marker's fragment
-        index is the item's index here. None when every item is empty."""
-        listed = listed_items(block)
-        if not listed:
-            return None
-        nesting = [(level, kind) for _item, level, kind in listed]
-        self._check_depth(max(level for level, _kind in nesting) + 1)
-        items: list[ListItem] = []
-        for index, (item, level, _kind) in enumerate(listed):
-            identifier = condition = ""
-            if index in placed:
-                offset, identifier, condition = placed[index]
-                item = _cut_marker(item, offset)
-            # The item's content is as deep as the item, for the nesting limit.
-            self.depth += level
-            try:
-                blocks = self._item_blocks(item)
-            finally:
-                self.depth -= level
-            items.append(ListItem(blocks=blocks, anchor_id=identifier, condition=condition))
-        return _nest(items, nesting)
+    def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List:
+        """A list, nested as the validator's model holds it: items that hold
+        blocks. The validator numbers a list's items in document order,
+        nested ones included, and each fragment says which items it is in
+        (``list_fragments``), so a marker placed at an item's first
+        paragraph belongs to the innermost of them."""
+        fragments = list_fragments(block)
+        markers = {fragments[index][2][-1]: marker for index, marker in placed.items()}
+        return self._list(block, markers, itertools.count())
+
+    def _list(self, block: ModelBlock, markers: dict[int, tuple[int, str, str]],
+              numbers: Iterator[int] | None) -> List:
+        """*block*'s items, numbered from *numbers* as the validator numbers
+        them (None in a quote, whose items it does not number)."""
+        self._check_depth(1)
+        self.depth += 1
+        try:
+            items: list[ListItem] = []
+            for item in list_items(block):
+                number = next(numbers) if numbers is not None else None
+                children = list(item.blocks)
+                identifier = condition = ""
+                if number in markers:
+                    offset, identifier, condition = markers[number]
+                    children[0] = replace(children[0], text=_cut_marker(children[0].text, offset))
+                blocks: list[Block] = []
+                for child in children:
+                    if child.kind in ("ordered_list", "unordered_list"):
+                        blocks.append(self._list(child, markers, numbers))
+                    elif child.kind == "html":
+                        self._html_block(child)
+                    elif (built := self.block(child, {}, top_level=False)) is not None:
+                        blocks.append(built)
+                items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition))
+        finally:
+            self.depth -= 1
+        return List(ordered=block.kind == "ordered_list", items=tuple(items))
 
     def _check_depth(self, more: int) -> None:
         """Refuse a document that nests lists, quotes, and inline formatting
@@ -449,44 +461,25 @@ class _Builder:
             raise DocumentError(f"The document nests lists, quotes, and inline formatting more than "
                                 f"{MAX_NESTING} levels deep, which is not rendered.")
 
-    def _item_blocks(self, item: str) -> tuple[Block, ...]:
-        first, _, rest = item.partition("\n")
-        if first.lstrip().startswith(">") or FENCE_OPEN_RE.match(first):
-            # The item opens with a quote or code, whose lines the validator
-            # keeps as written (a drafting note included).
-            return self.fragment(item)
-        return (Paragraph(self.text(first)),) + (self.fragment(rest) if rest.strip() else ())
-
     def quote(self, block: ModelBlock) -> Block:
-        """A block quote, its content read by the validator's parser. A
-        drafting note is decided by the validator's own test (§15.6)."""
-        text = block.text
-        view = self.markers.lex(text).view
-        self._check_depth(1 + max((match.group().count(">") for match in _QUOTE_MARKERS_RE.finditer(view)),
-                                  default=0))
-        quotes = block_quotes(block)
-        drafting = bool(quotes) and quotes[0].start == 0 and quotes[0].is_drafting_note
-        if drafting:
-            text = text.partition("\n")[2]
-        blocks = self.fragment(text)
-        return DraftingNote(blocks) if drafting else Quote(blocks)
-
-    def fragment(self, text: str) -> tuple[Block, ...]:
-        """Blocks for *text* inside a quote or a list item, read by the
-        validator's parser — as a body, so that text starting with ``---``
-        is not frontmatter. No marker is placed there (§5.7), and a heading
-        is not a section (§4.1)."""
+        """A block quote, its content the blocks the validator reads in it
+        (``quote_content``). Past the validator's quote depth, it reads the
+        quote's text as one, and so does the builder. A drafting note is
+        decided by the validator's own test (§15.6); its first line, the
+        ``[!DRAFTING]`` marker, is not shown."""
+        drafting = is_drafting_note(block)
+        text = block.text.partition("\n")[2] if drafting else block.text
         self._check_depth(1)
         self.depth += 1
         try:
-            inner = parse_document("\n" + text)
-            blocks = self.blocks(inner.preamble, None, markers=False)
-            for section in inner.sections:
-                blocks += (Paragraph((Strong(self.text(section.title)),)),)
-                blocks += self.blocks(section.blocks, None, markers=False)
+            if self.depth <= MAX_QUOTE_DEPTH:
+                children, _spans = quote_content(text, self.depth)
+                blocks = self.blocks(list(children), None, markers=False)
+            else:
+                blocks = (Paragraph(self.text(text)),) if text.strip() else ()
         finally:
             self.depth -= 1
-        return blocks
+        return DraftingNote(blocks) if drafting else Quote(blocks)
 
     # -- document -------------------------------------------------------------
 
@@ -511,38 +504,6 @@ class _Builder:
             sections=sections,
             is_template=self.markers.template,
         )
-
-
-def _nest(items: list[ListItem], nesting: list[tuple[int, str]]) -> List:
-    """*items*, with their depths and kinds (*nesting*), as the tree of lists
-    the validator's ``list_runs`` groups them into: each list nested in the
-    item before its first one, one level up. Built without recursion, so a
-    deep list costs no stack here."""
-    runs = list_runs(nesting)
-    members: dict[int, list[int]] = {}  # list -> its items, by index
-    parent: dict[int, int] = {}  # nested list -> the item it is nested in
-    last: list[int] = []  # the last item at each depth
-    for index, ((level, _kind), run) in enumerate(zip(nesting, runs, strict=True)):
-        if run not in members:
-            members[run] = []
-            if level:
-                parent[run] = last[level - 1]
-        members[run].append(index)
-        del last[level:]
-        last.append(index)
-    nested: dict[int, list[List]] = {}  # item -> the lists nested in it, last first
-    # list_runs numbers lists in order of their first item, and a nested list
-    # starts after the item holding it: from the last list back, every
-    # nested list is built before that item. The last one built is the top.
-    for run in reversed(members):
-        built = List(
-            ordered=nesting[members[run][0]][1] == "ordered_list",
-            items=tuple(replace(items[i], blocks=items[i].blocks + tuple(reversed(nested[i]))) if i in nested
-                        else items[i] for i in members[run]),
-        )
-        if run in parent:
-            nested.setdefault(parent[run], []).append(built)
-    return built
 
 
 def _strip_markers(block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> tuple[ModelBlock, str, str]:

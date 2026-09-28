@@ -522,10 +522,9 @@ def test_source_holding_sentinel_characters_renders_them() -> None:
 
 
 def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
-    # The writer's own case, on a hand-built tree: the validator never gives
-    # an item that opens with a nested list (an empty item is dropped and
-    # its items move up, models.listed_items), but a tree built in code can.
-    # The item's label comes first; nested lists line up with its text.
+    # An item that opens with a nested list (`-` then an indented list, in
+    # the validator's model): the item's label comes first, on a line of its
+    # own, and nested lists line up with its text.
     from legaldown_render.tree import List, ListItem, Paragraph, RenderTree, Section, Text
     from legaldown_render.writers import TextWriter
 
@@ -768,45 +767,6 @@ def _nested_list(levels: int) -> str:
     return "# A\n\n" + "".join("  " * depth + f"- l{depth}\n" for depth in range(levels))
 
 
-@pytest.mark.parametrize("output_format", ["html", "text"])
-def test_lists_and_quotes_nested_to_the_limit_render(output_format: str) -> None:
-    from legaldown_render.build import MAX_NESTING
-    assert "l99" in render(FRONT + _nested_list(MAX_NESTING), format=output_format).output
-    quotes = FRONT + "# A\n\n" + "> " * MAX_NESTING + "deepest\n"
-    assert "deepest" in render(quotes, format=output_format).output
-    with pytest.raises(DocumentError):
-        render(FRONT + "# A\n\n" + "> " * (MAX_NESTING + 1) + "deepest\n", format=output_format)
-
-
-@pytest.mark.parametrize("body", [
-    "> " * 2000 + "x\n",
-    ">    " * 2000 + "x\n",  # markers four columns apart count too
-])
-def test_deep_quotes_are_refused_before_the_validator_reads_them(body: str) -> None:
-    from unittest import mock
-
-    from legaldown_render import build
-    with (mock.patch.object(build, "block_quotes", wraps=build.block_quotes) as reading,
-          pytest.raises(DocumentError, match="levels deep")):
-        render(FRONT + "# A\n\n" + body)
-    assert reading.call_count == 0
-
-
-def test_nesting_past_the_limit_is_refused() -> None:
-    from legaldown_render.build import MAX_NESTING
-    with pytest.raises(DocumentError, match=f"more than {MAX_NESTING} levels"):
-        render(FRONT + _nested_list(MAX_NESTING + 1))
-
-
-def test_lists_and_quotes_count_together() -> None:
-    # A list 60 deep whose deepest item holds a quote with another list 60
-    # deep nests 121 levels.
-    deepest = "  " * 60
-    inner = "".join(f"{deepest}> {'  ' * depth}- m{depth}\n" for depth in range(60))
-    with pytest.raises(DocumentError, match="levels deep"):
-        render(FRONT + _nested_list(60) + inner, format="html")
-
-
 def test_deep_inline_formatting_is_refused_and_shallow_renders() -> None:
     with pytest.raises(DocumentError, match="levels deep"):
         render(FRONT + "# A\n\n" + "*a " * 300 + "x" + "*" * 300 + "\n")
@@ -842,9 +802,31 @@ def test_sibling_lists_are_told_apart_by_how_their_designations_read() -> None:
     assert "See 1(a)(1) and 1(a)(2)." in output
 
 
-def test_a_list_of_empty_items_renders_nothing() -> None:
-    output = text("# A\n\n- \n  - \n\nAfter.\n")
-    assert "1. A\n\nAfter." in output
+def test_empty_list_items_keep_their_place() -> None:
+    # The validator keeps an empty item (CommonMark), so later items keep
+    # their numbers.
+    output = text("# A\n\n- \n  - \n- b {#b}\n\nSee {{ref: b}}.\n")
+    assert "(a)\n    (i)\n(b) b" in output
+    assert "See 1(b)." in output
+
+
+@pytest.mark.parametrize("output_format", ["html", "text"])
+def test_deep_lists_and_quotes_render_as_the_validator_caps_them(output_format: str) -> None:
+    # The validator reads lists 64 levels deep and quotes 16; deeper, an
+    # item's or quote's content is text. So the renderer never nests past
+    # its own limit on lists and quotes alone.
+    lists = "# A\n\n" + "".join("  " * depth + f"- l{depth}\n" for depth in range(150))
+    assert "l149" in render(FRONT + lists, format=output_format).output
+    for marker in ("> ", ">    "):
+        assert "deepest" in render(FRONT + "# A\n\n" + marker * 2000 + "deepest\n", format=output_format).output
+
+
+def test_lists_and_inline_formatting_count_together() -> None:
+    from legaldown_render.build import MAX_NESTING
+    lists = "".join("  " * depth + f"- l{depth}\n" for depth in range(60))
+    deep = "  " * 60 + "- " + "*a " * (MAX_NESTING - 50) + "x" + "*" * (MAX_NESTING - 50) + "\n"
+    with pytest.raises(DocumentError, match="levels deep"):
+        render(FRONT + "# A\n\n" + lists + deep)
 
 
 def test_sibling_lists_in_one_item_never_share_a_designation() -> None:
@@ -963,8 +945,7 @@ def test_template_decision_is_the_validators() -> None:
 def test_quote_content_is_read_as_a_body() -> None:
     # Text starting with "---" inside a quote is not frontmatter.
     output = text("# A\n\n> ---\n> title: x\n> ---\n> Visible?\n")
-    for line in ("> title: x", "> Visible?"):
-        assert line in output
+    assert "title: x" in output and "Visible?" in output
 
 
 def test_a_signature_block_heading_in_a_quote_renders() -> None:

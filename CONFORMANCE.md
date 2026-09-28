@@ -47,9 +47,10 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   files, or `translations` is refused when rendered with answers, as §17.6 requires below Full.
   A template with Errors is refused too, since §15.7.2 defines no output for one.
 - **Diagnostics have no line numbers**, because the validator's diagnostics do not carry them yet.
-- **Nesting limit.** Lists, quotes, and inline formatting (emphasis, links) nested more than 100
-  levels deep, together, are refused (`DocumentError`). The check runs before the work that grows
-  with the depth, so a deeply nested document is refused quickly and cannot exhaust the stack.
+- **Nesting limit.** The validator reads lists 64 levels deep and quotes 16; deeper, an item's or
+  quote's content is its text. The renderer follows it, and refuses (`DocumentError`) a document
+  whose lists, quotes, and inline formatting (emphasis, links) together nest more than 100 levels,
+  before building it, so no document can exhaust the stack.
 - **Ambiguous references.** Each list starts again at its first number, as contracts are usually
   drafted, so two lists in one section can both have an item "(a)". A `{{ref:}}` to such an item
   renders with a `render-ref-ambiguous` Warning; numbered paragraphs tell them apart.
@@ -63,16 +64,9 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   - **Line breaks** within a paragraph are joined, and a backslash hard break shows as a literal
     backslash. Link reference definitions (`[label]: url`) are not resolved
     ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)).
-  - **Content after a nested list** in an item (a paragraph, a quote, more nested items) ends
-    the list; what follows starts a new top-level list, renumbered
-    ([#64](https://github.com/ForLegalAI/legaldown-validator/issues/64)). A nested list whose
-    bullet character or ordered delimiter changes is kept as one list
-    ([#65](https://github.com/ForLegalAI/legaldown-validator/issues/65)).
-  - **Indented code inside a quote or a list item** is read as paragraph text
-    ([#41](https://github.com/ForLegalAI/legaldown-validator/issues/41)). At the top level it is
-    code.
-  - **Empty list items** are left out ([#46](https://github.com/ForLegalAI/legaldown-validator/issues/46)),
-    and a table row needs a leading pipe ([#44](https://github.com/ForLegalAI/legaldown-validator/issues/44)).
+  - **A heading inside a quote or a list item** shows as paragraph text: `# Heading` keeps its
+    `#`, and a setext underline joins the paragraph
+    ([#78](https://github.com/ForLegalAI/legaldown-validator/issues/78)).
 
 ## Beyond this level (Full, §17.4)
 
