@@ -794,6 +794,42 @@ def test_alternatives_are_not_ambiguous() -> None:
     assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
 
 
+QUESTIONS = FRONT.replace("---\n", "---\nquestions:\n  forum:\n    type: choice\n    choices:\n"
+                          "      courts: Courts\n      arbitration: Arbitration\n", 1)
+
+
+def test_lists_in_alternative_sections_are_not_ambiguous() -> None:
+    body = ("# Disputes {#d when=forum:courts}\n\n- court one {#c1}\n\nSee {{ref: c1}}.\n\n"
+            "# Disputes {#d when=forum:arbitration}\n\n- arbitration one\n")
+    result = render(QUESTIONS + body, format="text")
+    assert "See 1(a)." in result.output
+    assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
+
+
+def test_lists_in_quotes_and_drafting_notes_are_not_ambiguous() -> None:
+    body = ("# A\n\n1. first {#a}\n2. second {#b}\n\n> [!DRAFTING]\n> Options:\n>\n> 1. keep\n> 2. drop\n\n"
+            "> 1. quoted\n> 2. quoted\n\nSee {{ref: b}}.\n")
+    result = render(FRONT + body, format="text")
+    assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
+
+
+def test_an_ambiguous_reference_says_how_to_tell_the_items_apart() -> None:
+    result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b\n\nSee {{ref: x}}.\n", format="text")
+    message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
+    assert "one list" in message and "in words" in message and "paragraphs" not in message
+
+
+def test_a_drafting_note_reads_as_the_validator_reads_it() -> None:
+    # An indented line after the marker continues its paragraph (it cannot
+    # interrupt one), so the placeholder in it is live, not code.
+    output = render(FRONT + "# A\n\n> [!DRAFTING]\n>     Use {{placeholder: x, type=text}} here\n",
+                    format="text").output
+    assert "> [Drafting note]\n> Use [_____] here" in output
+    assert "{{placeholder" not in output and "[!DRAFTING]" not in output
+    # The marker underlined makes a heading of it; the note holds nothing else.
+    assert "[!DRAFTING]" not in text("# A\n\n> [!DRAFTING]\n> ---\n")
+
+
 def test_sibling_lists_are_told_apart_by_how_their_designations_read() -> None:
     body = "# A\n\n- one\n  1. sub a {#x}\n  - sub b {#y}\n\nSee {{ref: x}} and {{ref: y}}.\n"
     levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},

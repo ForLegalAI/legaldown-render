@@ -15,12 +15,11 @@ writes it into the tree, so that writers only lay it out:
 
 The validator has already reported every document-level Error for the
 failures shown here, so the resolver only adds the diagnostics that need a
-style template or a renderer: ``ref-not-enumerated``, ``raw-html``, and
-constructs beyond the Rendering level (§17.5).
+style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
+``render-locale-fallback``, and constructs beyond the Rendering level (§17.5).
 """
 from __future__ import annotations
 
-import itertools
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -131,8 +130,11 @@ class Resolver:
         self.diagnostics: list[Diagnostic] = []
         self.targets: dict[str, _Target] = {}
         self.used_anchors: set[str] = set()
-        # Item designation -> the numbered slots that read that way (render-ref-ambiguous).
-        self.item_slots: dict[str, set[tuple[int, int]]] = {}
+        # For render-ref-ambiguous: each item designation's numbered slots
+        # (counter and number: alternatives share one) with the presence of
+        # the item holding it, and the slot of each anchored item.
+        self.item_slots: dict[str, list[tuple[_Counter, int, Presence]]] = {}
+        self.slot_of: dict[str, tuple[_Counter, int, Presence]] = {}
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
         self.inconsistent_placeholders: set[str] = set()
@@ -364,22 +366,28 @@ class Resolver:
             self._register(block.anchor_id, replace(target, anchor=anchor))
         return replace(block, label=label, anchor=anchor)
 
-    def _structure(self, block: Block, *, section: Section | None, depth: int, presence: Presence) -> Block:
+    def _structure(self, block: Block, *, section: Section | None, depth: int, presence: Presence,
+                   quoted: bool = False) -> Block:
+        """*block* numbered and labelled. *quoted*: inside a quote, whose
+        items the validator does not treat as units (they hold no marker)."""
         match block:
             case List():
                 return self._structure_list(block, section=section, depth=depth,
-                                            parent=section.designation if section else "", presence=presence)
+                                            parent=section.designation if section else "", presence=presence,
+                                            quoted=quoted)
             case Quote(blocks=blocks):
-                return Quote(tuple(self._structure(child, section=section, depth=depth, presence=presence)
-                                   for child in blocks))
+                return Quote(tuple(self._structure(child, section=section, depth=depth, presence=presence,
+                                                   quoted=True) for child in blocks))
             case DraftingNote(blocks=blocks):
-                return DraftingNote(tuple(self._structure(child, section=section, depth=depth, presence=presence)
-                                          for child in blocks), label=self.labels.drafting_note)
+                return DraftingNote(tuple(self._structure(child, section=section, depth=depth, presence=presence,
+                                                          quoted=True) for child in blocks),
+                                    label=self.labels.drafting_note)
             case _:
                 return block
 
     def _structure_list(self, block: List, *, section: Section | None, depth: int, parent: str,
-                        presence: Presence, counters: dict[tuple[str, str] | None, _Counter] | None = None) -> List:
+                        presence: Presence, counters: dict[tuple[str, str] | None, _Counter] | None = None,
+                        quoted: bool = False) -> List:
         """*block* numbered under *parent*. Sibling lists nested in the same
         item share *counters*, one per way of writing a designation (counter
         style and reference form): a second list whose designations would
@@ -409,8 +417,11 @@ class Resolver:
                 designation = extend(parent, fill(fmt.ref, n=n, section=base), textual=self.textual)
                 label = fill(fmt.label, n=n, section=base, path=designation)
                 target = _Target(designation, None)
-                # Which numbered slot reads this way; alternatives share one.
-                self.item_slots.setdefault(designation, set()).add((counter.key, index))
+                if not quoted:
+                    slot = (counter, index, inner)
+                    self.item_slots.setdefault(designation, []).append(slot)
+                    if item.anchor_id:
+                        self.slot_of.setdefault(item.anchor_id, slot)
             else:
                 designation, label, target = parent, None, _Target(base, None, enumerated=False)
             anchor = self._anchor(item.anchor_id)
@@ -419,9 +430,9 @@ class Resolver:
             siblings: dict[tuple[str, str] | None, _Counter] = {}
             children = tuple(
                 self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner,
-                                     counters=siblings)
+                                     counters=siblings, quoted=quoted)
                 if isinstance(child, List)
-                else self._structure(child, section=section, depth=depth + 1, presence=inner)
+                else self._structure(child, section=section, depth=depth + 1, presence=inner, quoted=quoted)
                 for child in item.blocks
             )
             items.append(replace(item, blocks=children, label=label, anchor=anchor))
@@ -510,15 +521,28 @@ class Resolver:
                 f"'{{{{ref: {target_id}}}}}' targets an item or paragraph that the style does not number; "
                 f"it renders as its section's designation, '{target.designation}' (§6.3).",
             )
-        elif len(self.item_slots.get(target.designation, ())) > 1:
+        elif self._ambiguous(target_id, target.designation):
             self._warn(
                 "render-ref-ambiguous",
-                f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which more than one list item "
-                f"in the document reads as: each list starts again at its first number. Number the "
-                f"paragraphs (paragraphs.numbered) or make it one list to tell them apart.",
+                f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which another list item that can "
+                f"appear with it also reads as: each list starts again at its first number. Make them one "
+                f"list, or refer to the item in words.",
             )
         text = self.style.references.format.replace("{designation}", target.designation)
         return CrossRef(text, target.anchor or "")
+
+    def _ambiguous(self, target_id: str, designation: str) -> bool:
+        """True if another list item that can appear together with the one
+        *target_id* anchors reads as the same *designation*. Alternatives,
+        and units under exclusive conditions, never appear together (§15.4)."""
+        slot = self.slot_of.get(target_id)
+        if slot is None:
+            return False
+        counter, number, presence = slot
+        return any(
+            (other_counter, other_number) != (counter, number) and not self._exclusive(presence, other_presence)
+            for other_counter, other_number, other_presence in self.item_slots.get(designation, ())
+        )
 
     def _term(self, directive: Directive, definition_id: str) -> Inline:
         term = self.result.definition_lookup.get(definition_id)
@@ -755,9 +779,6 @@ _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
 }
 
 
-_COUNTER_KEYS = itertools.count()
-
-
 class _Counter:
     """Numbers sibling units in order (§13.2, §15.8). A unit joins the
     previous unit's number when it is an alternative to it: the same
@@ -767,9 +788,6 @@ class _Counter:
 
     def __init__(self, exclusive: Callable[[Presence, Presence], bool]) -> None:
         self.exclusive = exclusive
-        #: Tells counters apart for as long as the render runs (an id() may
-        #: be reused once a counter is gone).
-        self.key = next(_COUNTER_KEYS)
         self.count = 0
         self.identifier = ""
         self.holders: list[Presence] = []

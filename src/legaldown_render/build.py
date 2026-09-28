@@ -61,6 +61,7 @@ from .tree import (
     Text,
 )
 from .validator_bridge import (
+    DRAFTING_MARKER,
     FENCE_OPEN_RE,
     MAX_QUOTE_DEPTH,
     block_fragments,
@@ -88,8 +89,9 @@ _BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 #: How deep lists, quotes, and inline formatting (emphasis, links) may nest,
 #: together. Far beyond any real document, and far enough below Python's
 #: recursion limit that building, resolving, and writing the tree never
-#: reach it. Deeper documents are refused up front, before the work that
-#: grows with the depth.
+#: reach it. The builder refuses a deeper document as it reaches the limit,
+#: before resolving or writing it. (The validator caps lists at 64 levels
+#: and quotes at 16 itself.)
 MAX_NESTING = 100
 
 
@@ -411,6 +413,8 @@ class _Builder:
         nested ones included, and each fragment says which items it is in
         (``list_fragments``), so a marker placed at an item's first
         paragraph belongs to the innermost of them."""
+        if not placed:
+            return self._list(block, {}, None)
         fragments = list_fragments(block)
         markers = {fragments[index][2][-1]: marker for index, marker in placed.items()}
         return self._list(block, markers, itertools.count())
@@ -418,7 +422,8 @@ class _Builder:
     def _list(self, block: ModelBlock, markers: dict[int, tuple[int, str, str]],
               numbers: Iterator[int] | None) -> List:
         """*block*'s items, numbered from *numbers* as the validator numbers
-        them (None in a quote, whose items it does not number)."""
+        them, to find the items *markers* belong to. None when no marker is
+        placed in the list, as in a quote, where the validator places none."""
         self._check_depth(1)
         self.depth += 1
         try:
@@ -454,17 +459,20 @@ class _Builder:
         """A block quote, its content the blocks the validator reads in it
         (``quote_content``). Past the validator's quote depth, it reads the
         quote's text as one, and so does the builder. A drafting note is
-        decided by the validator's own test (§15.6); its first line, the
-        ``[!DRAFTING]`` marker, is not shown."""
+        decided by the validator's own test (§15.6); its ``[!DRAFTING]``
+        marker, which starts its first paragraph or heading in the
+        validator's reading, is not shown."""
         drafting = is_drafting_note(block)
-        text = block.text.partition("\n")[2] if drafting else block.text
         self._check_depth(1)
         self.depth += 1
         try:
             if self.depth <= MAX_QUOTE_DEPTH:
-                children, _spans = quote_content(text, self.depth)
-                blocks = self.blocks(list(children), None, markers=False)
+                children = list(quote_content(block.text, self.depth)[0])
+                if drafting:
+                    children = _without_drafting_marker(children)
+                blocks = self.blocks(children, None, markers=False)
             else:
+                text = block.text.partition("\n")[2] if drafting else block.text
                 blocks = (Paragraph(self.text(text)),) if text.strip() else ()
         finally:
             self.depth -= 1
@@ -493,6 +501,18 @@ class _Builder:
             sections=sections,
             is_template=self.markers.template,
         )
+
+
+def _without_drafting_marker(children: list[ModelBlock]) -> list[ModelBlock]:
+    """A drafting note's blocks, as the validator reads them, without the
+    ``[!DRAFTING]`` marker that starts the first of them (its first line is
+    the marker, §15.6); a block that held only the marker goes."""
+    first = children[0] if children else None
+    if first is None or first.kind not in ("paragraph", "heading") \
+            or not first.text.upper().startswith(DRAFTING_MARKER):
+        return children
+    rest = first.text[len(DRAFTING_MARKER):].lstrip()
+    return ([replace(first, text=rest)] if rest else []) + children[1:]
 
 
 def _strip_markers(block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> tuple[ModelBlock, str, str]:
