@@ -20,6 +20,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `{{include:}}` below Full (§17.5) | ✅ Renders `[NOT PROCESSED: include path]` with a Warning (`render-not-processed`) |
 | Party and side display rules (§3.6) | ✅ |
 | At least one output format (§13.6) | ✅ HTML (recommended) and plain text (optional) |
+| A heading in a list item or a quote | ✅ Shown as a bold line: it is not a section (§4.1), so it has no number or anchor |
 | Comment stripping (§8.6) | ✅ Inline comments, and comment blocks across any number of lines. As in CommonMark, a comment block left unclosed runs to the end of the document |
 | Templates with answers (§15.8) | ✅ Assembled first with `legaldown-validator`'s Assembly capability (§15.7), then rendered: `answers=` / `--answers answers.yaml`. A template that needs other files is refused (see below) |
 | Template view without answers (§15.8) | ✅ Conditions marked with style-defined labels; every `{{choose:}}` phrase shown as `[a / b]`; drafting notes styled; alternatives share a number |
@@ -35,7 +36,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Signature blocks (§2.2) | ✅ One per party, with `legal_name` and each representative |
 | Labels following the document language (§13.7) | ✅ Built in for `en`, `cs`, `de`, `fr`, `pl`, and `sk`; any label can be set by a style |
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
-| `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ An HTML block is dropped whole; an inline tag is dropped and its text kept. Nothing is emitted, and comments draw no Warning |
+| `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML table is dropped with the Warning |
 | Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
@@ -64,9 +65,6 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   - **Line breaks** within a paragraph are joined, and a backslash hard break shows as a literal
     backslash. Link reference definitions (`[label]: url`) are not resolved
     ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)).
-  - **A heading inside a quote or a list item** shows as paragraph text: `# Heading` keeps its
-    `#`, and a setext underline joins the paragraph
-    ([#78](https://github.com/ForLegalAI/legaldown-validator/issues/78)).
 
 ## Beyond this level (Full, §17.4)
 

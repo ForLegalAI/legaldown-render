@@ -921,7 +921,7 @@ def test_indented_code_renders_as_code_without_its_indent() -> None:
 def test_markers_and_references_agree_with_the_validators_diagnostics() -> None:
     cases = [
         ("1. item\n   ```\n   code\n   ```\n   after {#x}\n\nSee {{ref: x}}.\n", True),
-        ("1. # Heading {#x}\n\nSee {{ref: x}}.\n", False),
+        ("1. # Heading {#x}\n\nSee {{ref: x}}.\n", True),  # a marker after a heading is text (§5.7)
         ("- item one\n\n  second {#x}\n\nSee {{ref: x}}.\n", True),
     ]
     for body, broken in cases:
@@ -940,6 +940,15 @@ def test_template_decision_is_the_validators() -> None:
 
 
 # -- regressions from the seventh code review ------------------------------------------
+
+
+def test_a_heading_in_a_quote_or_item_is_a_bold_line_not_a_section() -> None:
+    result = render(FRONT + "# A\n\n> # Inner\n> text\n\n- ## Item heading\n\n> title: x\n> ---\n> after\n",
+                    format="text")
+    assert "\n\n> Inner\n\n> text\n\n(a) Item heading\n\n> title: x\n\n> after\n" in result.output
+    assert [s.designation for s in result.tree.sections] == ["1"]
+    html = render(FRONT + "# A\n\n> # Inner\n", standalone=False).output
+    assert "<strong>Inner</strong>" in html
 
 
 def test_quote_content_is_read_as_a_body() -> None:
@@ -1027,8 +1036,8 @@ def test_a_dropped_comment_or_tag_leaves_one_space() -> None:
     result = render(FRONT + "# A\n\na <!-- x --> b <br> c <span>d</span> Line<br>two Word<b>bold</b>word\n",
                     format="text")
     assert "a b c d Line two Wordboldword" in result.output
-    warnings = [d for d in result.diagnostics if d.rule == "raw-html"]
-    assert len(warnings) == 1 and "in 1 place" in warnings[0].message
+    # Reported once, by the validator (§8.7).
+    assert [d.rule for d in result.diagnostics].count("raw-html") == 1
 
 
 def test_table_rows_are_as_wide_as_the_header() -> None:

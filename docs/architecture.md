@@ -99,15 +99,14 @@ still closes. A defined term in a link title or alt text shows its term but is n
 definition's anchor.
 
 An HTML block in the model (`kind="html"`), a comment block included, renders nothing (§8.6).
-One that holds anything besides comments counts once for the `raw-html` Warning (§8.7). Within a
-block's text, inline comments and tags are dropped; where one stood between two spaces, one space
-stays. Each text that had a tag (a paragraph, a title, a table cell) counts once for the Warning.
+Within a block's text, inline comments and tags are dropped; where one stood between two spaces,
+one space stays. The validator reports raw HTML other than comments (`raw-html`, §8.7). A heading
+in a list item or a quote (`kind="heading"`) is not a section (§4.1) and shows as a bold line.
 
 The builder never works around the validator's model. Where the model loses or misreads
 something, the output follows the model, and the gap is listed in `CONFORMANCE.md` and filed on
 the validator:
 - a paragraph's line breaks are joined
-- a heading inside a quote or a list item is paragraph text
 
 Guessing at lost structure was tried, and it traded each gap for new bugs.
 
@@ -222,8 +221,8 @@ validator to export them publicly is roadmap item U3.
 - **Internal inconsistencies** raise `InternalError`, and the CLI exits with 70.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
-`ref-not-enumerated` and `raw-html`, both specification rule ids, plus renderer-specific ids
-prefixed `render-`: `render-not-processed` and `render-locale-fallback`. Validator diagnostics
+`ref-not-enumerated`, a specification rule id, plus renderer-specific ids prefixed `render-`:
+`render-not-processed`, `render-locale-fallback`, and `render-ref-ambiguous`. Validator diagnostics
 have no line numbers yet, and neither do the renderer's.
 
 ## Security

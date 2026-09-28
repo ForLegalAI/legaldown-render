@@ -173,9 +173,6 @@ class _Builder:
         self.md = MarkdownIt("commonmark", {"html": True})
         self.env: dict = {}
         self.payloads: list[_Payload] = []
-        # Texts in which raw HTML was dropped (§8.7), counted once each.
-        self.raw_html = 0
-        self._dropped_html = False
         self.markers = placed_markers(document)
         self.depth = 0  # quotes and list items the builder is inside
         nonce = secrets.token_hex(8)
@@ -273,11 +270,7 @@ class _Builder:
     def text(self, source: str) -> tuple[Inline, ...]:
         """Inline nodes for *source*, one block's text as the validator
         holds it: directives protected, then parsed as inline Markdown."""
-        self._dropped_html = False
-        inlines = _trim(self.inlines(self._protect(source)))
-        if self._dropped_html:
-            self.raw_html += 1
-        return inlines
+        return _trim(self.inlines(self._protect(source)))
 
     def inlines(self, content: str) -> tuple[Inline, ...]:
         """Inline nodes for the inline Markdown *content* (sentinels included)."""
@@ -317,7 +310,6 @@ class _Builder:
             case "html_inline":
                 if node.content.startswith("<!--"):
                     return [_DROPPED]
-                self._dropped_html = True  # never emitted (§8.7)
                 return [_DROPPED_BREAK if _BREAK_TAG_RE.fullmatch(node.content) else _DROPPED]
             case _:
                 return [Text(self._restore(node.content))] if node.content else []
@@ -354,20 +346,12 @@ class _Builder:
         top_level = section is not None and markers
         for index, block in enumerate(blocks):
             if block.kind == "html":
-                self._html_block(block)
-                continue
+                continue  # never emitted: a comment (§8.6) or raw HTML (§8.7)
             placed = self._placed(block, section, index) if markers else {}
             built = self.block(block, placed, top_level=top_level)
             if built is not None:
                 out.append(built)
         return tuple(out)
-
-    def _html_block(self, block: ModelBlock) -> None:
-        """An HTML block renders nothing: a comment is stripped (§8.6), and
-        any other HTML is never emitted and is counted for the raw-html
-        Warning (§8.7)."""
-        if HTML_COMMENT_RE.sub("", block.text).strip():
-            self.raw_html += 1
 
     def _placed(self, block: ModelBlock, section: int | None, index: int) -> dict[int, tuple[int, str, str]]:
         """The markers the validator placed in *block*, by fragment index:
@@ -414,6 +398,11 @@ class _Builder:
                 )
             case "rule":
                 return Rule()
+            case "heading":
+                # A heading in a list item or a quote: not a section (§4.1),
+                # so it has no number and no anchor. It shows as a bold line.
+                inlines = self.text(block.text)
+                return Paragraph((Strong(inlines),)) if inlines else None
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
     def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List:
@@ -446,7 +435,7 @@ class _Builder:
                     if child.kind in ("ordered_list", "unordered_list"):
                         blocks.append(self._list(child, markers, numbers))
                     elif child.kind == "html":
-                        self._html_block(child)
+                        continue  # never emitted (§8.6, §8.7)
                     elif (built := self.block(child, {}, top_level=False)) is not None:
                         blocks.append(built)
                 items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition))
@@ -597,12 +586,9 @@ def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
     return tuple(merged)
 
 
-def build_tree(document: Document, result: ValidationResult) -> tuple[RenderTree, int]:
-    """The render tree for *document*, and the number of texts — a
-    paragraph, a title, a table cell — in which raw HTML was dropped (§8.7)."""
-    builder = _Builder(document, result)
-    tree = builder.tree()
-    return tree, builder.raw_html
+def build_tree(document: Document, result: ValidationResult) -> RenderTree:
+    """The render tree for *document*."""
+    return _Builder(document, result).tree()
 
 
 def plain_inlines(text: str) -> tuple[Inline, ...]:

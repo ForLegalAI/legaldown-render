@@ -157,14 +157,8 @@ def _parse(source: str) -> Document:
 
 def _resolve(document: Document, result: ValidationResult, style: Style) -> tuple[RenderTree, list[Diagnostic]]:
     diagnostics: list[Diagnostic] = []
-    tree, raw_html = build_tree(document, result)
-    if raw_html:
-        diagnostics.append(Diagnostic(
-            rule="raw-html",
-            level="warning",
-            message=f"Raw HTML in {raw_html} place(s) in the body is not rendered; HTML does not render "
-                    f"portably (§8.7).",
-        ))
+    # Raw HTML is never emitted; the validator reports it (raw-html, §8.7).
+    tree = build_tree(document, result)
     locale = parse_locale(style.locale) if style.locale else None
     if style.locale and locale is None:
         raise StyleError("setting", [f"locale: '{style.locale}' is not a known locale (e.g. en-US, cs-CZ)"])
