@@ -33,6 +33,10 @@ def text(body: str, **settings: object) -> str:
     return render(FRONT + body, format="text", **settings).output
 
 
+def html(body: str, **settings: object) -> str:
+    return render(FRONT + body, format="html", **settings).output
+
+
 def features(**settings: object) -> str:
     return render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), **settings).output
 
@@ -1118,12 +1122,10 @@ def test_an_unclosed_comment_inside_a_paragraph_is_text() -> None:
     assert "Shown." in output
 
 
-def test_a_hard_break_keeps_both_lines() -> None:
-    # How the break shows depends on the validator's parser
-    # (ForLegalAI/legaldown-validator#25); only the text is pinned.
-    output = text("# A\n\nLine one\\\nline two\n")
-    assert "Line one" in output
-    assert "line two" in output
+def test_hard_breaks_break_the_line_and_soft_breaks_do_not() -> None:
+    source = "# A\n\nLine one\\\nline two  \nline three\nline four\n"
+    assert "Line one\nline two\nline three line four\n" in text(source)
+    assert "Line one<br>\nline two<br>\nline three\nline four</p>" in html(source)
 
 
 def test_a_comment_opener_in_code_or_a_directive_does_not_open() -> None:
@@ -1151,14 +1153,3 @@ def test_a_dropped_comment_or_tag_leaves_one_space() -> None:
 def test_table_rows_are_as_wide_as_the_header() -> None:
     output = text("# A\n\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\n| x |\n")
     assert "| 1 | 2 |\n| x |  |" in output
-
-
-def test_template_decision_matches_the_validator_on_the_test_documents() -> None:
-    from conftest import validator_template
-    from legaldown import parse_document
-
-    from legaldown_render.validator_bridge import placed_markers
-
-    for name in ("features", "template"):
-        document = parse_document((DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8"))
-        assert placed_markers(document).template == validator_template(document)

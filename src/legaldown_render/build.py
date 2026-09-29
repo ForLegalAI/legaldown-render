@@ -2,10 +2,10 @@
 (docs/architecture.md, docs/decisions/0002).
 
 There is one parser: ``legaldown-validator``'s. Its ``Document`` gives the
-sections, their blocks, and each block's text, and its own findings say
-where markers are placed and whether the document is a template
-(:mod:`.validator_bridge`). The builder never decides a structural or
-LegalDown question itself.
+sections, their blocks, and each block's text, and its ``ValidationResult``
+says where markers are placed and whether the document is a template
+(``placed_markers``, ``is_template``). The builder never decides a
+structural or LegalDown question itself.
 
 Within one block's text it still needs inline Markdown — emphasis, links,
 code spans — which markdown-it-py parses in inline mode only. Directives
@@ -22,16 +22,26 @@ validator reads in it (ForLegalAI/legaldown-validator#71, #72).
 """
 from __future__ import annotations
 
-import itertools
 import re
 import secrets
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from functools import cache
+from itertools import count
 from urllib.parse import unquote
 
 from legaldown import Block as ModelBlock
-from legaldown import Directive, Document, ValidationResult, find_definition_anchors, render_block
-from legaldown.markers import HTML_COMMENT_RE
+from legaldown import (
+    Directive,
+    Document,
+    PlacedMarker,
+    ValidationResult,
+    find_definition_anchors,
+    is_drafting_note,
+    lex,
+    list_items,
+    render_block,
+)
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 
@@ -60,20 +70,7 @@ from .tree import (
     Table,
     Text,
 )
-from .validator_bridge import (
-    FENCE_OPEN_RE,
-    MAX_QUOTE_DEPTH,
-    block_fragments,
-    closes_fence,
-    dedent,
-    indent_width,
-    is_drafting_note,
-    lex,
-    list_fragments,
-    list_items,
-    placed_markers,
-    quote_content,
-)
+from .validator_bridge import FENCE_OPEN_RE, MAX_QUOTE_DEPTH, closes_fence, dedent, indent_width, quote_content
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
 # Leads the sentinel of source that renders nothing (a {{def:}}). It is
@@ -177,7 +174,13 @@ class _Builder:
         self.md = MarkdownIt("commonmark", {"html": True})
         self.env: dict = {}
         self.payloads: list[_Payload] = []
-        self.markers = placed_markers(document)
+        # The markers the validator placed, by (section index or None for
+        # the preamble, block index).
+        self.placed: dict[tuple[int | None, int], list[PlacedMarker]] = {}
+        for marker in result.placed_markers:
+            self.placed.setdefault((marker.section, marker.block), []).append(marker)
+        # Each text is lexed once in a render.
+        self.lex = cache(lex)
         self.depth = 0  # quotes and list items the builder is inside
         nonce = secrets.token_hex(8)
         # A hidden sentinel has its own form ("h"), so the lead character is
@@ -202,7 +205,7 @@ class _Builder:
         sentinel, so that Markdown cannot reinterpret directive syntax. A defined term
         becomes one sentinel and its {{def:}} another that renders nothing
         (see _DefinitionSpan). One pass over the directives, in order."""
-        lexed = self.markers.lex(body)
+        lexed = self.lex(body)
         spans: dict[int, _DefinitionSpan] = {}
         for anchor in find_definition_anchors(body, language=self.language, lexed=lexed):
             if anchor.term is None or anchor.pair is None:
@@ -351,32 +354,13 @@ class _Builder:
         for index, block in enumerate(blocks):
             if block.kind == "html":
                 continue  # never emitted: a comment (§8.6) or raw HTML (§8.7)
-            placed = self._placed(block, section, index) if markers else {}
+            placed = self.placed.get((section, index), []) if markers else []
             built = self.block(block, placed, top_level=top_level)
             if built is not None:
                 out.append(built)
         return tuple(out)
 
-    def _placed(self, block: ModelBlock, section: int | None, index: int) -> dict[int, tuple[int, str, str]]:
-        """The markers the validator placed in *block*, by fragment index:
-        (offset of the marker in the fragment, identifier, condition)."""
-        placed: dict[int, tuple[int, str, str]] = {}
-        fragments = block_fragments(block)
-        for fragment_index, (fragment, _position) in enumerate(fragments):
-            found = self.markers.placed.get((section, index, fragment_index))
-            if found is None:
-                continue
-            # The marker ends the first line; comments may follow it (§8.6),
-            # so a copy of its text inside one is not it.
-            first_line = HTML_COMMENT_RE.sub(lambda m: " " * len(m.group()), fragment.split("\n", 1)[0])
-            offset = first_line.rfind(found.source)
-            if offset < 0:
-                raise InternalError(f"the validator placed '{found.source}' where the renderer cannot find it")
-            identifier = "" if found.include_only else found.marker.identifier
-            placed[fragment_index] = (offset, identifier, found.marker.condition)
-        return placed
-
-    def block(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]], *, top_level: bool) -> Block | None:
+    def block(self, block: ModelBlock, placed: list[PlacedMarker], *, top_level: bool) -> Block | None:
         match block.kind:
             case "paragraph" | "definition" | "ref" | "term":
                 block, identifier, condition = _strip_markers(block, placed)
@@ -409,41 +393,34 @@ class _Builder:
                 return Paragraph((Strong(inlines),)) if inlines else None
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def list(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> List:
+    def list(self, block: ModelBlock, placed: list[PlacedMarker]) -> List:
         """A list, nested as the validator's model holds it: items that hold
-        blocks. The validator numbers a list's items in document order,
-        nested ones included, and each fragment says which items it is in
-        (``list_fragments``), so a marker placed at an item's first
-        paragraph belongs to the innermost of them."""
-        if not placed:
-            return self._list(block, {}, None)
-        fragments = list_fragments(block)
-        markers = {fragments[index][2][-1]: marker for index, marker in placed.items()}
-        return self._list(block, markers, itertools.count())
+        blocks. A placed marker names the item it marks by its pre-order
+        number among all the list's items, as the validator numbers them."""
+        markers = {marker.item: marker for marker in placed}
+        return self._list(block, markers, count())
 
-    def _list(self, block: ModelBlock, markers: dict[int, tuple[int, str, str]],
-              numbers: Iterator[int] | None) -> List:
-        """*block*'s items, numbered from *numbers* as the validator numbers
-        them, to find the items *markers* belong to. None when no marker is
-        placed in the list, as in a quote, where the validator places none."""
+    def _list(self, block: ModelBlock, markers: dict[int | None, PlacedMarker], numbers: Iterator[int]) -> List:
+        """*block*'s items, numbered from *numbers* in pre-order, to find the
+        items *markers* belong to."""
         self._check_depth(1)
         self.depth += 1
         try:
             items: list[ListItem] = []
             for item in list_items(block):
-                number = next(numbers) if numbers is not None else None
+                marker = markers.get(next(numbers))
                 children = list(item.blocks)
                 identifier = condition = ""
-                if number in markers:
-                    offset, identifier, condition = markers[number]
-                    children[0] = replace(children[0], text=_cut_marker(children[0].text, offset))
+                if marker is not None:
+                    identifier, condition = marker.identifier, marker.condition
+                    children[0] = replace(children[0], text=_cut_marker(children[0].text, marker))
                 blocks: list[Block] = []
                 for child in children:
                     if child.kind in ("ordered_list", "unordered_list"):
                         blocks.append(self._list(child, markers, numbers))
                     elif child.kind == "html":
                         continue  # never emitted (§8.6, §8.7)
-                    elif (built := self.block(child, {}, top_level=False)) is not None:
+                    elif (built := self.block(child, [], top_level=False)) is not None:
                         blocks.append(built)
                 items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition))
         finally:
@@ -506,7 +483,7 @@ class _Builder:
             language=self.language,
             preamble=self.blocks(document.preamble, None),
             sections=sections,
-            is_template=self.markers.template,
+            is_template=self.result.is_template,
         )
 
 
@@ -524,29 +501,26 @@ def _without_drafting_marker(children: list[ModelBlock]) -> list[ModelBlock] | N
     return ([replace(first, text=rest)] if rest else []) + children[1:]
 
 
-def _strip_markers(block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> tuple[ModelBlock, str, str]:
+def _strip_markers(block: ModelBlock, placed: list[PlacedMarker]) -> tuple[ModelBlock, str, str]:
     """*block* without its placed marker, and the marker's identifier and
-    condition. Fragments are numbered as block_fragments numbers them."""
-    fields = [name for name in ("text", "prefix", "suffix") if getattr(block, name)]
+    condition. The validator says which field holds the marker."""
     identifier = condition = ""
-    for fragment_index, (offset, marker_id, marker_condition) in placed.items():
-        if fragment_index >= len(fields):
-            raise InternalError(f"the validator placed a marker in fragment {fragment_index} of a {block.kind} block")
-        name = fields[fragment_index]
-        block = replace(block, **{name: _cut_marker(getattr(block, name), offset)})
-        identifier, condition = marker_id, marker_condition
+    for marker in placed:
+        block = replace(block, **{marker.field: _cut_marker(getattr(block, marker.field), marker)})
+        identifier, condition = marker.identifier, marker.condition
     return block, identifier, condition
 
 
-def _cut_marker(fragment: str, offset: int) -> str:
-    """*fragment* without the marker at *offset* on its first line; a
-    comment after the marker stays (it renders nothing)."""
-    first, newline, rest = fragment.partition("\n")
-    end = first.index("}", offset) + 1
+def _cut_marker(fragment: str, marker: PlacedMarker) -> str:
+    """*fragment* without *marker*, which ends it; a comment after the
+    marker stays (it renders nothing)."""
+    end = marker.offset + len(marker.source)
+    if fragment[marker.offset:end] != marker.source:
+        raise InternalError(f"the validator placed '{marker.source}' where the renderer cannot find it")
     # Only the spacing around the marker goes: text before it keeps its own
     # leading space (a lifted {{ref:}}'s suffix begins with one).
-    before, after = first[:offset].rstrip(), first[end:].strip()
-    return (f"{before} {after}" if after else before) + newline + rest
+    before, after = fragment[:marker.offset].rstrip(), fragment[end:].strip()
+    return f"{before} {after}" if after else before
 
 
 def _paragraph_source(block: ModelBlock) -> str:

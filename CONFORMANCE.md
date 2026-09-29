@@ -1,7 +1,7 @@
 # Conformance
 
-`legaldown-render` 0.1.0 targets **Level 2 — Rendering** of the LegalDown specification **0.2**
-(§17.3). Core parsing and validation come from `legaldown-validator` 0.2.0, which claims Level 1
+`legaldown-render` 0.2.0 targets **Level 2 — Rendering** of the LegalDown specification **0.2**
+(§17.3). Core parsing and validation come from `legaldown-validator` 0.3.0, which claims Level 1
 — Core. Its own [CONFORMANCE.md](https://github.com/ForLegalAI/legaldown-validator/blob/main/CONFORMANCE.md)
 lists the Core rules it covers.
 
@@ -47,7 +47,9 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 - **Assembly reads no other files.** A template with include fragments, LegalDown attachment
   files, or `translations` is refused when rendered with answers, as §17.6 requires below Full.
   A template with Errors is refused too, since §15.7.2 defines no output for one.
-- **Diagnostics have no line numbers**, because the validator's diagnostics do not carry them yet.
+- **Line numbers.** The validator's diagnostics name their line, and the CLI prints it. The
+  renderer's own (`render-ref-ambiguous`, `ref-not-enumerated`, `render-not-processed`) do not
+  yet ([validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93)).
 - **Nesting limit.** The validator reads lists 64 levels deep and quotes 16; deeper, an item's or
   quote's content is its text. The renderer follows it, and refuses (`DocumentError`) a document
   whose lists, quotes, and inline formatting (emphasis, links) together nest more than 100 levels,
@@ -69,10 +71,9 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   ([ADR 0007](docs/decisions/0007-one-parser-validator-model.md)). Anchors, markers, and the
   template view therefore always agree with the validator's diagnostics. The price is that some
   structure renders as the validator's model holds it, until that model keeps more (roadmap
-  U1b–U2):
-  - **Line breaks** within a paragraph are joined, and a backslash hard break shows as a literal
-    backslash. Link reference definitions (`[label]: url`) are not resolved
-    ([#25](https://github.com/ForLegalAI/legaldown-validator/issues/25)).
+  U1b):
+  - **Link reference definitions** (`[label]: url`) render as paragraphs, and the links that use
+    them as text ([#92](https://github.com/ForLegalAI/legaldown-validator/issues/92)).
 
 ## Beyond this level (Full, §17.4)
 

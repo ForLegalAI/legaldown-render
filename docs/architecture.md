@@ -78,14 +78,14 @@ never decides a structural or LegalDown question itself:
 |---|---|
 | Sections, headings, identifiers | `Document.sections`, `ValidationResult.sections` |
 | Blocks: paragraphs, lists and items, quotes, tables, code, rules | `Document` blocks. List items hold blocks (nested lists, code, quotes, tables), and a quote's content is the validator's `quote_content()` |
-| Where a marker (`{#id when=…}`) is placed, and what it means | The validator's `find_markers()`, with its own `placed(template)` |
-| Whether the document is a template | The validator's `is_template()`, over those markers |
+| Where a marker (`{#id when=…}`) is placed, and what it means | `ValidationResult.placed_markers`: each marker's block, field, offset, identifier, and condition |
+| Whether the document is a template | `ValidationResult.is_template` |
 | Whether a quote is a drafting note | The validator's `is_drafting_note()` |
-| Which list item a marker belongs to | The validator's `list_fragments()`: the items each fragment is in, numbered in document order |
+| Which list item a marker belongs to | `PlacedMarker.item`: the item's number among the list's items, in pre-order |
 | A lifted definition, `{{ref:}}` or `{{term:}}` block's source | The validator's `render_block()` |
 
-The imports beyond the validator's public API are all in `validator_bridge.py`, which is the
-list for roadmap item U3.
+The few imports beyond the validator's public API (quote content, fence helpers, the
+answers-file reader) are all in `validator_bridge.py`, the list for roadmap item U3.
 
 Within one block's text, **markdown-it-py parses inline Markdown only**: emphasis, links, code
 spans, inline HTML. Directives are protected first by **sentinels**. Every directive, and every
@@ -106,7 +106,7 @@ in a list item or a quote (`kind="heading"`) is not a section (§4.1) and shows 
 The builder never works around the validator's model. Where the model loses or misreads
 something, the output follows the model, and the gap is listed in `CONFORMANCE.md` and filed on
 the validator:
-- a paragraph's line breaks are joined
+- link reference definitions (`[label]: url`) render as paragraphs
 
 Guessing at lost structure was tried, and it traded each gap for new bugs.
 
@@ -168,7 +168,7 @@ clamped to 1–5, as the validator numbers them.
 
 | Writer | Notes |
 |---|---|
-| `TextWriter` | Plain text (§13.6). Line breaks inside paragraphs are joined, and lists are indented with their labels. It is the **test oracle** for resolution |
+| `TextWriter` | Plain text (§13.6). A soft line break inside a paragraph is a space, a hard break a new line, and lists are indented with their labels. It is the **test oracle** for resolution |
 | `HtmlWriter` | A self-contained HTML5 page, or with `standalone=False` just the `<article>`. Semantic markup, with labels as real text rather than CSS counters, and a stylesheet generated from the style's presentation settings, including print rules |
 | DOCX, PDF | Planned ([ADR 0004](decisions/0004-html-first.md)) |
 
@@ -198,19 +198,18 @@ src/legaldown_render/
 
 | Dependency | Why |
 |---|---|
-| `legaldown-validator>=0.2.0,<0.3` | The only LegalDown parser; Core validation |
+| `legaldown-validator>=0.3.0,<0.4` | The only LegalDown parser; Core validation |
 | `markdown-it-py` | Inline Markdown inside one block's text (ADR 0007) |
 | `babel` | CLDR locale data (ADR 0005) |
 | `pyyaml` | Style templates |
 
 All of them are pure Python. The DOCX and PDF writers will bring their dependencies in as extras.
 
-The renderer imports a few names from `legaldown` submodules that the validator does not
-re-export at the top level: `legaldown.directives.lex`, `legaldown.markers`,
-`legaldown.parser.FRONTMATTER_RE`, `legaldown.validator.helpers`,
-`legaldown.validator.patterns`, `legaldown.validator.conditions`, and one private function,
-`legaldown.validator.core._frontmatter_fields`. The pin to one minor version exists because of them. Asking the
-validator to export them publicly is roadmap item U3.
+The renderer uses the validator's public API (`legaldown`, `legaldown.validator`), except for
+the few names in `validator_bridge.py`: `quote_content` and `MAX_QUOTE_DEPTH`, the fence
+helpers, and the answers-file reader. The pin to one minor version exists because of them.
+Asking the validator to export them publicly is roadmap item U3
+([validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93)).
 
 ## Errors and diagnostics
 
@@ -222,8 +221,9 @@ validator to export them publicly is roadmap item U3.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
 `ref-not-enumerated`, a specification rule id, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-locale-fallback`, and `render-ref-ambiguous`. Validator diagnostics
-have no line numbers yet, and neither do the renderer's.
+`render-not-processed`, `render-locale-fallback`, and `render-ref-ambiguous`. The validator's
+diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
+have none yet, because a block's line is not public in the validator (U2).
 
 ## Security
 

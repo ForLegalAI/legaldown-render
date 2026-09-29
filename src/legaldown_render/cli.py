@@ -128,7 +128,9 @@ def _report(name: str, diagnostics: list, *, quiet: bool) -> None:
     if quiet:
         return
     for diagnostic in diagnostics:
-        print(f"{name}: {diagnostic.level}: [{diagnostic.rule}] {diagnostic.message}", file=sys.stderr)
+        # As the validator's CLI prints them: the line when the finding has one.
+        where = f"{name}:{diagnostic.line}" if diagnostic.line else name
+        print(f"{where}: {diagnostic.level}: [{diagnostic.rule}] {diagnostic.message}", file=sys.stderr)
 
 
 if __name__ == "__main__":

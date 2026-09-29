@@ -90,22 +90,6 @@ def test_raw_html_fixture_emits_no_html() -> None:
         assert "raw-html" in {d.rule for d in result.diagnostics}
 
 
-@pytest.mark.parametrize("path", EXAMPLES + FIXTURES, ids=_name)
-def test_template_decision_is_the_validators(path: Path) -> None:
-    """The renderer asks the validator's is_template over the markers it
-    found itself; the answer must be the one validate_document uses."""
-    from conftest import validator_template
-    from legaldown import parse_document
-
-    from legaldown_render.validator_bridge import placed_markers
-
-    try:
-        document = parse_document(path.read_text(encoding="utf-8"))
-    except Exception:
-        pytest.skip("not a readable document")
-    assert placed_markers(document).template == validator_template(document)
-
-
 ASSEMBLY = sorted(path for path in (SPEC / "fixtures" / "assembly").iterdir() if path.is_dir()) \
     if (SPEC / "fixtures" / "assembly").is_dir() else []
 

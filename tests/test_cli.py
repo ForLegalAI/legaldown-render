@@ -14,7 +14,10 @@ def test_render_to_file_infers_the_format(tmp_path: Path, capsys: pytest.Capture
     out = tmp_path / "out.txt"
     assert main([FEATURES, "-o", str(out)]) == 0
     assert out.read_text().startswith("Services Agreement")
-    assert "[ref-broken]" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "[ref-broken]" in err
+    # A validator finding names its line, as the validator's CLI prints it.
+    assert f"{FEATURES}:100: warning: [raw-html]" in err
 
 
 def test_style_set_and_locale(capsys: pytest.CaptureFixture[str]) -> None:

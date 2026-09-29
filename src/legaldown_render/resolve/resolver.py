@@ -25,10 +25,18 @@ from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 
 from legaldown import Diagnostic, Directive, Document, ValidationResult, slugify_identifier
-from legaldown.validator import KNOWN_CURRENCIES
-from legaldown.validator.conditions import ALWAYS, Presence, condition_problem, exclusive, parse_condition
-from legaldown.validator.helpers import is_positive_numeric, is_valid_iso_date, is_valid_money_amount
-from legaldown.validator.patterns import IDENTIFIER_RE
+from legaldown.validator import (
+    ALWAYS,
+    IDENTIFIER_RE,
+    KNOWN_CURRENCIES,
+    Presence,
+    condition_problem,
+    exclusive,
+    is_positive_numeric,
+    is_valid_iso_date,
+    is_valid_money_amount,
+    parse_condition,
+)
 
 from ..build import plain_inlines
 from ..style import Style, effective_labels

@@ -31,10 +31,7 @@ classifiers = [
 dependencies = [
     # The only LegalDown parser (docs/decisions/0002). A minor bump may change
     # the model, so the range is pinned to one minor version.
-    # NOT RELEASABLE YET: this code needs the validator release after 0.2.0
-    # (the CommonMark block model, is_template, assemble). Move the range to
-    # that release when it is published.
-    "legaldown-validator>=0.2.0,<0.3",
+    "legaldown-validator>=0.3.0,<0.4",
     # Inline Markdown (emphasis, links, code spans) within the validator's
     # blocks, parsed in inline mode only (docs/decisions/0007).
     "markdown-it-py>=3.0,<5",
