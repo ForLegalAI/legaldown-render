@@ -130,12 +130,12 @@ class Resolver:
         self.diagnostics: list[Diagnostic] = []
         self.targets: dict[str, _Target] = {}
         self.used_anchors: set[str] = set()
-        # For render-ref-ambiguous: each designation of a numbered item or
-        # paragraph, with its numbered slots (counter and number: alternatives
-        # share one) and the presence of the unit holding it; and the slots
-        # of each anchored unit, one per alternative.
-        self.item_slots: dict[str, list[tuple[_Counter, int, Presence]]] = {}
-        self.slot_of: dict[str, list[tuple[_Counter, int, Presence]]] = {}
+        # For render-ref-ambiguous: every designation a numbered unit — a
+        # section, a paragraph, a list item — reads as, with each unit's slot
+        # (what numbers it and its number: alternatives share one) and the
+        # presence of the unit; and the slots of each anchored unit.
+        self.designation_slots: dict[str, list[_Slot]] = {}
+        self.slot_of: dict[str, list[_Slot]] = {}
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
         self.inconsistent_placeholders: set[str] = set()
@@ -293,6 +293,8 @@ class Resolver:
                 label = fill(fmt.label, n=format_counter(parts[-1], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
             self._register(section.identifier, _Target(designation, anchor))
+            # Sections with one number are alternatives (the validator's).
+            self._record(designation, (_SECTIONS, indexed.number, presences[level]), section.identifier)
             out.append(replace(section, level=min(len(parts), 5), label=label, designation=designation,
                                anchor=anchor))
         return out
@@ -340,9 +342,10 @@ class Resolver:
         for block in section.blocks:
             if isinstance(block, Paragraph) and block.top_level:
                 # Alternative paragraphs share a number, as sections do (§15.8).
-                number = paragraphs.next(block.anchor_id, self._own_presence(block.condition, presence))
-                block = self._number_paragraph(block, section, number,
-                                               slot=(paragraphs, number, presence | self._presence(block.condition)))
+                own = self._own_presence(block.condition, presence)
+                number = paragraphs.next(block.anchor_id, own)
+                block = self._number_paragraph(block, section, paragraphs, number,
+                                               presence if own is None else own)
             out.append(self._structure(block, section=section, depth=0, presence=presence))
         return tuple(out)
 
@@ -352,19 +355,20 @@ class Resolver:
         own = self._presence(condition)
         return enclosing | own if own else None
 
-    def _number_paragraph(self, block: Paragraph, section: Section, number: int,
-                          slot: tuple[_Counter, int, Presence]) -> Paragraph:
+    def _number_paragraph(self, block: Paragraph, section: Section, counter: _Counter, number: int,
+                          presence: Presence) -> Paragraph:
         numbering = self.style.paragraphs
         base = section.designation or ""
         if numbering.numbered:
             fmt = numbering.format
             n = format_counter(number, fmt.counter)
             designation = extend(base, fill(fmt.ref, n=n, section=base), textual=self.textual)
-            label = fill(fmt.label, n=n, section=base, path=designation)
+            # Under the none scheme the designation is heading text, which a
+            # label's "{section}" cannot rebuild: the label is what {{ref:}}
+            # prints, so the two never differ.
+            label = designation if self.textual else fill(fmt.label, n=n, section=base, path=designation)
             target = _Target(designation, None)
-            self.item_slots.setdefault(designation, []).append(slot)
-            if block.anchor_id:
-                self.slot_of.setdefault(block.anchor_id, []).append(slot)
+            self._record(designation, (counter, number, presence), block.anchor_id)
         else:
             label, target = None, _Target(base, None, enumerated=False)
         anchor = self._anchor(block.anchor_id)
@@ -424,10 +428,7 @@ class Resolver:
                 label = fill(fmt.label, n=n, section=base, path=designation)
                 target = _Target(designation, None)
                 if not quoted:
-                    slot = (counter, index, inner)
-                    self.item_slots.setdefault(designation, []).append(slot)
-                    if item.anchor_id:
-                        self.slot_of.setdefault(item.anchor_id, []).append(slot)
+                    self._record(designation, (counter, index, inner), item.anchor_id)
             else:
                 designation, label, target = parent, None, _Target(base, None, enumerated=False)
             anchor = self._anchor(item.anchor_id)
@@ -531,26 +532,34 @@ class Resolver:
             self._warn(
                 "render-ref-ambiguous",
                 f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which may also be how another "
-                f"numbered item or paragraph reads: each list starts again at its first number. Make them one "
-                f"list, or refer to the item in words.",
+                f"numbered part of the document reads (a section, a paragraph, or a list item). Refer to it in "
+                f"words, or number the parts apart.",
             )
         text = self.style.references.format.replace("{designation}", target.designation)
         return CrossRef(text, target.anchor or "")
 
+    def _record(self, designation: str, slot: _Slot, anchor_id: str) -> None:
+        """Note that a numbered unit reads as *designation* (render-ref-ambiguous)."""
+        self.designation_slots.setdefault(designation, []).append(slot)
+        if anchor_id:
+            self.slot_of.setdefault(anchor_id, []).append(slot)
+
     def _ambiguous(self, target_id: str, designation: str) -> bool:
-        """True if another numbered item or paragraph may read as the same
-        *designation* as the one *target_id* anchors, in a document where
-        both appear. A hint, not a proof: units under exclusive conditions
-        never appear together (§15.4), but where the reference itself
-        stands is not considered."""
-        own = self.slot_of.get(target_id, [])
-        if not own:
+        """True if another numbered unit may read as the same *designation*
+        as the one *target_id* anchors, in a document where both appear. The
+        unit is the first that took the anchor, with its alternatives, which
+        share its number; any other unit, a second use of the identifier
+        included, is another. A hint, not a proof: units under exclusive
+        conditions never appear together (§15.4), but where the reference
+        itself stands is not considered."""
+        slots = self.slot_of.get(target_id)
+        if not slots:
             return False
-        own_numbers = {(counter, number) for counter, number, _presence in own}
+        number = slots[0][:2]
+        presences = [presence for key, value, presence in slots if (key, value) == number]
         return any(
-            (counter, number) not in own_numbers
-            and any(not self._exclusive(presence, other) for _c, _n, presence in own)
-            for counter, number, other in self.item_slots.get(designation, ())
+            (key, value) != number and any(not self._exclusive(presence, other) for presence in presences)
+            for key, value, other in self.designation_slots.get(designation, ())
         )
 
     def _term(self, directive: Directive, definition_id: str) -> Inline:
@@ -788,6 +797,10 @@ _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
 }
 
 
+#: What numbers sections, in a unit's slot: the validator (its numbers).
+_SECTIONS = object()
+
+
 class _Counter:
     """Numbers sibling units in order (§13.2, §15.8). A unit joins the
     previous unit's number when it is an alternative to it: the same
@@ -818,6 +831,11 @@ class _Counter:
         self.identifier = identifier if presence is not None else ""
         self.holders = [presence] if presence is not None else []
         return self.count
+
+
+#: A numbered unit's slot: what numbers it (a _Counter, or _SECTIONS), its
+#: number, and the unit's presence (§15.3).
+_Slot = tuple[object, object, Presence]
 
 
 def fill_condition(template: str, value: str, *, key: str = "condition") -> str:

@@ -832,10 +832,45 @@ def test_a_numbered_paragraph_reading_like_a_list_item_is_ambiguous() -> None:
     assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
 
 
+def test_an_item_reading_like_a_subsection_is_ambiguous() -> None:
+    # Continental items read "{section}.{n}", as subsection 1.1 does.
+    result = render(FRONT + "# A\n\n- a {#x}\n\n## B\n\nSee {{ref: x}}.\n", format="text", style="continental")
+    assert "See 1.1." in result.output
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
+def test_a_second_use_of_an_identifier_is_another_unit() -> None:
+    result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b {#x}\n\nSee {{ref: x}}.\n", format="text")
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
+PARAGRAPHS = {"paragraphs.numbered": True,
+              "paragraphs.format": {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"}}
+
+
+def test_a_list_item_clashing_only_with_a_paragraph_is_ambiguous() -> None:
+    result = render(FRONT + "# A\n\nIntro.\n\n- item {#i}\n\nSee {{ref: i}}.\n", format="text",
+                    overrides=PARAGRAPHS)
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
+def test_paragraphs_under_exclusive_conditions_are_not_ambiguous() -> None:
+    body = ("# A\n\nCourts only. {#p when=forum:courts}\n\n- only under arbitration {#i when=forum:arbitration}\n\n"
+            "See {{ref: p}}.\n")
+    result = render(QUESTIONS + body, format="text", overrides=PARAGRAPHS)
+    assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
+
+
+def test_a_paragraph_label_is_what_its_reference_prints_under_the_none_scheme() -> None:
+    output = text("# A\n\nIntro {#p}\n\nSee {{ref: p}}.\n",
+                  overrides={"numbering.scheme": "none", "paragraphs.numbered": True})
+    assert "\n\nA 1 Intro\n\nA 2 See A 1.\n" in output
+
+
 def test_an_ambiguous_reference_says_how_to_tell_the_items_apart() -> None:
     result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b\n\nSee {{ref: x}}.\n", format="text")
     message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
-    assert "one list" in message and "in words" in message and "paragraphs" not in message
+    assert "in words" in message and "number the parts apart" in message
 
 
 def test_a_drafting_note_reads_as_the_validator_reads_it() -> None:
