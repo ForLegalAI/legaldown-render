@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 from legaldown import Diagnostic, Directive, Document, ValidationResult, slugify_identifier
 from legaldown.validator import KNOWN_CURRENCIES
@@ -108,6 +108,8 @@ class _Target:
     #: False for an item or paragraph whose list or paragraphs the style does
     #: not number: the designation is then its section's (§6.3).
     enumerated: bool = True
+    #: The numbered unit the anchor is on, for render-ref-ambiguous.
+    slot: _Slot | None = None
 
 
 class Resolver:
@@ -131,11 +133,8 @@ class Resolver:
         self.targets: dict[str, _Target] = {}
         self.used_anchors: set[str] = set()
         # For render-ref-ambiguous: every designation a numbered unit — a
-        # section, a paragraph, a list item — reads as, with each unit's slot
-        # (what numbers it and its number: alternatives share one) and the
-        # presence of the unit; and the slots of each anchored unit.
+        # section, a paragraph, a list item — reads as, with each unit's slot.
         self.designation_slots: dict[str, list[_Slot]] = {}
-        self.slot_of: dict[str, list[_Slot]] = {}
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
         self.inconsistent_placeholders: set[str] = set()
@@ -292,9 +291,10 @@ class Resolver:
                 fmt = levels[min(len(parts), len(levels)) - 1]
                 label = fill(fmt.label, n=format_counter(parts[-1], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
-            self._register(section.identifier, _Target(designation, anchor))
             # Sections with one number are alternatives (the validator's).
-            self._record(designation, (_SECTIONS, indexed.number, presences[level]), section.identifier)
+            slot = _Slot(_SECTIONS, indexed.number, presences[level], "section", section.identifier)
+            self._record(designation, slot)
+            self._register(section.identifier, _Target(designation, anchor, slot=slot))
             out.append(replace(section, level=min(len(parts), 5), label=label, designation=designation,
                                anchor=anchor))
         return out
@@ -363,12 +363,10 @@ class Resolver:
             fmt = numbering.format
             n = format_counter(number, fmt.counter)
             designation = extend(base, fill(fmt.ref, n=n, section=base), textual=self.textual)
-            # Under the none scheme the designation is heading text, which a
-            # label's "{section}" cannot rebuild: the label is what {{ref:}}
-            # prints, so the two never differ.
-            label = designation if self.textual else fill(fmt.label, n=n, section=base, path=designation)
-            target = _Target(designation, None)
-            self._record(designation, (counter, number, presence), block.anchor_id)
+            label = fill(fmt.label, n=n, section=base, path=designation)
+            slot = _Slot(counter, number, presence, "paragraph", block.anchor_id)
+            target = _Target(designation, None, slot=slot)
+            self._record(designation, slot)
         else:
             label, target = None, _Target(base, None, enumerated=False)
         anchor = self._anchor(block.anchor_id)
@@ -428,7 +426,9 @@ class Resolver:
                 label = fill(fmt.label, n=n, section=base, path=designation)
                 target = _Target(designation, None)
                 if not quoted:
-                    self._record(designation, (counter, index, inner), item.anchor_id)
+                    slot = _Slot(counter, index, inner, "item", item.anchor_id)
+                    target = replace(target, slot=slot)
+                    self._record(designation, slot)
             else:
                 designation, label, target = parent, None, _Target(base, None, enumerated=False)
             anchor = self._anchor(item.anchor_id)
@@ -528,39 +528,44 @@ class Resolver:
                 f"'{{{{ref: {target_id}}}}}' targets an item or paragraph that the style does not number; "
                 f"it renders as its section's designation, '{target.designation}' (§6.3).",
             )
-        elif self._ambiguous(target_id, target.designation):
-            self._warn(
-                "render-ref-ambiguous",
-                f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which may also be how another "
-                f"numbered part of the document reads (a section, a paragraph, or a list item). Refer to it in "
-                f"words, or number the parts apart.",
-            )
+        elif target.slot is not None and (clashes := self._clashes(target.slot, target.designation)):
+            self._warn("render-ref-ambiguous", self._ambiguity_message(target_id, target, clashes))
         text = self.style.references.format.replace("{designation}", target.designation)
         return CrossRef(text, target.anchor or "")
 
-    def _record(self, designation: str, slot: _Slot, anchor_id: str) -> None:
+    def _record(self, designation: str, slot: _Slot) -> None:
         """Note that a numbered unit reads as *designation* (render-ref-ambiguous)."""
         self.designation_slots.setdefault(designation, []).append(slot)
-        if anchor_id:
-            self.slot_of.setdefault(anchor_id, []).append(slot)
 
-    def _ambiguous(self, target_id: str, designation: str) -> bool:
-        """True if another numbered unit may read as the same *designation*
-        as the one *target_id* anchors, in a document where both appear. The
-        unit is the first that took the anchor, with its alternatives, which
-        share its number; any other unit, a second use of the identifier
-        included, is another. A hint, not a proof: units under exclusive
-        conditions never appear together (§15.4), but where the reference
-        itself stands is not considered."""
-        slots = self.slot_of.get(target_id)
-        if not slots:
-            return False
-        number = slots[0][:2]
-        presences = [presence for key, value, presence in slots if (key, value) == number]
-        return any(
-            (key, value) != number and any(not self._exclusive(presence, other) for presence in presences)
-            for key, value, other in self.designation_slots.get(designation, ())
-        )
+    def _clashes(self, slot: _Slot, designation: str) -> list[_Slot]:
+        """The other numbered units that may read as *designation*, the one
+        *slot*'s unit reads as, in a document where both appear. Its own
+        alternatives share its number and are not others; a second use of
+        its identifier is left to the validator (anchor-duplicate). A hint,
+        not a proof: units under exclusive conditions never appear together
+        (§15.4), but where the reference itself stands is not considered."""
+        slots = self.designation_slots.get(designation, [])
+        own = [other.presence for other in slots if other.key == slot.key]
+        return [
+            other for other in slots
+            if other.key != slot.key and not (slot.anchor and other.anchor == slot.anchor)
+            and any(not self._exclusive(presence, other.presence) for presence in own)
+        ]
+
+    def _ambiguity_message(self, target_id: str, target: _Target, clashes: list[_Slot]) -> str:
+        """render-ref-ambiguous, with advice for what clashes."""
+        start = f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which "
+        kinds = {target.slot.kind} | {other.kind for other in clashes} if target.slot else set()
+        if kinds == {"item"}:
+            return (start + "another list item also reads as: each list starts again at its first number. "
+                    "Make them one list, or refer to the item in words.")
+        if "section" in kinds and self.textual:
+            return (start + "another heading also reads as: the none scheme refers to a section by its "
+                    "heading text. Rename one, or refer to it in words.")
+        names = sorted({{"section": "a section", "paragraph": "a numbered paragraph", "item": "a list item"}[kind]
+                        for kind in (other.kind for other in clashes)})
+        return (start + f"{' or '.join(names)} also reads as. Refer to it in words, or change the style's "
+                "numbering so that they differ.")
 
     def _term(self, directive: Directive, definition_id: str) -> Inline:
         term = self.result.definition_lookup.get(definition_id)
@@ -833,9 +838,25 @@ class _Counter:
         return self.count
 
 
-#: A numbered unit's slot: what numbers it (a _Counter, or _SECTIONS), its
-#: number, and the unit's presence (§15.3).
-_Slot = tuple[object, object, Presence]
+class _Slot(NamedTuple):
+    """Where a numbered unit's designation comes from, for render-ref-ambiguous."""
+
+    #: What numbers the unit: its list's or paragraphs' _Counter, or
+    #: _SECTIONS for a section (the validator numbers those).
+    source: object
+    #: Its number there; alternatives share one (§15.8).
+    number: object
+    #: When the unit appears (§15.3).
+    presence: Presence
+    #: "section", "paragraph", or "item".
+    kind: str
+    #: The identifier it anchors, or "".
+    anchor: str
+
+    @property
+    def key(self) -> tuple[object, object]:
+        """The unit and its alternatives: its source and number."""
+        return (self.source, self.number)
 
 
 def fill_condition(template: str, value: str, *, key: str = "condition") -> str:

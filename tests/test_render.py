@@ -839,9 +839,10 @@ def test_an_item_reading_like_a_subsection_is_ambiguous() -> None:
     assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
 
 
-def test_a_second_use_of_an_identifier_is_another_unit() -> None:
+def test_a_second_use_of_an_identifier_is_left_to_the_validator() -> None:
     result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b {#x}\n\nSee {{ref: x}}.\n", format="text")
-    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+    rules = {d.rule for d in result.diagnostics}
+    assert "anchor-duplicate" in rules and "render-ref-ambiguous" not in rules
 
 
 PARAGRAPHS = {"paragraphs.numbered": True,
@@ -861,16 +862,29 @@ def test_paragraphs_under_exclusive_conditions_are_not_ambiguous() -> None:
     assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
 
 
-def test_a_paragraph_label_is_what_its_reference_prints_under_the_none_scheme() -> None:
-    output = text("# A\n\nIntro {#p}\n\nSee {{ref: p}}.\n",
-                  overrides={"numbering.scheme": "none", "paragraphs.numbered": True})
-    assert "\n\nA 1 Intro\n\nA 2 See A 1.\n" in output
+def test_paragraph_labels_follow_the_style_under_the_none_scheme() -> None:
+    output = render(FRONT + "# Confidentiality\n\nFirst.\n\nSecond.\n", format="text", style="continental",
+                    overrides={"numbering.scheme": "none"}).output
+    assert "\n\n(1) First.\n\n(2) Second.\n" in output
 
 
 def test_an_ambiguous_reference_says_how_to_tell_the_items_apart() -> None:
     result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b\n\nSee {{ref: x}}.\n", format="text")
     message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
-    assert "in words" in message and "number the parts apart" in message
+    assert "Make them one list, or refer to the item in words." in message
+
+
+def test_a_heading_clash_under_the_none_scheme_advises_renaming() -> None:
+    result = render(FRONT + "# A\n\n## General {#g1}\n\n## General {#g2}\n\nSee {{ref: g1}}.\n", format="text",
+                    overrides={"numbering.scheme": "none"})
+    message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
+    assert "Rename one" in message
+
+
+def test_an_item_reading_like_a_subsection_advises_changing_the_numbering() -> None:
+    result = render(FRONT + "# A\n\n- a {#x}\n\n## B\n\nSee {{ref: x}}.\n", format="text", style="continental")
+    message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
+    assert "a section also reads as" in message and "change the style's numbering" in message
 
 
 def test_a_drafting_note_reads_as_the_validator_reads_it() -> None:

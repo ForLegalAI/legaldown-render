@@ -58,7 +58,11 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   item whose designation another of them also reads as renders with a `render-ref-ambiguous`
   Warning. It is a hint: it is left out when the two can never appear together (alternatives,
   exclusive conditions), but the condition the reference itself stands under is not considered.
-  Lists in quotes and drafting notes are not counted.
+  Lists in quotes and drafting notes are not counted, and a second use of an identifier is left
+  to the validator's `anchor-duplicate`.
+- **Labels under the `none` scheme.** A style label that shows `{section}` (such as the default
+  paragraph label `{section}.{n}`) shows the section's heading text there, while `{{ref:}}`
+  writes the §13.3 designation ("Termination 1"), so the two can differ.
 - **Malformed directives** (a §11.2 grammar violation) render their type's marker without a value,
   for example `[INVALID AMOUNT]`. The specification defines no marker for this case.
 - **One parser.** The renderer builds from the validator's document model only
