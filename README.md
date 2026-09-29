@@ -45,10 +45,8 @@ This package never reimplements the LegalDown grammar.
 
 ## Install
 
-`legaldown-render` is not on PyPI yet. Until its first release, install it from GitHub:
-
 ```bash
-pip install "legaldown-render @ git+https://github.com/ForLegalAI/legaldown-render"
+pip install legaldown-render
 ```
 
 Python 3.11 or newer. The dependencies are all pure Python: `legaldown-validator`,
@@ -133,6 +131,8 @@ pytest --update-golden       # regenerate tests/golden/ after an intended output
 LEGALDOWN_SPEC_DIR=../LegalDown pytest -m conformance   # the specification's examples and fixtures
 ruff check .
 ```
+
+Releases go to PyPI from a GitHub Release; see [PUBLISHING.md](.github/PUBLISHING.md).
 
 ## License
 
