@@ -514,7 +514,8 @@ def _without_drafting_marker(children: list[ModelBlock]) -> list[ModelBlock] | N
     """A drafting note's blocks, as the validator reads them, without the
     ``[!DRAFTING]`` marker that starts the first of them (its first line is
     the marker, §15.6); a block that held only the marker goes. None when
-    the marker does not start a first paragraph or heading."""
+    the marker does not start a first paragraph or heading. To be replaced by
+    the validator's own reading (ForLegalAI/legaldown-validator#88)."""
     first = children[0] if children else None
     if first is None or first.kind not in ("paragraph", "heading") \
             or not first.text.upper().startswith(DRAFTING_MARKER):
