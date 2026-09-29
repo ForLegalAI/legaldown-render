@@ -61,7 +61,6 @@ from .tree import (
     Text,
 )
 from .validator_bridge import (
-    DRAFTING_MARKER,
     FENCE_OPEN_RE,
     MAX_QUOTE_DEPTH,
     block_fragments,
@@ -93,6 +92,9 @@ _BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 #: before resolving or writing it. (The validator caps lists at 64 levels
 #: and quotes at 16 itself.)
 MAX_NESTING = 100
+# A drafting note's first line (§15.6). Which quotes are drafting notes is
+# the validator's decision (is_drafting_note); this text is taken off.
+DRAFTING_MARKER = "[!DRAFTING]"
 
 
 def normalize_source(source: str) -> str:
@@ -469,7 +471,12 @@ class _Builder:
             if self.depth <= MAX_QUOTE_DEPTH:
                 children = list(quote_content(block.text, self.depth)[0])
                 if drafting:
-                    children = _without_drafting_marker(children)
+                    unmarked = _without_drafting_marker(children)
+                    # When the marker does not start the first paragraph or
+                    # heading (an indented marker line reads as code), the
+                    # note is the text after its marker line.
+                    children = unmarked if unmarked is not None else list(
+                        quote_content(block.text.partition("\n")[2], self.depth)[0])
                 blocks = self.blocks(children, None, markers=False)
             else:
                 text = block.text.partition("\n")[2] if drafting else block.text
@@ -503,14 +510,15 @@ class _Builder:
         )
 
 
-def _without_drafting_marker(children: list[ModelBlock]) -> list[ModelBlock]:
+def _without_drafting_marker(children: list[ModelBlock]) -> list[ModelBlock] | None:
     """A drafting note's blocks, as the validator reads them, without the
     ``[!DRAFTING]`` marker that starts the first of them (its first line is
-    the marker, §15.6); a block that held only the marker goes."""
+    the marker, §15.6); a block that held only the marker goes. None when
+    the marker does not start a first paragraph or heading."""
     first = children[0] if children else None
     if first is None or first.kind not in ("paragraph", "heading") \
             or not first.text.upper().startswith(DRAFTING_MARKER):
-        return children
+        return None
     rest = first.text[len(DRAFTING_MARKER):].lstrip()
     return ([replace(first, text=rest)] if rest else []) + children[1:]
 

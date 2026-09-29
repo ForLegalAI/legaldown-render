@@ -16,7 +16,7 @@ writes it into the tree, so that writers only lay it out:
 The validator has already reported every document-level Error for the
 failures shown here, so the resolver only adds the diagnostics that need a
 style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
-``render-locale-fallback``, and constructs beyond the Rendering level (§17.5).
+and ``render-not-processed`` for constructs beyond the Rendering level (§17.5).
 """
 from __future__ import annotations
 
@@ -130,11 +130,12 @@ class Resolver:
         self.diagnostics: list[Diagnostic] = []
         self.targets: dict[str, _Target] = {}
         self.used_anchors: set[str] = set()
-        # For render-ref-ambiguous: each item designation's numbered slots
-        # (counter and number: alternatives share one) with the presence of
-        # the item holding it, and the slot of each anchored item.
+        # For render-ref-ambiguous: each designation of a numbered item or
+        # paragraph, with its numbered slots (counter and number: alternatives
+        # share one) and the presence of the unit holding it; and the slots
+        # of each anchored unit, one per alternative.
         self.item_slots: dict[str, list[tuple[_Counter, int, Presence]]] = {}
-        self.slot_of: dict[str, tuple[_Counter, int, Presence]] = {}
+        self.slot_of: dict[str, list[tuple[_Counter, int, Presence]]] = {}
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
         self.inconsistent_placeholders: set[str] = set()
@@ -340,7 +341,8 @@ class Resolver:
             if isinstance(block, Paragraph) and block.top_level:
                 # Alternative paragraphs share a number, as sections do (§15.8).
                 number = paragraphs.next(block.anchor_id, self._own_presence(block.condition, presence))
-                block = self._number_paragraph(block, section, number)
+                block = self._number_paragraph(block, section, number,
+                                               slot=(paragraphs, number, presence | self._presence(block.condition)))
             out.append(self._structure(block, section=section, depth=0, presence=presence))
         return tuple(out)
 
@@ -350,7 +352,8 @@ class Resolver:
         own = self._presence(condition)
         return enclosing | own if own else None
 
-    def _number_paragraph(self, block: Paragraph, section: Section, number: int) -> Paragraph:
+    def _number_paragraph(self, block: Paragraph, section: Section, number: int,
+                          slot: tuple[_Counter, int, Presence]) -> Paragraph:
         numbering = self.style.paragraphs
         base = section.designation or ""
         if numbering.numbered:
@@ -359,6 +362,9 @@ class Resolver:
             designation = extend(base, fill(fmt.ref, n=n, section=base), textual=self.textual)
             label = fill(fmt.label, n=n, section=base, path=designation)
             target = _Target(designation, None)
+            self.item_slots.setdefault(designation, []).append(slot)
+            if block.anchor_id:
+                self.slot_of.setdefault(block.anchor_id, []).append(slot)
         else:
             label, target = None, _Target(base, None, enumerated=False)
         anchor = self._anchor(block.anchor_id)
@@ -421,7 +427,7 @@ class Resolver:
                     slot = (counter, index, inner)
                     self.item_slots.setdefault(designation, []).append(slot)
                     if item.anchor_id:
-                        self.slot_of.setdefault(item.anchor_id, slot)
+                        self.slot_of.setdefault(item.anchor_id, []).append(slot)
             else:
                 designation, label, target = parent, None, _Target(base, None, enumerated=False)
             anchor = self._anchor(item.anchor_id)
@@ -524,24 +530,27 @@ class Resolver:
         elif self._ambiguous(target_id, target.designation):
             self._warn(
                 "render-ref-ambiguous",
-                f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which another list item that can "
-                f"appear with it also reads as: each list starts again at its first number. Make them one "
+                f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which may also be how another "
+                f"numbered item or paragraph reads: each list starts again at its first number. Make them one "
                 f"list, or refer to the item in words.",
             )
         text = self.style.references.format.replace("{designation}", target.designation)
         return CrossRef(text, target.anchor or "")
 
     def _ambiguous(self, target_id: str, designation: str) -> bool:
-        """True if another list item that can appear together with the one
-        *target_id* anchors reads as the same *designation*. Alternatives,
-        and units under exclusive conditions, never appear together (§15.4)."""
-        slot = self.slot_of.get(target_id)
-        if slot is None:
+        """True if another numbered item or paragraph may read as the same
+        *designation* as the one *target_id* anchors, in a document where
+        both appear. A hint, not a proof: units under exclusive conditions
+        never appear together (§15.4), but where the reference itself
+        stands is not considered."""
+        own = self.slot_of.get(target_id, [])
+        if not own:
             return False
-        counter, number, presence = slot
+        own_numbers = {(counter, number) for counter, number, _presence in own}
         return any(
-            (other_counter, other_number) != (counter, number) and not self._exclusive(presence, other_presence)
-            for other_counter, other_number, other_presence in self.item_slots.get(designation, ())
+            (counter, number) not in own_numbers
+            and any(not self._exclusive(presence, other) for _c, _n, presence in own)
+            for counter, number, other in self.item_slots.get(designation, ())
         )
 
     def _term(self, directive: Directive, definition_id: str) -> Inline:

@@ -23,12 +23,10 @@ from legaldown.markdown import FENCE_OPEN_RE, closes_fence, dedent, indent_width
 from legaldown.models import list_items
 from legaldown.parser import MAX_QUOTE_DEPTH, quote_content
 from legaldown.validator.core import is_template
-from legaldown.validator.templates import _DRAFTING_MARKER as DRAFTING_MARKER
 from legaldown.validator.templates import is_drafting_note
 from legaldown.validator.units import FoundMarker, find_markers
 
 __all__ = [
-    "DRAFTING_MARKER",
     "FENCE_OPEN_RE",
     "MAX_QUOTE_DEPTH",
     "PlacedMarkers",

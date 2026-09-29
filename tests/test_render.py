@@ -813,6 +813,25 @@ def test_lists_in_quotes_and_drafting_notes_are_not_ambiguous() -> None:
     assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
 
 
+@pytest.mark.parametrize("first, second", [("courts", "arbitration"), ("arbitration", "courts")])
+def test_every_alternative_is_checked_for_ambiguity(first: str, second: str) -> None:
+    # Under arbitration, x and y both read 1(a), whichever alternative of x
+    # comes first.
+    body = (f"# A\n\n- one {{#x when=forum:{first}}}\n- two {{#x when=forum:{second}}}\n\nPara.\n\n"
+            "- other {#y when=forum:arbitration}\n\nSee {{ref: x}}.\n")
+    result = render(QUESTIONS + body, format="text")
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
+def test_a_numbered_paragraph_reading_like_a_list_item_is_ambiguous() -> None:
+    settings = {"paragraphs.numbered": True,
+                "paragraphs.format": {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"}}
+    result = render(FRONT + "# A\n\nIntro {#p}\n\n- item\n\nSee {{ref: p}}.\n", format="text",
+                    overrides=settings)
+    assert "See 1(a)." in result.output
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
 def test_an_ambiguous_reference_says_how_to_tell_the_items_apart() -> None:
     result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b\n\nSee {{ref: x}}.\n", format="text")
     message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
@@ -828,6 +847,10 @@ def test_a_drafting_note_reads_as_the_validator_reads_it() -> None:
     assert "{{placeholder" not in output and "[!DRAFTING]" not in output
     # The marker underlined makes a heading of it; the note holds nothing else.
     assert "[!DRAFTING]" not in text("# A\n\n> [!DRAFTING]\n> ---\n")
+    # An indented marker line reads as code in the validator; the note is
+    # then the text after it.
+    output = text("# A\n\n>     [!DRAFTING]\n> Note text\n")
+    assert "> [Drafting note]\n> Note text" in output and "[!DRAFTING]" not in output
 
 
 def test_sibling_lists_are_told_apart_by_how_their_designations_read() -> None:

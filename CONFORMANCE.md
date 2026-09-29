@@ -54,8 +54,10 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   while building it and before resolving or writing it, so no document can exhaust the stack.
 - **Ambiguous references.** Each list starts again at its first number, as contracts are usually
   drafted, so two lists in one section can both have an item "(a)". A `{{ref:}}` to such an item
-  renders with a `render-ref-ambiguous` Warning, unless the two can never appear together
-  (alternatives, exclusive conditions). Lists in quotes and drafting notes are not counted.
+  or to a numbered paragraph reading the same renders with a `render-ref-ambiguous` Warning, a
+  hint: it is left out when the two can never appear together (alternatives, exclusive
+  conditions), but the condition the reference itself stands under is not considered. Lists in
+  quotes and drafting notes are not counted.
 - **Malformed directives** (a §11.2 grammar violation) render their type's marker without a value,
   for example `[INVALID AMOUNT]`. The specification defines no marker for this case.
 - **One parser.** The renderer builds from the validator's document model only
