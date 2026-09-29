@@ -15,20 +15,28 @@ writes it into the tree, so that writers only lay it out:
 
 The validator has already reported every document-level Error for the
 failures shown here, so the resolver only adds the diagnostics that need a
-style template or a renderer: ``ref-not-enumerated``, ``raw-html``, and
-constructs beyond the Rendering level (§17.5).
+style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
+and ``render-not-processed`` for constructs beyond the Rendering level (§17.5).
 """
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 from legaldown import Diagnostic, Directive, Document, ValidationResult, slugify_identifier
-from legaldown.validator import KNOWN_CURRENCIES
-from legaldown.validator.conditions import ALWAYS, Presence, condition_problem, exclusive, parse_condition
-from legaldown.validator.helpers import is_positive_numeric, is_valid_iso_date, is_valid_money_amount
-from legaldown.validator.patterns import IDENTIFIER_RE
+from legaldown.validator import (
+    ALWAYS,
+    IDENTIFIER_RE,
+    KNOWN_CURRENCIES,
+    Presence,
+    condition_problem,
+    exclusive,
+    is_positive_numeric,
+    is_valid_iso_date,
+    is_valid_money_amount,
+    parse_condition,
+)
 
 from ..build import plain_inlines
 from ..style import Style, effective_labels
@@ -108,6 +116,8 @@ class _Target:
     #: False for an item or paragraph whose list or paragraphs the style does
     #: not number: the designation is then its section's (§6.3).
     enumerated: bool = True
+    #: The numbered unit the anchor is on, for render-ref-ambiguous.
+    slot: _Slot | None = None
 
 
 class Resolver:
@@ -130,6 +140,9 @@ class Resolver:
         self.diagnostics: list[Diagnostic] = []
         self.targets: dict[str, _Target] = {}
         self.used_anchors: set[str] = set()
+        # For render-ref-ambiguous: every designation a numbered unit — a
+        # section, a paragraph, a list item — reads as, with each unit's slot.
+        self.designation_slots: dict[str, list[_Slot]] = {}
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
         self.inconsistent_placeholders: set[str] = set()
@@ -200,10 +213,10 @@ class Resolver:
         if not settings.enabled:
             return ()
         entries = [
-            ContentsEntry(section.depth, section.label, unlinked(section.title), section.anchor,
+            ContentsEntry(section.level, section.label, unlinked(section.title), section.anchor,
                           section.condition_label)
             for section in sections
-            if section.depth <= settings.depth
+            if section.level <= settings.depth
         ]
         if settings.attachments and attachments:
             # Under the attachments heading, unless a style blanks its label.
@@ -255,54 +268,43 @@ class Resolver:
     def _number_sections(self) -> list[Section]:
         """Number the sections, and record each one's presence (§15.3).
 
-        Which sections are alternatives, sharing their previous sibling's
-        number (§15.8), is taken from the validator: it numbers them itself,
-        with the full presence of each, so the rendered numbers always
-        agree with ``ValidationResult.sections``.
+        The numbers are the validator's own (``ValidationResult.sections``),
+        so a rendered number and a reference to it always agree with the
+        validator: alternatives share a number (§15.8), and a skipped
+        heading level counts as 1. The style only formats them, the n-th
+        part of a number ("2.1" has two) with the n-th level format. A
+        section's rendered level is how many parts its number has, so its
+        number format, heading, and heading style always go together.
         """
         levels = heading_levels(self.style.numbering)
-        counters = [0] * 6  # index 1-5: one counter per heading level
-        previous: dict[int, int] = {}  # level -> index of the previous sibling
         presences: dict[int, Presence] = {}  # level -> presence of the open section
-        indexed = self.result.sections
         out: list[Section] = []
-        for index, section in enumerate(self.tree.sections):
-            # Numbered with its level clamped to 1-5, as the validator numbers it.
+        for section, indexed in zip(self.tree.sections, self.result.sections, strict=True):
+            # The heading's own level, clamped to 1-5 (§4.1), decides which
+            # sections enclose it, and so its presence (§15.3).
             level = min(max(section.level, 1), 5)
-            sibling = previous.get(level)
-            alternative = (
-                sibling is not None
-                and self.tree.sections[sibling].identifier == section.identifier
-                and indexed[sibling].number == indexed[index].number
-            )
-            if not alternative:
-                counters[level] += 1
-            counters[level + 1:] = [0] * (5 - level)
-            previous = {lvl: i for lvl, i in previous.items() if lvl < level}
-            previous[level] = index
             enclosing = max((lvl for lvl in presences if lvl < level), default=None)
             presences = {lvl: p for lvl, p in presences.items() if lvl < level}
             presences[level] = (presences[enclosing] if enclosing is not None else ALWAYS) | self._presence(section.condition)
             self.section_presences.append(presences[level])
+            parts = [int(part) for part in indexed.number.split(".")]
             if self.textual:
                 label, designation = None, self._title_text(section.title)
             else:
                 designation = ""
-                for depth in range(1, level + 1):
-                    if counters[depth]:
-                        fmt = levels[depth - 1]
-                        designation = extend(designation, fill(fmt.ref, n=format_counter(counters[depth], fmt.counter)),
-                                             textual=False)
-                fmt = levels[level - 1]
-                label = fill(fmt.label, n=format_counter(counters[level], fmt.counter), path=designation)
+                for position, counter in enumerate(parts):
+                    fmt = levels[min(position, len(levels) - 1)]
+                    designation = extend(designation, fill(fmt.ref, n=format_counter(counter, fmt.counter)),
+                                         textual=False)
+                fmt = levels[min(len(parts), len(levels)) - 1]
+                label = fill(fmt.label, n=format_counter(parts[-1], fmt.counter), path=designation)
             anchor = self._anchor(section.identifier)
-            self._register(section.identifier, _Target(designation, anchor))
-            # How deep the validator's own number goes ("2.1" is 2).
-            depth = indexed[index].number.count(".") + 1
-            # The level is stored clamped too, so every writer nests the section
-            # where its number puts it.
-            out.append(replace(section, level=level, label=label, designation=designation, anchor=anchor,
-                               depth=depth))
+            # Sections with one number are alternatives (the validator's).
+            slot = _Slot(_SECTIONS, indexed.number, presences[level], "section", section.identifier)
+            self._record(designation, slot)
+            self._register(section.identifier, _Target(designation, anchor, slot=slot))
+            out.append(replace(section, level=min(len(parts), 5), label=label, designation=designation,
+                               anchor=anchor))
         return out
 
     def _presence(self, condition: str) -> Presence:
@@ -348,8 +350,10 @@ class Resolver:
         for block in section.blocks:
             if isinstance(block, Paragraph) and block.top_level:
                 # Alternative paragraphs share a number, as sections do (§15.8).
-                number = paragraphs.next(block.anchor_id, self._own_presence(block.condition, presence))
-                block = self._number_paragraph(block, section, number)
+                own = self._own_presence(block.condition, presence)
+                number = paragraphs.next(block.anchor_id, own)
+                block = self._number_paragraph(block, section, paragraphs, number,
+                                               presence if own is None else own)
             out.append(self._structure(block, section=section, depth=0, presence=presence))
         return tuple(out)
 
@@ -359,7 +363,8 @@ class Resolver:
         own = self._presence(condition)
         return enclosing | own if own else None
 
-    def _number_paragraph(self, block: Paragraph, section: Section, number: int) -> Paragraph:
+    def _number_paragraph(self, block: Paragraph, section: Section, counter: _Counter, number: int,
+                          presence: Presence) -> Paragraph:
         numbering = self.style.paragraphs
         base = section.designation or ""
         if numbering.numbered:
@@ -367,7 +372,9 @@ class Resolver:
             n = format_counter(number, fmt.counter)
             designation = extend(base, fill(fmt.ref, n=n, section=base), textual=self.textual)
             label = fill(fmt.label, n=n, section=base, path=designation)
-            target = _Target(designation, None)
+            slot = _Slot(counter, number, presence, "paragraph", block.anchor_id)
+            target = _Target(designation, None, slot=slot)
+            self._record(designation, slot)
         else:
             label, target = None, _Target(base, None, enumerated=False)
         anchor = self._anchor(block.anchor_id)
@@ -375,22 +382,32 @@ class Resolver:
             self._register(block.anchor_id, replace(target, anchor=anchor))
         return replace(block, label=label, anchor=anchor)
 
-    def _structure(self, block: Block, *, section: Section | None, depth: int, presence: Presence) -> Block:
+    def _structure(self, block: Block, *, section: Section | None, depth: int, presence: Presence,
+                   quoted: bool = False) -> Block:
+        """*block* numbered and labelled. *quoted*: inside a quote, whose
+        items the validator does not treat as units (they hold no marker)."""
         match block:
             case List():
                 return self._structure_list(block, section=section, depth=depth,
-                                            parent=section.designation if section else "", presence=presence)
+                                            parent=section.designation if section else "", presence=presence,
+                                            quoted=quoted)
             case Quote(blocks=blocks):
-                return Quote(tuple(self._structure(child, section=section, depth=depth, presence=presence)
-                                   for child in blocks))
+                return Quote(tuple(self._structure(child, section=section, depth=depth, presence=presence,
+                                                   quoted=True) for child in blocks))
             case DraftingNote(blocks=blocks):
-                return DraftingNote(tuple(self._structure(child, section=section, depth=depth, presence=presence)
-                                          for child in blocks), label=self.labels.drafting_note)
+                return DraftingNote(tuple(self._structure(child, section=section, depth=depth, presence=presence,
+                                                          quoted=True) for child in blocks),
+                                    label=self.labels.drafting_note)
             case _:
                 return block
 
     def _structure_list(self, block: List, *, section: Section | None, depth: int, parent: str,
-                        presence: Presence) -> List:
+                        presence: Presence, counters: dict[tuple[str, str] | None, _Counter] | None = None,
+                        quoted: bool = False) -> List:
+        """*block* numbered under *parent*. Sibling lists nested in the same
+        item share *counters*, one per way of writing a designation (counter
+        style and reference form): a second list whose designations would
+        read like the first's goes on from it, so none repeats."""
         enumeration = self.style.enumeration
         fmt: LevelFormat | None
         if block.ordered and enumeration.ordered == "renumber":
@@ -401,7 +418,12 @@ class Resolver:
             fmt = None
         base = section.designation if section else ""
         items: list[ListItem] = []
-        counter = _Counter(self._exclusive)
+        if counters is None:
+            counter = _Counter(self._exclusive)
+        else:
+            key = (fmt.counter, fmt.ref) if fmt is not None else None
+            counter = counters.setdefault(key, _Counter(self._exclusive))
+            counter.new_list()
         for item in block.items:
             index = counter.next(item.anchor_id, self._own_presence(item.condition, presence))
             # An item's nested blocks are present only when the item is.
@@ -411,15 +433,21 @@ class Resolver:
                 designation = extend(parent, fill(fmt.ref, n=n, section=base), textual=self.textual)
                 label = fill(fmt.label, n=n, section=base, path=designation)
                 target = _Target(designation, None)
+                if not quoted:
+                    slot = _Slot(counter, index, inner, "item", item.anchor_id)
+                    target = replace(target, slot=slot)
+                    self._record(designation, slot)
             else:
                 designation, label, target = parent, None, _Target(base, None, enumerated=False)
             anchor = self._anchor(item.anchor_id)
             if item.anchor_id and section is not None:
                 self._register(item.anchor_id, replace(target, anchor=anchor))
+            siblings: dict[tuple[str, str] | None, _Counter] = {}
             children = tuple(
-                self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner)
+                self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner,
+                                     counters=siblings, quoted=quoted)
                 if isinstance(child, List)
-                else self._structure(child, section=section, depth=depth + 1, presence=inner)
+                else self._structure(child, section=section, depth=depth + 1, presence=inner, quoted=quoted)
                 for child in item.blocks
             )
             items.append(replace(item, blocks=children, label=label, anchor=anchor))
@@ -508,8 +536,44 @@ class Resolver:
                 f"'{{{{ref: {target_id}}}}}' targets an item or paragraph that the style does not number; "
                 f"it renders as its section's designation, '{target.designation}' (§6.3).",
             )
+        elif target.slot is not None and (clashes := self._clashes(target.slot, target.designation)):
+            self._warn("render-ref-ambiguous", self._ambiguity_message(target_id, target, clashes))
         text = self.style.references.format.replace("{designation}", target.designation)
         return CrossRef(text, target.anchor or "")
+
+    def _record(self, designation: str, slot: _Slot) -> None:
+        """Note that a numbered unit reads as *designation* (render-ref-ambiguous)."""
+        self.designation_slots.setdefault(designation, []).append(slot)
+
+    def _clashes(self, slot: _Slot, designation: str) -> list[_Slot]:
+        """The other numbered units that may read as *designation*, the one
+        *slot*'s unit reads as, in a document where both appear. Its own
+        alternatives share its number and are not others; a second use of
+        its identifier is left to the validator (anchor-duplicate). A hint,
+        not a proof: units under exclusive conditions never appear together
+        (§15.4), but where the reference itself stands is not considered."""
+        slots = self.designation_slots.get(designation, [])
+        own = [other.presence for other in slots if other.key == slot.key]
+        return [
+            other for other in slots
+            if other.key != slot.key and not (slot.anchor and other.anchor == slot.anchor)
+            and any(not self._exclusive(presence, other.presence) for presence in own)
+        ]
+
+    def _ambiguity_message(self, target_id: str, target: _Target, clashes: list[_Slot]) -> str:
+        """render-ref-ambiguous, with advice for what clashes."""
+        start = f"'{{{{ref: {target_id}}}}}' renders as '{target.designation}', which "
+        kinds = {target.slot.kind} | {other.kind for other in clashes} if target.slot else set()
+        if kinds == {"item"}:
+            return (start + "another list item also reads as: each list starts again at its first number. "
+                    "Make them one list, or refer to the item in words.")
+        if "section" in kinds and self.textual:
+            return (start + "another heading also reads as: the none scheme refers to a section by its "
+                    "heading text. Rename one, or refer to it in words.")
+        names = sorted({{"section": "a section", "paragraph": "a numbered paragraph", "item": "a list item"}[kind]
+                        for kind in (other.kind for other in clashes)})
+        return (start + f"{' or '.join(names)} also reads as. Refer to it in words, or change the style's "
+                "numbering so that they differ.")
 
     def _term(self, directive: Directive, definition_id: str) -> Inline:
         term = self.result.definition_lookup.get(definition_id)
@@ -746,6 +810,10 @@ _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
 }
 
 
+#: What numbers sections, in a unit's slot: the validator (its numbers).
+_SECTIONS = object()
+
+
 class _Counter:
     """Numbers sibling units in order (§13.2, §15.8). A unit joins the
     previous unit's number when it is an alternative to it: the same
@@ -759,6 +827,12 @@ class _Counter:
         self.identifier = ""
         self.holders: list[Presence] = []
 
+    def new_list(self) -> None:
+        """Go on counting in another list: its first unit is no alternative
+        to the last unit of the list before, which is not its sibling."""
+        self.identifier = ""
+        self.holders = []
+
     def next(self, identifier: str, presence: Presence | None) -> int:
         """The number for the next unit. *presence* is None for a unit with
         no valid condition of its own, which is never an alternative."""
@@ -770,6 +844,27 @@ class _Counter:
         self.identifier = identifier if presence is not None else ""
         self.holders = [presence] if presence is not None else []
         return self.count
+
+
+class _Slot(NamedTuple):
+    """Where a numbered unit's designation comes from, for render-ref-ambiguous."""
+
+    #: What numbers the unit: its list's or paragraphs' _Counter, or
+    #: _SECTIONS for a section (the validator numbers those).
+    source: object
+    #: Its number there; alternatives share one (§15.8).
+    number: object
+    #: When the unit appears (§15.3).
+    presence: Presence
+    #: "section", "paragraph", or "item".
+    kind: str
+    #: The identifier it anchors, or "".
+    anchor: str
+
+    @property
+    def key(self) -> tuple[object, object]:
+        """The unit and its alternatives: its source and number."""
+        return (self.source, self.number)
 
 
 def fill_condition(template: str, value: str, *, key: str = "condition") -> str:

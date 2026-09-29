@@ -13,6 +13,10 @@ This page describes how the renderer is built. The decisions behind it are in
       │  normalize_source(): strip BOM, unify line endings
       ▼
  ┌─────────────────────────┐
+ │ 2. Assemble (answers)   │  only with an answers set: legaldown-validator's assemble() turns
+ └───────────┬─────────────┘  the template into its assembled document, which the rest renders
+             ▼
+ ┌─────────────────────────┐
  │ 1. Parse & validate     │  legaldown-validator: Document, ValidationResult (Core diagnostics,
  └───────────┬─────────────┘  resolved identifiers, party/side/definition/attachment lookups)
              ▼
@@ -31,9 +35,20 @@ This page describes how the renderer is built. The decisions behind it are in
  RenderResult(output, diagnostics, format, tree, style)
 ```
 
-Stage 2, assembly with an answers set (§15.7), is not implemented. It belongs in the core
-package, and `legaldown-validator` 0.2.0 does not provide it yet ([roadmap](roadmap.md)). A
-template is always rendered as its **template view** (§15.8).
+Stage 2, **assembly** with an answers set (§15.7), runs only when the job has answers, before
+the document is parsed for rendering. A template rendered with answers is assembled first and the
+assembled document rendered; without answers, it renders as its **template view** (§15.8).
+Assembly is the core package's (`legaldown.assemble`), exact to the byte as §15.7.2 requires; the
+renderer only decides when to refuse:
+
+- the template has Errors: §15.7.2 defines assembly only for a template without them
+- the answers do (`answer-invalid`, `answer-missing`)
+- the template needs other files (include fragments, LegalDown attachment files, translations),
+  which the renderer does not read below the Full level (§17.6)
+
+A refusal raises `RenderRefused` with the findings. Assembly Warnings, such as `answer-unknown`,
+are reported with the rest. Blanks left unanswered stay, and render as blanks: the result is a
+draft (§15.1), which `--final` reports.
 
 `api.render()` runs the pipeline. Each stage returns frozen values. Only stage 4 reads the style's
 semantic settings, and only stage 5 knows about file formats.
@@ -62,14 +77,15 @@ never decides a structural or LegalDown question itself:
 | Question | Answered by |
 |---|---|
 | Sections, headings, identifiers | `Document.sections`, `ValidationResult.sections` |
-| Blocks: paragraphs, lists and items, quotes, tables, code, rules | `Document` blocks; quote content and code inside items are read by the validator's parser too |
-| Where a marker (`{#id when=…}`) is placed, and what it means | The validator's `find_markers()`, with its own `placed(template)` |
-| Whether the document is a template | The validator's own formula over those markers |
-| Whether a quote is a drafting note | The validator's `block_quotes()` |
+| Blocks: paragraphs, lists and items, quotes, tables, code, rules | `Document` blocks. List items hold blocks (nested lists, code, quotes, tables), and a quote's content is the validator's `quote_content()` |
+| Where a marker (`{#id when=…}`) is placed, and what it means | `ValidationResult.placed_markers`: each marker's block, field, offset, identifier, and condition |
+| Whether the document is a template | `ValidationResult.is_template` |
+| Whether a quote is a drafting note | The validator's `is_drafting_note()` |
+| Which list item a marker belongs to | `PlacedMarker.item`: the item's number among the list's items, in pre-order |
 | A lifted definition, `{{ref:}}` or `{{term:}}` block's source | The validator's `render_block()` |
 
-The imports beyond the validator's public API are all in `validator_bridge.py`, which is the
-list for roadmap item U3.
+The few imports beyond the validator's public API (quote content, fence helpers, the
+answers-file reader) are all in `validator_bridge.py`, the list for roadmap item U3.
 
 Within one block's text, **markdown-it-py parses inline Markdown only**: emphasis, links, code
 spans, inline HTML. Directives are protected first by **sentinels**. Every directive, and every
@@ -82,28 +98,15 @@ that renders nothing, led by a punctuation character so that an emphasis closer 
 still closes. A defined term in a link title or alt text shows its term but is not the
 definition's anchor.
 
-HTML comments are dropped (§8.6), and where one stood between two spaces, one space stays. Every
-HTML tag is dropped, and each text that had one (a paragraph, a title, a table cell) counts once
-for the `raw-html` Warning (§8.7).
+An HTML block in the model (`kind="html"`), a comment block included, renders nothing (§8.6).
+Within a block's text, inline comments and tags are dropped; where one stood between two spaces,
+one space stays. The validator reports raw HTML other than comments (`raw-html`, §8.7). A heading
+in a list item or a quote (`kind="heading"`) is not a section (§4.1) and shows as a bold line.
 
-The builder never works around the validator's model, with **one exception: comments**. The
-specification requires every comment to be stripped (§8.6), and the validator's model holds a
-comment that spans a blank line as ordinary blocks. So a `<!--` that a paragraph or a list item
-leaves open runs on to the first `-->`, and the blocks and items in between render nothing. The
-text before the `<!--` and after the `-->` renders. An opener counts only when it is not
-escaped, not in a code span or a directive, and not the empty comment `<!-->` or `<!--->`. The comment never runs past the end of
-the section, or of the quote or list item, it opened in: a heading inside a comment is still a
-section ([#23](https://github.com/ForLegalAI/legaldown-validator/issues/23)). Two gaps remain until
-the model drops such comments itself, listed in `CONFORMANCE.md`: a `{#id}` inside one is still a
-target, and a quote, code block, or table the comment ends in renders the rest as plain text.
-
-Everywhere else, where the model loses or misreads something, the output follows the model, and
-the gap is listed in `CONFORMANCE.md` and filed on the validator:
-- lists have one level of items
-- table column alignment is not kept
-- a paragraph's line breaks are joined
-- the text between an HTML block's tags stays
-- content after a `Signature Block` heading is dropped
+The builder never works around the validator's model. Where the model loses or misreads
+something, the output follows the model, and the gap is listed in `CONFORMANCE.md` and filed on
+the validator:
+- link reference definitions (`[label]: url`) render as paragraphs
 
 Guessing at lost structure was tried, and it traded each gap for new bugs.
 
@@ -113,10 +116,11 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 
 1. **Survey.** It collects which definitions exist, whether template constructs are used, and
    which placeholder ids are used with conflicting types (§10.7).
-2. **Structure.** It numbers sections under the style's level formats. **Alternatives** share a
-   number (§15.8). For sections, which ones are alternatives is taken from the validator's own
-   numbering, so rendered numbers always match `ValidationResult.sections`. For paragraphs and
-   list items, the validator's rule is applied the same way: an alternative directly follows its
+2. **Structure.** Section numbers are the validator's own (`ValidationResult.sections`), so a
+   rendered number always matches the validator's: **alternatives** share a number (§15.8), and
+   a skipped heading level counts as 1. The style only formats them, the n-th part of a number
+   with the n-th level format. For paragraphs and list items, **alternatives** follow the
+   validator's rule, applied the same way: an alternative directly follows its
    sibling, has the same identifier and a valid condition, and its full presence (its own condition
    and every enclosing one) excludes that of every unit already holding the number (§15.4, the
    validator's `exclusive()`). It then labels
@@ -164,7 +168,7 @@ clamped to 1–5, as the validator numbers them.
 
 | Writer | Notes |
 |---|---|
-| `TextWriter` | Plain text (§13.6). Line breaks inside paragraphs are joined, and lists are indented with their labels. It is the **test oracle** for resolution |
+| `TextWriter` | Plain text (§13.6). A soft line break inside a paragraph is a space, a hard break a new line, and lists are indented with their labels. It is the **test oracle** for resolution |
 | `HtmlWriter` | A self-contained HTML5 page, or with `standalone=False` just the `<article>`. Semantic markup, with labels as real text rather than CSS counters, and a stylesheet generated from the style's presentation settings, including print rules |
 | DOCX, PDF | Planned ([ADR 0004](decisions/0004-html-first.md)) |
 
@@ -194,19 +198,18 @@ src/legaldown_render/
 
 | Dependency | Why |
 |---|---|
-| `legaldown-validator>=0.2.0,<0.3` | The only LegalDown parser; Core validation |
+| `legaldown-validator>=0.3.0,<0.4` | The only LegalDown parser; Core validation |
 | `markdown-it-py` | Inline Markdown inside one block's text (ADR 0007) |
 | `babel` | CLDR locale data (ADR 0005) |
 | `pyyaml` | Style templates |
 
 All of them are pure Python. The DOCX and PDF writers will bring their dependencies in as extras.
 
-The renderer imports a few names from `legaldown` submodules that the validator does not
-re-export at the top level: `legaldown.directives.lex`, `legaldown.markers`,
-`legaldown.parser.FRONTMATTER_RE`, `legaldown.validator.helpers`,
-`legaldown.validator.patterns`, `legaldown.validator.conditions`, and one private function,
-`legaldown.validator.core._frontmatter_fields`. The pin to one minor version exists because of them. Asking the
-validator to export them publicly is roadmap item U3.
+The renderer uses the validator's public API (`legaldown`, `legaldown.validator`), except for
+the few names in `validator_bridge.py`: `quote_content` and `MAX_QUOTE_DEPTH`, the fence
+helpers, and the answers-file reader. The pin to one minor version exists because of them.
+Asking the validator to export them publicly is roadmap item U3
+([validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93)).
 
 ## Errors and diagnostics
 
@@ -217,9 +220,10 @@ validator to export them publicly is roadmap item U3.
 - **Internal inconsistencies** raise `InternalError`, and the CLI exits with 70.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
-`ref-not-enumerated` and `raw-html`, both specification rule ids, plus renderer-specific ids
-prefixed `render-`: `render-not-processed` and `render-locale-fallback`. Validator diagnostics
-have no line numbers yet, and neither do the renderer's.
+`ref-not-enumerated`, a specification rule id, plus renderer-specific ids prefixed `render-`:
+`render-not-processed`, `render-locale-fallback`, and `render-ref-ambiguous`. The validator's
+diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
+have none yet, because a block's line is not public in the validator (U2).
 
 ## Security
 

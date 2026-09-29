@@ -6,7 +6,8 @@ Preferences are split in two, on purpose:
   locale, labels, typography. It is a reusable YAML file (``--style``), with
   single values overridable per job (``--set key=value``, ``overrides``);
 * **render options** say what this one job does — the output format, strict
-  mode, the final check, a full HTML page or a fragment. They never change how a document
+  mode, the final check, the answers to a template, a full HTML page or a
+  fragment. They never change how a document
   looks, so they are not part of the style.
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from legaldown import Diagnostic, Document, ValidationResult, parse_document, validate_document
+from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, assemble, parse_document, validate_document
 
 from .build import build_tree, normalize_source
 from .errors import DocumentError, RenderRefused
@@ -47,6 +48,11 @@ class RenderOptions:
     #: (``template-construct-present``) is an Error. With ``strict``, such a
     #: document is refused.
     final: bool = False
+    #: An answers set (§15.7.1): question id to answer, as YAML or JSON
+    #: would load it. With answers, a template is assembled first and the
+    #: assembled document is rendered (§15.8); without, a template renders
+    #: as its template view.
+    answers: Mapping[str, Any] | None = None
     #: HTML only: a complete page (True) or just the ``<article>`` (False).
     standalone: bool = True
 
@@ -80,7 +86,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     are listed in ``diagnostics``. Raises :class:`StyleError` for an invalid
     style or setting, :class:`DocumentError` for a document that cannot be
     read, and :class:`RenderRefused` in strict mode when the document has
-    errors.
+    errors, or when a template cannot be assembled with ``answers``.
     """
     if options is None:
         options = RenderOptions(**settings)
@@ -94,9 +100,12 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     style = load_style(options.style, overrides=overrides)
 
     source = normalize_source(source)
+    assembled: list[Diagnostic] = []
+    if options.answers is not None:
+        source, assembled = _assemble(source, options.answers)
     document = _parse(source)
     result = validate_document(document, final=options.final)
-    diagnostics = list(result.diagnostics)
+    diagnostics = assembled + list(result.diagnostics)
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
@@ -115,6 +124,30 @@ def render_file(path: str | Path, options: RenderOptions | None = None, /, **set
     return render(Path(path).read_text(encoding="utf-8"), options, **settings)
 
 
+def _assemble(source: str, answers: Mapping[str, Any]) -> tuple[str, list[Diagnostic]]:
+    """*source* assembled with *answers* (§15.7), and the assembly's
+    Warnings (such as ``answer-unknown``). Raises RenderRefused when it
+    cannot be assembled: the template has Errors, for which §15.7.2 defines
+    no output, or the answers do (``answer-invalid``, ``answer-missing``),
+    or the template needs files a renderer below Full does not read
+    (includes, LegalDown attachments, translations; §17.6)."""
+    findings = validate_document(_parse(source)).diagnostics
+    errors = sum(1 for d in findings if d.level == "error")
+    if errors:
+        raise RenderRefused(findings, f"Assembly refused: the template has {errors} error(s), "
+                                      "and only a template without errors can be assembled (§15.7.2).")
+    try:
+        result = assemble(source, answers)
+    except AssemblyError as error:
+        raise DocumentError(f"The template cannot be assembled: {error}") from error
+    if not result.ok:
+        errors = [d for d in result.diagnostics if d.level == "error"]
+        raise RenderRefused(result.diagnostics, f"Assembly refused: {len(errors)} error(s) in the answers or "
+                                                "the template (§15.7).")
+    # The source was normalized, and assembly keeps its line breaks.
+    return result.output, list(result.diagnostics)
+
+
 def _parse(source: str) -> Document:
     try:
         return parse_document(source)
@@ -124,14 +157,8 @@ def _parse(source: str) -> Document:
 
 def _resolve(document: Document, result: ValidationResult, style: Style) -> tuple[RenderTree, list[Diagnostic]]:
     diagnostics: list[Diagnostic] = []
-    tree, raw_html = build_tree(document, result)
-    if raw_html:
-        diagnostics.append(Diagnostic(
-            rule="raw-html",
-            level="warning",
-            message=f"Raw HTML in {raw_html} place(s) in the body is not rendered; HTML does not render "
-                    f"portably (§8.7).",
-        ))
+    # Raw HTML is never emitted; the validator reports it (raw-html, §8.7).
+    tree = build_tree(document, result)
     locale = parse_locale(style.locale) if style.locale else None
     if style.locale and locale is None:
         raise StyleError("setting", [f"locale: '{style.locale}' is not a known locale (e.g. en-US, cs-CZ)"])

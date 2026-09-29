@@ -72,7 +72,7 @@ locale: cs-CZ                # formatting locale (§10.1); unset: the document's
 
 numbering:                   # §13.1
   scheme: decimal            # decimal | legal-outline | mixed | none
-  levels:                    # optional; overrides the scheme level by level from level 1
+  levels:                    # optional; overrides the scheme by number part: the first format for "2", the second for "2.1"
     - { counter: upper-roman, label: "Article {n}", ref: "{n}" }
 
 enumeration:                 # §13.2

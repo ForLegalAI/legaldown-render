@@ -2,10 +2,10 @@
 (docs/architecture.md, docs/decisions/0002).
 
 There is one parser: ``legaldown-validator``'s. Its ``Document`` gives the
-sections, their blocks, and each block's text, and its own findings say
-where markers are placed and whether the document is a template
-(:mod:`.validator_bridge`). The builder never decides a structural or
-LegalDown question itself.
+sections, their blocks, and each block's text, and its ``ValidationResult``
+says where markers are placed and whether the document is a template
+(``placed_markers``, ``is_template``). The builder never decides a
+structural or LegalDown question itself.
 
 Within one block's text it still needs inline Markdown — emphasis, links,
 code spans — which markdown-it-py parses in inline mode only. Directives
@@ -16,23 +16,36 @@ syntax, and put back as tree nodes afterwards. The nonce is random for every
 build, so no text in a document — written out, as an entity, or
 percent-encoded — can pass for a sentinel.
 
-Until the validator keeps nested lists (ForLegalAI/legaldown-validator#14),
-lists render as the validator holds them: one level of items.
+Lists and quotes are built as the validator's model holds them: list items
+hold blocks, nested lists included, and a quote's content is the blocks the
+validator reads in it (ForLegalAI/legaldown-validator#71, #72).
 """
 from __future__ import annotations
 
 import re
 import secrets
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from functools import cache
+from itertools import count
 from urllib.parse import unquote
 
 from legaldown import Block as ModelBlock
-from legaldown import Directive, Document, ValidationResult, find_definition_anchors, parse_document, render_block
-from legaldown.markers import HTML_COMMENT_RE
+from legaldown import (
+    Directive,
+    Document,
+    PlacedMarker,
+    ValidationResult,
+    find_definition_anchors,
+    is_drafting_note,
+    lex,
+    list_items,
+    render_block,
+)
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 
-from .errors import InternalError
+from .errors import DocumentError, InternalError
 from .tree import (
     Block,
     Code,
@@ -57,23 +70,28 @@ from .tree import (
     Table,
     Text,
 )
-from .validator_bridge import block_fragments, block_quotes, is_escaped, lex, placed_markers
+from .validator_bridge import FENCE_OPEN_RE, MAX_QUOTE_DEPTH, closes_fence, dedent, indent_width, quote_content
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
 # Leads the sentinel of source that renders nothing (a {{def:}}). It is
 # Unicode punctuation, so an emphasis closer just before it still counts as
 # right-flanking and closes (CommonMark); a bare sentinel reads like a letter.
 _HIDDEN_LEAD = "\u2e31"
-# A fenced code block's opening line (validator's model keeps the fences).
-_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-# The validator's block kinds that render as a paragraph, and as a list.
-_PARAGRAPH_KINDS = frozenset({"paragraph", "definition", "ref", "term"})
-_LIST_KINDS = frozenset({"unordered_list", "ordered_list"})
 # Stand where inline HTML or a comment was dropped, until _merge_text joins
 # the text around them. A dropped line break (<br>) still parts two words.
 _DROPPED = Text("")
 _DROPPED_BREAK = Text("")
 _BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+#: How deep lists, quotes, and inline formatting (emphasis, links) may nest,
+#: together. Far beyond any real document, and far enough below Python's
+#: recursion limit that building, resolving, and writing the tree never
+#: reach it. The builder refuses a deeper document as it reaches the limit,
+#: before resolving or writing it. (The validator caps lists at 64 levels
+#: and quotes at 16 itself.)
+MAX_NESTING = 100
+# A drafting note's first line (§15.6). Which quotes are drafting notes is
+# the validator's decision (is_drafting_note); this text is taken off.
+DRAFTING_MARKER = "[!DRAFTING]"
 
 
 def normalize_source(source: str) -> str:
@@ -156,10 +174,14 @@ class _Builder:
         self.md = MarkdownIt("commonmark", {"html": True})
         self.env: dict = {}
         self.payloads: list[_Payload] = []
-        # Texts in which raw HTML was dropped (§8.7), counted once each.
-        self.raw_html = 0
-        self._dropped_html = False
-        self.markers = placed_markers(document)
+        # The markers the validator placed, by (section index or None for
+        # the preamble, block index).
+        self.placed: dict[tuple[int | None, int], list[PlacedMarker]] = {}
+        for marker in result.placed_markers:
+            self.placed.setdefault((marker.section, marker.block), []).append(marker)
+        # Each text is lexed once in a render.
+        self.lex = cache(lex)
+        self.depth = 0  # quotes and list items the builder is inside
         nonce = secrets.token_hex(8)
         # A hidden sentinel has its own form ("h"), so the lead character is
         # taken only with one, never from the source before another sentinel.
@@ -183,7 +205,7 @@ class _Builder:
         sentinel, so that Markdown cannot reinterpret directive syntax. A defined term
         becomes one sentinel and its {{def:}} another that renders nothing
         (see _DefinitionSpan). One pass over the directives, in order."""
-        lexed = self.markers.lex(body)
+        lexed = self.lex(body)
         spans: dict[int, _DefinitionSpan] = {}
         for anchor in find_definition_anchors(body, language=self.language, lexed=lexed):
             if anchor.term is None or anchor.pair is None:
@@ -255,17 +277,14 @@ class _Builder:
     def text(self, source: str) -> tuple[Inline, ...]:
         """Inline nodes for *source*, one block's text as the validator
         holds it: directives protected, then parsed as inline Markdown."""
-        self._dropped_html = False
-        inlines = _trim(self.inlines(self._protect(source)))
-        if self._dropped_html:
-            self.raw_html += 1
-        return inlines
+        return _trim(self.inlines(self._protect(source)))
 
     def inlines(self, content: str) -> tuple[Inline, ...]:
         """Inline nodes for the inline Markdown *content* (sentinels included)."""
         tokens = self.md.parseInline(content, self.env)
         if not tokens or not tokens[0].children:
             return ()
+        self._check_depth(max(token.level for token in tokens[0].children))
         root = SyntaxTreeNode(tokens[0].children, create_root=True)
         return self._inline_children(root)
 
@@ -298,7 +317,6 @@ class _Builder:
             case "html_inline":
                 if node.content.startswith("<!--"):
                     return [_DROPPED]
-                self._dropped_html = True  # never emitted (§8.7)
                 return [_DROPPED_BREAK if _BREAK_TAG_RE.fullmatch(node.content) else _DROPPED]
             case _:
                 return [Text(self._restore(node.content))] if node.content else []
@@ -330,97 +348,28 @@ class _Builder:
     def blocks(self, blocks: list[ModelBlock], section: int | None, *, markers: bool = True) -> tuple[Block, ...]:
         """Render-tree blocks for the validator's *blocks* of section index
         *section* (None for the preamble). With *markers* False — text the
-        validator reads inside a quote or an item — no marker is placed.
-
-        The one place the builder reads past the validator's model: a
-        comment (§8.6) left open in a paragraph or a list item runs on to
-        the first ``-->`` in the blocks that follow, which render nothing
-        (docs/architecture.md, stage 3; ForLegalAI/legaldown-validator#23).
-        It never runs past the end of *blocks*."""
+        validator reads inside a quote or an item — no marker is placed."""
         out: list[Block] = []
-        in_comment = False
         top_level = section is not None and markers
         for index, block in enumerate(blocks):
-            built: Block | None
-            if in_comment and block.kind not in _PARAGRAPH_KINDS | _LIST_KINDS:
-                # A quote, code, table, or rule the comment runs into: what
-                # follows its "-->" is kept as text, its structure is lost.
-                built, in_comment = self.paragraph(render_block(block), "", "", top_level=top_level, in_comment=True)
-                if built is not None:
-                    out.append(built)
-                continue
-            placed = self._placed(block, section, index) if markers else {}
-            if block.kind in _PARAGRAPH_KINDS:
-                block, identifier, condition = _strip_markers(block, placed)
-                built, in_comment = self.paragraph(
-                    _paragraph_source(block), identifier, condition, top_level=top_level, in_comment=in_comment)
-            elif block.kind in _LIST_KINDS:
-                built, in_comment = self.list(block, placed, in_comment=in_comment)
-            else:
-                built = self.block(block, placed)
+            if block.kind == "html":
+                continue  # never emitted: a comment (§8.6) or raw HTML (§8.7)
+            placed = self.placed.get((section, index), []) if markers else []
+            built = self.block(block, placed, top_level=top_level)
             if built is not None:
                 out.append(built)
         return tuple(out)
 
-    def paragraph(
-        self, source: str, identifier: str, condition: str, *, top_level: bool, in_comment: bool,
-    ) -> tuple[Paragraph | None, bool]:
-        """A paragraph for *source*, and whether a comment is left open at
-        its end. With *in_comment*, the text up to the first ``-->`` is
-        inside a comment opened earlier; without one, the whole text is."""
-        if in_comment:
-            end = source.find("-->")
-            if end < 0:
-                return None, True
-            source = source[end + 3:]
-        opening = self._unclosed_comment(source)
-        if opening >= 0:
-            source = source[:opening]
-        inlines = self.text(source)
-        if not inlines and not identifier:
-            return None, opening >= 0  # only a comment
-        return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level), opening >= 0
-
-    def _unclosed_comment(self, source: str) -> int:
-        """Offset of a ``<!--`` in *source* that no ``-->`` closes, or -1.
-
-        The lexer's view has code spans and closed comments blanked; what
-        it leaves is literal to it. Of that, an escaped ``\\<!--``, one
-        inside a directive, and the empty comments ``<!-->`` and ``<!--->``
-        (complete in CommonMark) open nothing."""
-        lexed = self.markers.lex(source)
-        view = lexed.view
-        at = view.find("<!--")
-        while at >= 0:
-            if (not is_escaped(view, at)
-                    and not view.startswith((">", "->"), at + 4)
-                    and not any(directive.start <= at < directive.end for directive in lexed.directives)):
-                return at
-            at = view.find("<!--", at + 1)
-        return -1
-
-    def _placed(self, block: ModelBlock, section: int | None, index: int) -> dict[int, tuple[int, str, str]]:
-        """The markers the validator placed in *block*, by fragment index:
-        (offset of the marker in the fragment, identifier, condition)."""
-        placed: dict[int, tuple[int, str, str]] = {}
-        fragments = block_fragments(block)
-        for fragment_index, (fragment, _position) in enumerate(fragments):
-            found = self.markers.placed.get((section, index, fragment_index))
-            if found is None:
-                continue
-            # The marker ends the first line; comments may follow it (§8.6),
-            # so a copy of its text inside one is not it.
-            first_line = HTML_COMMENT_RE.sub(lambda m: " " * len(m.group()), fragment.split("\n", 1)[0])
-            offset = first_line.rfind(found.source)
-            if offset < 0:
-                raise InternalError(f"the validator placed '{found.source}' where the renderer cannot find it")
-            identifier = "" if found.include_only else found.marker.identifier
-            placed[fragment_index] = (offset, identifier, found.marker.condition)
-        return placed
-
-    def block(self, block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> Block:
-        """A block other than a paragraph or a list (see blocks())."""
+    def block(self, block: ModelBlock, placed: list[PlacedMarker], *, top_level: bool) -> Block | None:
         match block.kind:
+            case "paragraph" | "definition" | "ref" | "term":
+                block, identifier, condition = _strip_markers(block, placed)
+                inlines = self.text(_paragraph_source(block))
+                if not inlines and not identifier:
+                    return None  # only a comment
+                return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level)
+            case "unordered_list" | "ordered_list":
+                return self.list(block, placed)
             case "quote":
                 return self.quote(block)
             case "code":
@@ -433,70 +382,85 @@ class _Builder:
                 return Table(
                     header=tuple(self.text(cell) for cell in block.headers),
                     rows=tuple(tuple(self.text(cell) for cell in row) for row in rows),
-                    align=(),
+                    align=tuple(block.align),
                 )
             case "rule":
                 return Rule()
+            case "heading":
+                # A heading in a list item or a quote: not a section (§4.1),
+                # so it has no number and no anchor. It shows as a bold line.
+                inlines = self.text(block.text)
+                return Paragraph((Strong(inlines),)) if inlines else None
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def list(
-        self, block: ModelBlock, placed: dict[int, tuple[int, str, str]], *, in_comment: bool,
-    ) -> tuple[List | None, bool]:
-        """A list, and whether a comment is left open at its end (see
-        blocks()). An item wholly inside a comment is left out; None when
-        every item is."""
-        # Items are fragments after any text, prefix, and suffix, which a
-        # list block does not have.
-        items: list[ListItem] = []
-        for index, item in enumerate(item for item in block.items if item):
-            identifier = condition = ""
-            if index in placed:
-                offset, identifier, condition = placed[index]
-                item = _cut_marker(item, offset)
-            if in_comment:
-                end = item.find("-->")
-                if end < 0:
-                    continue
-                item, in_comment = item[end + 3:].lstrip(" "), False
-                if not item.strip() and not identifier:
-                    continue  # nothing after the comment's end
-            first, _, rest = item.partition("\n")
-            if first.lstrip().startswith(">") or _FENCE_RE.match(first):
-                # The item opens with a quote or code, whose lines the
-                # validator keeps as written (a drafting note included).
-                blocks = self.fragment(item)
-            else:
-                opening = self._unclosed_comment(first)
-                if opening >= 0:
-                    first = first[:opening]
-                    end = rest.find("-->")
-                    rest, in_comment = ("", True) if end < 0 else (rest[end + 3:], False)
-                blocks = (Paragraph(self.text(first)),) + (self.fragment(rest) if rest.strip() else ())
-            items.append(ListItem(blocks=blocks, anchor_id=identifier, condition=condition))
-        return (List(ordered=block.kind == "ordered_list", items=tuple(items)) if items else None), in_comment
+    def list(self, block: ModelBlock, placed: list[PlacedMarker]) -> List:
+        """A list, nested as the validator's model holds it: items that hold
+        blocks. A placed marker names the item it marks by its pre-order
+        number among all the list's items, as the validator numbers them."""
+        markers = {marker.item: marker for marker in placed}
+        return self._list(block, markers, count())
+
+    def _list(self, block: ModelBlock, markers: dict[int | None, PlacedMarker], numbers: Iterator[int]) -> List:
+        """*block*'s items, numbered from *numbers* in pre-order, to find the
+        items *markers* belong to."""
+        self._check_depth(1)
+        self.depth += 1
+        try:
+            items: list[ListItem] = []
+            for item in list_items(block):
+                marker = markers.get(next(numbers))
+                children = list(item.blocks)
+                identifier = condition = ""
+                if marker is not None:
+                    identifier, condition = marker.identifier, marker.condition
+                    children[0] = replace(children[0], text=_cut_marker(children[0].text, marker))
+                blocks: list[Block] = []
+                for child in children:
+                    if child.kind in ("ordered_list", "unordered_list"):
+                        blocks.append(self._list(child, markers, numbers))
+                    elif child.kind == "html":
+                        continue  # never emitted (§8.6, §8.7)
+                    elif (built := self.block(child, [], top_level=False)) is not None:
+                        blocks.append(built)
+                items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition))
+        finally:
+            self.depth -= 1
+        return List(ordered=block.kind == "ordered_list", items=tuple(items))
+
+    def _check_depth(self, more: int) -> None:
+        """Refuse a document that nests lists, quotes, and inline formatting
+        deeper than MAX_NESTING, *more* levels below where the builder is."""
+        if self.depth + more > MAX_NESTING:
+            raise DocumentError(f"The document nests lists, quotes, and inline formatting more than "
+                                f"{MAX_NESTING} levels deep, which is not rendered.")
 
     def quote(self, block: ModelBlock) -> Block:
-        """A block quote, its content read by the validator's parser. A
-        drafting note is decided by the validator's own test (§15.6)."""
-        text = block.text
-        quotes = block_quotes(block)
-        drafting = bool(quotes) and quotes[0].start == 0 and quotes[0].is_drafting_note
-        if drafting:
-            text = text.partition("\n")[2]
-        blocks = self.fragment(text)
+        """A block quote, its content the blocks the validator reads in it
+        (``quote_content``). Past the validator's quote depth, it reads the
+        quote's text as one, and so does the builder. A drafting note is
+        decided by the validator's own test (§15.6); its ``[!DRAFTING]``
+        marker, which starts its first paragraph or heading in the
+        validator's reading, is not shown."""
+        drafting = is_drafting_note(block)
+        self._check_depth(1)
+        self.depth += 1
+        try:
+            if self.depth <= MAX_QUOTE_DEPTH:
+                children = list(quote_content(block.text, self.depth)[0])
+                if drafting:
+                    unmarked = _without_drafting_marker(children)
+                    # When the marker does not start the first paragraph or
+                    # heading (an indented marker line reads as code), the
+                    # note is the text after its marker line.
+                    children = unmarked if unmarked is not None else list(
+                        quote_content(block.text.partition("\n")[2], self.depth)[0])
+                blocks = self.blocks(children, None, markers=False)
+            else:
+                text = block.text.partition("\n")[2] if drafting else block.text
+                blocks = (Paragraph(self.text(text)),) if text.strip() else ()
+        finally:
+            self.depth -= 1
         return DraftingNote(blocks) if drafting else Quote(blocks)
-
-    def fragment(self, text: str) -> tuple[Block, ...]:
-        """Blocks for *text* inside a quote or a list item, read by the
-        validator's parser — as a body, so that text starting with ``---``
-        is not frontmatter. No marker is placed there (§5.7), and a heading
-        is not a section (§4.1)."""
-        inner = parse_document("\n" + text)
-        blocks = self.blocks(inner.preamble, None, markers=False)
-        for section in inner.sections:
-            blocks += (Paragraph((Strong(self.text(section.title)),)),)
-            blocks += self.blocks(section.blocks, None, markers=False)
-        return blocks
 
     # -- document -------------------------------------------------------------
 
@@ -519,33 +483,44 @@ class _Builder:
             language=self.language,
             preamble=self.blocks(document.preamble, None),
             sections=sections,
-            is_template=self.markers.template,
+            is_template=self.result.is_template,
         )
 
 
-def _strip_markers(block: ModelBlock, placed: dict[int, tuple[int, str, str]]) -> tuple[ModelBlock, str, str]:
+def _without_drafting_marker(children: list[ModelBlock]) -> list[ModelBlock] | None:
+    """A drafting note's blocks, as the validator reads them, without the
+    ``[!DRAFTING]`` marker that starts the first of them (its first line is
+    the marker, §15.6); a block that held only the marker goes. None when
+    the marker does not start a first paragraph or heading. To be replaced by
+    the validator's own reading (ForLegalAI/legaldown-validator#88)."""
+    first = children[0] if children else None
+    if first is None or first.kind not in ("paragraph", "heading") \
+            or not first.text.upper().startswith(DRAFTING_MARKER):
+        return None
+    rest = first.text[len(DRAFTING_MARKER):].lstrip()
+    return ([replace(first, text=rest)] if rest else []) + children[1:]
+
+
+def _strip_markers(block: ModelBlock, placed: list[PlacedMarker]) -> tuple[ModelBlock, str, str]:
     """*block* without its placed marker, and the marker's identifier and
-    condition. Fragments are numbered as block_fragments numbers them."""
-    fields = [name for name in ("text", "prefix", "suffix") if getattr(block, name)]
+    condition. The validator says which field holds the marker."""
     identifier = condition = ""
-    for fragment_index, (offset, marker_id, marker_condition) in placed.items():
-        if fragment_index >= len(fields):
-            raise InternalError(f"the validator placed a marker in fragment {fragment_index} of a {block.kind} block")
-        name = fields[fragment_index]
-        block = replace(block, **{name: _cut_marker(getattr(block, name), offset)})
-        identifier, condition = marker_id, marker_condition
+    for marker in placed:
+        block = replace(block, **{marker.field: _cut_marker(getattr(block, marker.field), marker)})
+        identifier, condition = marker.identifier, marker.condition
     return block, identifier, condition
 
 
-def _cut_marker(fragment: str, offset: int) -> str:
-    """*fragment* without the marker at *offset* on its first line; a
-    comment after the marker stays (it renders nothing)."""
-    first, newline, rest = fragment.partition("\n")
-    end = first.index("}", offset) + 1
+def _cut_marker(fragment: str, marker: PlacedMarker) -> str:
+    """*fragment* without *marker*, which ends it; a comment after the
+    marker stays (it renders nothing)."""
+    end = marker.offset + len(marker.source)
+    if fragment[marker.offset:end] != marker.source:
+        raise InternalError(f"the validator placed '{marker.source}' where the renderer cannot find it")
     # Only the spacing around the marker goes: text before it keeps its own
     # leading space (a lifted {{ref:}}'s suffix begins with one).
-    before, after = first[:offset].rstrip(), first[end:].strip()
-    return (f"{before} {after}" if after else before) + newline + rest
+    before, after = fragment[:marker.offset].rstrip(), fragment[end:].strip()
+    return f"{before} {after}" if after else before
 
 
 def _paragraph_source(block: ModelBlock) -> str:
@@ -556,16 +531,20 @@ def _paragraph_source(block: ModelBlock) -> str:
 
 
 def _code_block(text: str) -> CodeBlock:
-    """A fenced code block from the validator's model, fences included."""
+    """A code block from the validator's model, read by the validator's
+    CommonMark rules: an indented block loses four columns from each line;
+    a fenced one loses its fences, and from each line as much indentation
+    as its opening fence had."""
     lines = text.split("\n")
-    opening = _FENCE_RE.match(lines[0]) if lines else None
+    opening = FENCE_OPEN_RE.match(lines[0]) if lines else None
     if opening is None:
-        return CodeBlock(text)
-    fence = opening.group(1)
+        return CodeBlock("\n".join(dedent(line, 4) for line in lines) + "\n")
     body = lines[1:]
-    if body and body[-1].strip().startswith(fence[0] * len(fence)) and not body[-1].strip().strip(fence[0]):
+    if body and closes_fence(body[-1], opening.group("fence")):
         body = body[:-1]
-    return CodeBlock("\n".join(body) + ("\n" if body else ""), opening.group(2).strip())
+    indent = indent_width(lines[0])
+    body = [dedent(line, indent) for line in body]
+    return CodeBlock("\n".join(body) + ("\n" if body else ""), lines[0][opening.end():].strip())
 
 
 def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
@@ -610,12 +589,9 @@ def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
     return tuple(merged)
 
 
-def build_tree(document: Document, result: ValidationResult) -> tuple[RenderTree, int]:
-    """The render tree for *document*, and the number of texts — a
-    paragraph, a title, a table cell — in which raw HTML was dropped (§8.7)."""
-    builder = _Builder(document, result)
-    tree = builder.tree()
-    return tree, builder.raw_html
+def build_tree(document: Document, result: ValidationResult) -> RenderTree:
+    """The render tree for *document*."""
+    return _Builder(document, result).tree()
 
 
 def plain_inlines(text: str) -> tuple[Inline, ...]:

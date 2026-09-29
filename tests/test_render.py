@@ -33,6 +33,10 @@ def text(body: str, **settings: object) -> str:
     return render(FRONT + body, format="text", **settings).output
 
 
+def html(body: str, **settings: object) -> str:
+    return render(FRONT + body, format="html", **settings).output
+
+
 def features(**settings: object) -> str:
     return render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), **settings).output
 
@@ -68,14 +72,6 @@ def test_numbering_schemes(scheme: str, heading: str, refs: str) -> None:
 def test_ordered_lists_are_renumbered() -> None:
     output = text("# A\n\n7. first\n7. second\n")
     assert "1. first\n2. second" in output
-
-
-def test_nested_lists_render_flat_until_the_validator_keeps_them() -> None:
-    # One parser: lists are the validator's, which keeps one level of items
-    # (ForLegalAI/legaldown-validator#14).
-    output = text("# A\n\n- one {#one}\n  - nested {#nested}\n- two\n\nSee {{ref: nested}}.\n")
-    assert "(a) one\n(b) nested\n(c) two" in output
-    assert "See 1(b)." in output
 
 
 def test_ref_to_unenumerated_item_falls_back_with_warning() -> None:
@@ -277,8 +273,22 @@ def test_contents_label_follows_the_language_and_marks_conditions() -> None:
 
 
 def test_contents_follow_the_numbering_depth_not_the_heading_level() -> None:
-    output = text("# A\n\n### B\n\n###### C\n", overrides={"contents.enabled": True})
-    assert "Contents\n1. A\n    1.1 B\n\n" in output
+    body = "# A\n\n### B\n\n## C\n"
+    assert "Contents\n1. A\n    1.2 C\n\n" in text(body, overrides={"contents.enabled": True})
+    assert "Contents\n1. A\n        1.1.1 B\n    1.2 C\n\n" in text(
+        body, overrides={"contents.enabled": True, "contents.depth": 3})
+
+
+@pytest.mark.parametrize("body", [
+    "# A\n\n### B\n\n## C\n\n### D\n",
+    "## A\n\n### B\n\n## C\n",
+    "# A\n\n###### B\n\n# C\n",
+])
+def test_section_numbers_are_the_validators(body: str) -> None:
+    from legaldown import parse_document, validate_document
+    result = render(FRONT + body, format="text")
+    expected = [entry.number for entry in validate_document(parse_document(FRONT + body)).sections]
+    assert [section.designation for section in result.tree.sections] == expected
 
 
 def test_contents_group_attachments_under_their_heading() -> None:
@@ -385,6 +395,55 @@ def test_a_colon_ending_in_a_no_break_space_keeps_it_after_date_and_place() -> N
     assert "\nDate \u2013\xa0\n" in output and "\nPlace \u2013\xa0\n" in output
 
 
+TEMPLATE = (DOCUMENTS / "template.lgd").read_text(encoding="utf-8")
+ANSWERS = {"client-name": "Beta Ltd", "fee": "5000.00", "non-solicit": False, "forum": "arbitration"}
+
+
+def test_a_template_with_answers_renders_its_assembled_document() -> None:
+    result = render(TEMPLATE, answers=ANSWERS, format="text")
+    assert not result.tree.is_template
+    assert "Consulting Agreement with Beta Ltd" in result.output
+    assert "Non-Solicitation" not in result.output
+    assert "Disputes are resolved by arbitration." in result.output
+    assert "courts" not in result.output
+    assert "a competent court or an emergency arbitrator" in result.output
+    assert "Drafting note" not in result.output and "partner in charge" not in result.output
+    assert "Only if" not in result.output
+
+
+def test_assembly_warnings_are_reported_with_the_rest() -> None:
+    result = render(TEMPLATE, answers={**ANSWERS, "stray": "x"}, format="text")
+    assert "answer-unknown" in {d.rule for d in result.diagnostics}
+    assert result.ok
+
+
+@pytest.mark.parametrize(("answers", "rule"), [
+    ({key: value for key, value in ANSWERS.items() if key != "forum"}, "answer-missing"),
+    ({**ANSWERS, "forum": "mediation"}, "answer-invalid"),
+])
+def test_assembly_errors_refuse_the_render(answers: dict, rule: str) -> None:
+    with pytest.raises(RenderRefused, match="Assembly refused") as caught:
+        render(TEMPLATE, answers=answers)
+    assert rule in {d.rule for d in caught.value.diagnostics}
+
+
+def test_a_template_with_errors_is_not_assembled() -> None:
+    broken = TEMPLATE.replace("{{ref: disputes}}", "{{ref: nowhere}}").replace("# Relief", "# Relief\n\n# Привет")
+    with pytest.raises(RenderRefused, match="only a template without errors") as caught:
+        render(broken, answers=ANSWERS)
+    levels = {d.rule: d.level for d in caught.value.diagnostics}
+    assert levels.get("ref-broken") == "error"
+    assert "warning" in levels.values()
+
+
+def test_unanswered_blanks_stay_and_the_final_check_catches_them() -> None:
+    answers = {key: value for key, value in ANSWERS.items() if key != "fee"}
+    result = render(TEMPLATE, answers=answers, format="text", final=True)
+    assert "[_____]" in result.output
+    assert "placeholder-unfilled" in {d.rule for d in result.diagnostics}
+    assert "template-construct-present" not in {d.rule for d in result.diagnostics}
+
+
 def test_final_check_reports_blanks_and_template_constructs() -> None:
     body = "# A\n\nPay {{placeholder: fee, type=text}}.\n\n> [!DRAFTING]\n> Check the fee.\n"
     assert not {"placeholder-unfilled", "template-construct-present"} & {d.rule for d in render(FRONT + body).diagnostics}
@@ -406,7 +465,7 @@ def test_locale_option_and_language_hint() -> None:
 
 def test_unreadable_document() -> None:
     with pytest.raises(DocumentError):
-        render("---\n- a list\n---\n\n# A\n")
+        render("---\ntitle: [unclosed\n---\n\n# A\n")
 
 
 def test_options_object_and_keywords_are_exclusive() -> None:
@@ -467,8 +526,9 @@ def test_source_holding_sentinel_characters_renders_them() -> None:
 
 
 def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
-    # The text writer, on a tree with nesting (as the validator will give
-    # once it keeps nested lists): the item's label comes first.
+    # An item that opens with a nested list (`-` then an indented list, in
+    # the validator's model): the item's label comes first, on a line of its
+    # own, and nested lists line up with its text.
     from legaldown_render.tree import List, ListItem, Paragraph, RenderTree, Section, Text
     from legaldown_render.writers import TextWriter
 
@@ -477,7 +537,7 @@ def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
     outer = List(True, (ListItem((Paragraph((Text("first"),)),), label="1."), ListItem((middle,), label="2.")),
                  enumerated=True)
     tree = RenderTree((), (), "en", (), (Section(1, (Text("A"),), "a", "", (outer,), label="1."),))
-    assert "1. first\n2.\n    (i)\n        (A) deep" in TextWriter().write(tree)
+    assert "1. first\n2.\n   (i)\n       (A) deep" in TextWriter().write(tree)
 
 
 def test_an_unresolved_node_is_an_internal_error() -> None:
@@ -702,11 +762,213 @@ def test_the_first_definition_in_document_order_keeps_the_anchor() -> None:
     assert 'id="def:fee"' not in sections
 
 
-def test_a_later_paragraph_in_a_list_item_is_the_validators_paragraph() -> None:
-    # The validator ends the list at the blank line and reads "second" as a
-    # top-level paragraph, whose marker it places; so does the renderer.
-    output = text("# A\n\n- item one\n\n  second {#sec}\n\nSee {{ref: sec}}.\n")
-    assert "(a) item one\n\nsecond\n\nSee 1." in output
+def test_nested_lists_line_up_with_their_item_s_text() -> None:
+    output = text("# A\n\n1. one\n\n   more\n\n   - child\n")
+    assert "1. one\n   more\n   (i) child" in output
+
+
+def _nested_list(levels: int) -> str:
+    return "# A\n\n" + "".join("  " * depth + f"- l{depth}\n" for depth in range(levels))
+
+
+def test_deep_inline_formatting_is_refused_and_shallow_renders() -> None:
+    with pytest.raises(DocumentError, match="levels deep"):
+        render(FRONT + "# A\n\n" + "*a " * 300 + "x" + "*" * 300 + "\n")
+    assert "x" in text("# A\n\n" + "*a " * 30 + "x" + "*" * 30 + "\n")
+
+
+def test_quote_markers_in_code_do_not_count_as_depth() -> None:
+    assert "&gt;&gt;&gt;" in render(FRONT + "# A\n\n> ```\n> " + ">" * 150 + "\n> ```\n", standalone=False).output
+
+
+def test_a_reference_to_an_item_another_list_also_numbers_is_ambiguous() -> None:
+    result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b {#y}\n\nSee {{ref: x}}.\n", format="text")
+    assert "See 1(a)." in result.output
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+    single = render(FRONT + "# A\n\n- a {#x}\n- b\n\nSee {{ref: x}}.\n", format="text")
+    assert "render-ref-ambiguous" not in {d.rule for d in single.diagnostics}
+
+
+def test_alternatives_are_not_ambiguous() -> None:
+    body = ("# A\n\n- first {#alt when=forum:courts}\n- second {#alt when=forum:arbitration}\n\n"
+            "See {{ref: alt}}.\n")
+    front = FRONT.replace("---\n", "---\nquestions:\n  forum:\n    type: choice\n    choices:\n"
+                          "      courts: Courts\n      arbitration: Arbitration\n", 1)
+    result = render(front + body, format="text")
+    assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
+
+
+QUESTIONS = FRONT.replace("---\n", "---\nquestions:\n  forum:\n    type: choice\n    choices:\n"
+                          "      courts: Courts\n      arbitration: Arbitration\n", 1)
+
+
+def test_lists_in_alternative_sections_are_not_ambiguous() -> None:
+    body = ("# Disputes {#d when=forum:courts}\n\n- court one {#c1}\n\nSee {{ref: c1}}.\n\n"
+            "# Disputes {#d when=forum:arbitration}\n\n- arbitration one\n")
+    result = render(QUESTIONS + body, format="text")
+    assert "See 1(a)." in result.output
+    assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
+
+
+def test_lists_in_quotes_and_drafting_notes_are_not_ambiguous() -> None:
+    body = ("# A\n\n1. first {#a}\n2. second {#b}\n\n> [!DRAFTING]\n> Options:\n>\n> 1. keep\n> 2. drop\n\n"
+            "> 1. quoted\n> 2. quoted\n\nSee {{ref: b}}.\n")
+    result = render(FRONT + body, format="text")
+    assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
+
+
+@pytest.mark.parametrize("first, second", [("courts", "arbitration"), ("arbitration", "courts")])
+def test_every_alternative_is_checked_for_ambiguity(first: str, second: str) -> None:
+    # Under arbitration, x and y both read 1(a), whichever alternative of x
+    # comes first.
+    body = (f"# A\n\n- one {{#x when=forum:{first}}}\n- two {{#x when=forum:{second}}}\n\nPara.\n\n"
+            "- other {#y when=forum:arbitration}\n\nSee {{ref: x}}.\n")
+    result = render(QUESTIONS + body, format="text")
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
+def test_a_numbered_paragraph_reading_like_a_list_item_is_ambiguous() -> None:
+    settings = {"paragraphs.numbered": True,
+                "paragraphs.format": {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"}}
+    result = render(FRONT + "# A\n\nIntro {#p}\n\n- item\n\nSee {{ref: p}}.\n", format="text",
+                    overrides=settings)
+    assert "See 1(a)." in result.output
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
+def test_an_item_reading_like_a_subsection_is_ambiguous() -> None:
+    # Continental items read "{section}.{n}", as subsection 1.1 does.
+    result = render(FRONT + "# A\n\n- a {#x}\n\n## B\n\nSee {{ref: x}}.\n", format="text", style="continental")
+    assert "See 1.1." in result.output
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
+def test_a_second_use_of_an_identifier_is_left_to_the_validator() -> None:
+    result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b {#x}\n\nSee {{ref: x}}.\n", format="text")
+    rules = {d.rule for d in result.diagnostics}
+    assert "anchor-duplicate" in rules and "render-ref-ambiguous" not in rules
+
+
+PARAGRAPHS = {"paragraphs.numbered": True,
+              "paragraphs.format": {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"}}
+
+
+def test_a_list_item_clashing_only_with_a_paragraph_is_ambiguous() -> None:
+    result = render(FRONT + "# A\n\nIntro.\n\n- item {#i}\n\nSee {{ref: i}}.\n", format="text",
+                    overrides=PARAGRAPHS)
+    assert "render-ref-ambiguous" in {d.rule for d in result.diagnostics}
+
+
+def test_paragraphs_under_exclusive_conditions_are_not_ambiguous() -> None:
+    body = ("# A\n\nCourts only. {#p when=forum:courts}\n\n- only under arbitration {#i when=forum:arbitration}\n\n"
+            "See {{ref: p}}.\n")
+    result = render(QUESTIONS + body, format="text", overrides=PARAGRAPHS)
+    assert "render-ref-ambiguous" not in {d.rule for d in result.diagnostics}
+
+
+def test_paragraph_labels_follow_the_style_under_the_none_scheme() -> None:
+    output = render(FRONT + "# Confidentiality\n\nFirst.\n\nSecond.\n", format="text", style="continental",
+                    overrides={"numbering.scheme": "none"}).output
+    assert "\n\n(1) First.\n\n(2) Second.\n" in output
+
+
+def test_an_ambiguous_reference_says_how_to_tell_the_items_apart() -> None:
+    result = render(FRONT + "# A\n\n- a {#x}\n\nPara.\n\n- b\n\nSee {{ref: x}}.\n", format="text")
+    message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
+    assert "Make them one list, or refer to the item in words." in message
+
+
+def test_a_heading_clash_under_the_none_scheme_advises_renaming() -> None:
+    result = render(FRONT + "# A\n\n## General {#g1}\n\n## General {#g2}\n\nSee {{ref: g1}}.\n", format="text",
+                    overrides={"numbering.scheme": "none"})
+    message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
+    assert "Rename one" in message
+
+
+def test_an_item_reading_like_a_subsection_advises_changing_the_numbering() -> None:
+    result = render(FRONT + "# A\n\n- a {#x}\n\n## B\n\nSee {{ref: x}}.\n", format="text", style="continental")
+    message = next(d.message for d in result.diagnostics if d.rule == "render-ref-ambiguous")
+    assert "a section also reads as" in message and "change the style's numbering" in message
+
+
+def test_a_drafting_note_reads_as_the_validator_reads_it() -> None:
+    # An indented line after the marker continues its paragraph (it cannot
+    # interrupt one), so the placeholder in it is live, not code.
+    output = render(FRONT + "# A\n\n> [!DRAFTING]\n>     Use {{placeholder: x, type=text}} here\n",
+                    format="text").output
+    assert "> [Drafting note]\n> Use [_____] here" in output
+    assert "{{placeholder" not in output and "[!DRAFTING]" not in output
+    # The marker underlined makes a heading of it; the note holds nothing else.
+    assert "[!DRAFTING]" not in text("# A\n\n> [!DRAFTING]\n> ---\n")
+    # An indented marker line reads as code in the validator; the note is
+    # then the text after it.
+    output = text("# A\n\n>     [!DRAFTING]\n> Note text\n")
+    assert "> [Drafting note]\n> Note text" in output and "[!DRAFTING]" not in output
+
+
+def test_sibling_lists_are_told_apart_by_how_their_designations_read() -> None:
+    body = "# A\n\n- one\n  1. sub a {#x}\n  - sub b {#y}\n\nSee {{ref: x}} and {{ref: y}}.\n"
+    levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+              {"counter": "decimal", "label": "{n})", "ref": "({n})"}]
+    output = text(body, overrides={"enumeration.levels": levels})
+    assert "See 1(a)(1) and 1(a)(2)." in output
+
+
+def test_empty_list_items_keep_their_place() -> None:
+    # The validator keeps an empty item (CommonMark), so later items keep
+    # their numbers.
+    output = text("# A\n\n- \n  - \n- b {#b}\n\nSee {{ref: b}}.\n")
+    assert "(a)\n    (i)\n(b) b" in output
+    assert "See 1(b)." in output
+
+
+@pytest.mark.parametrize("output_format", ["html", "text"])
+def test_deep_lists_and_quotes_render_as_the_validator_caps_them(output_format: str) -> None:
+    # The validator reads lists 64 levels deep and quotes 16; deeper, an
+    # item's or quote's content is text. So the renderer never nests past
+    # its own limit on lists and quotes alone.
+    lists = "# A\n\n" + "".join("  " * depth + f"- l{depth}\n" for depth in range(150))
+    assert "l149" in render(FRONT + lists, format=output_format).output
+    for marker in ("> ", ">    "):
+        assert "deepest" in render(FRONT + "# A\n\n" + marker * 2000 + "deepest\n", format=output_format).output
+
+
+def test_lists_and_inline_formatting_count_together() -> None:
+    from legaldown_render.build import MAX_NESTING
+    lists = "".join("  " * depth + f"- l{depth}\n" for depth in range(60))
+    deep = "  " * 60 + "- " + "*a " * (MAX_NESTING - 50) + "x" + "*" * (MAX_NESTING - 50) + "\n"
+    with pytest.raises(DocumentError, match="levels deep"):
+        render(FRONT + "# A\n\n" + lists + deep)
+
+
+def test_sibling_lists_in_one_item_never_share_a_designation() -> None:
+    body = "# A\n\n- one\n  1. sub a {#x}\n  - sub b {#y}\n\nSee {{ref: x}} and {{ref: y}}.\n"
+    output = text(body, overrides={"enumeration.ordered": "enumerate"})
+    assert "(a) one\n    (i) sub a\n    (ii) sub b" in output
+    assert "See 1(a)(i) and 1(a)(ii)." in output
+    # Lists in different formats are told apart by their format already.
+    assert "See 1(a)(1) and 1(a)(i)." in text(body)
+
+
+def test_a_later_paragraph_in_a_list_item_is_the_item_s() -> None:
+    # Indented after a blank line, "second" is the item's (CommonMark), so
+    # its marker is misplaced (§5.7) and a reference to it is broken, as the
+    # validator reports.
+    result = render(FRONT + "# A\n\n- item one\n\n  second {#sec}\n\nSee {{ref: sec}}.\n", format="text")
+    assert "(a) item one\n    second" in result.output
+    assert "[BROKEN REF: sec]" in result.output
+    assert {"anchor-misplaced", "ref-broken"} <= {d.rule for d in result.diagnostics}
+
+
+def test_nested_lists_keep_their_structure_and_designations() -> None:
+    body = ("# A\n\n- one\n  1. sub a {#suba}\n  2. sub b\n     - deep {#deep}\n  - bullet after ordered\n"
+            "- two\n\nSee {{ref: suba}} and {{ref: deep}}.\n")
+    output = text(body)
+    assert ("(a) one\n    1. sub a\n    2. sub b\n       (A) deep\n    (i) bullet after ordered\n(b) two"
+            in output)
+    assert "See 1(a)(1) and 1(a)(2)(A)." in output
+    html = render(FRONT + body, standalone=False).output
+    assert html.count("<ol") + html.count("<ul") == 4
 
 
 def test_a_level_six_heading_nests_where_its_number_puts_it() -> None:
@@ -726,24 +988,53 @@ def _validator_rules(source: str) -> set[str]:
     return {d.rule for d in validate_document(parse_document(source)).diagnostics}
 
 
-def test_a_heading_in_a_comment_renders_as_the_validator_reads_it() -> None:
-    # The validator reads the heading as a section; the renderer never
-    # crashes on a disagreement, because there is none to have.
-    result = render(FRONT + "# Zero\n\n<!--\n# Old clause\n-->\n", format="text")
-    assert [s.designation for s in result.tree.sections] == ["1", "2"]
-
-
-def test_a_signature_block_heading_ends_the_body_as_in_the_validator() -> None:
+def test_a_signature_block_heading_is_an_ordinary_section() -> None:
     result = render(FRONT + "# One\n\nText.\n\n# Signature Block {#signature-block}\n\nSigned\n", format="text")
-    assert [s.designation for s in result.tree.sections] == ["1"]
-    assert "Signed" not in result.output
+    assert [s.designation for s in result.tree.sections] == ["1", "2"]
+    assert "Signed" in result.output
+
+
+def test_every_list_marker_makes_a_list() -> None:
+    output = text("# A\n\n* star\n* list\n\n1) one\n2) two\n")
+    assert "(a) star\n(b) list" in output
+    assert "1. one\n2. two" in output
+
+
+def test_table_columns_keep_their_alignment() -> None:
+    html = render(FRONT + "# A\n\n| l | c | r | n |\n|:--|:-:|--:|---|\n| 1 | 2 | 3 | 4 |\n", standalone=False).output
+    assert '<th style="text-align: left">l</th>' in html
+    assert '<td style="text-align: center">2</td>' in html
+    assert '<td style="text-align: right">3</td>' in html
+    assert "<td>4</td>" in html
+
+
+def test_a_fence_s_indent_is_removed_from_its_lines() -> None:
+    html = render(FRONT + "# A\n\n   ```py\n   a\n  b\n     c\n   ```\n", standalone=False).output
+    assert '<code class="language-py">a\nb\n  c\n</code>' in html
+
+
+def test_a_fence_indented_four_columns_does_not_close_code() -> None:
+    html = render(FRONT + "# A\n\n```\ncode\n    ```\n", standalone=False).output
+    assert "<code>code\n    ```\n</code>" in html
+
+
+def test_a_section_s_level_is_its_number_s_depth() -> None:
+    html = render(FRONT + "## A\n\n### B\n", standalone=False, style="continental").output
+    assert '<section class="ld-section ld-level-1" id="a">\n<h2 class="ld-heading"><span class="ld-number">1.</span>' in html
+    assert '<section class="ld-section ld-level-2" id="b">\n<h3 class="ld-heading"><span class="ld-number">1.1</span>' in html
+
+
+def test_indented_code_renders_as_code_without_its_indent() -> None:
+    html = render(FRONT + "# A\n\nPara.\n\n    code {{ref: x}}\n      deeper\n", standalone=False).output
+    assert "<pre class=\"ld-code\"><code>code {{ref: x}}\n  deeper\n</code></pre>" in html
+    assert "BROKEN REF" not in html
 
 
 def test_markers_and_references_agree_with_the_validators_diagnostics() -> None:
     cases = [
         ("1. item\n   ```\n   code\n   ```\n   after {#x}\n\nSee {{ref: x}}.\n", True),
-        ("1. # Heading {#x}\n\nSee {{ref: x}}.\n", False),
-        ("- item one\n\n  second {#x}\n\nSee {{ref: x}}.\n", False),
+        ("1. # Heading {#x}\n\nSee {{ref: x}}.\n", True),  # a marker after a heading is text (§5.7)
+        ("- item one\n\n  second {#x}\n\nSee {{ref: x}}.\n", True),
     ]
     for body, broken in cases:
         source = FRONT + "# One\n\n" + body
@@ -763,11 +1054,19 @@ def test_template_decision_is_the_validators() -> None:
 # -- regressions from the seventh code review ------------------------------------------
 
 
+def test_a_heading_in_a_quote_or_item_is_a_bold_line_not_a_section() -> None:
+    result = render(FRONT + "# A\n\n> # Inner\n> text\n\n- ## Item heading\n\n> title: x\n> ---\n> after\n",
+                    format="text")
+    assert "\n\n> Inner\n\n> text\n\n(a) Item heading\n\n> title: x\n\n> after\n" in result.output
+    assert [s.designation for s in result.tree.sections] == ["1"]
+    html = render(FRONT + "# A\n\n> # Inner\n", standalone=False).output
+    assert "<strong>Inner</strong>" in html
+
+
 def test_quote_content_is_read_as_a_body() -> None:
     # Text starting with "---" inside a quote is not frontmatter.
     output = text("# A\n\n> ---\n> title: x\n> ---\n> Visible?\n")
-    for line in ("> title: x", "> Visible?"):
-        assert line in output
+    assert "title: x" in output and "Visible?" in output
 
 
 def test_a_signature_block_heading_in_a_quote_renders() -> None:
@@ -794,39 +1093,39 @@ def test_an_item_opening_with_a_drafting_note_or_code() -> None:
     assert "```" not in output
 
 
-def test_html_tags_are_never_emitted() -> None:
-    # Every tag is dropped and reported. Text between the tags of an HTML
-    # block stays, as the validator's model holds it as paragraph text
-    # (ForLegalAI/legaldown-validator#23); it is escaped like any text.
+def test_an_html_block_is_dropped_whole_and_reported() -> None:
     result = render(FRONT + "# A\n\n<script>\nalert(1)\n</script>\n\nAfter.\n", standalone=False)
-    assert "<script" not in result.output
-    assert "&lt;script" not in result.output
+    assert "script" not in result.output
+    assert "alert(1)" not in result.output
     assert "After." in result.output
     assert "raw-html" in {d.rule for d in result.diagnostics}
 
 
-def test_a_hard_break_keeps_both_lines() -> None:
-    # How the break shows depends on the validator's parser
-    # (ForLegalAI/legaldown-validator#25); only the text is pinned.
-    output = text("# A\n\nLine one\\\nline two\n")
-    assert "Line one" in output
-    assert "line two" in output
+def test_a_comment_block_renders_nothing_and_holds_no_section() -> None:
+    result = render(FRONT + "# Zero\n\n<!--\nhidden\n\n# Old clause\n-->\n\nNext.\n", format="text")
+    assert [s.designation for s in result.tree.sections] == ["1"]
+    assert "hidden" not in result.output and "Old clause" not in result.output
+    assert "Next." in result.output
+    assert "raw-html" not in {d.rule for d in result.diagnostics}
 
 
-def test_a_comment_across_blocks_renders_nothing() -> None:
-    # The one place the builder reads past the validator's model
-    # (docs/architecture.md, stage 3).
-    output = text("# A\n\nBefore <!-- open\n\n- hidden item\n\nstill hidden --> after\n\nNext.\n")
-    assert "Before\n\nafter\n\nNext." in output
-    assert "hidden" not in output
-    assert "<!--" not in output and "-->" not in output
+def test_an_html_block_after_a_comment_is_still_reported() -> None:
+    result = render(FRONT + "# A\n\n<!-- note --> <b>tail</b>\n", format="text")
+    assert "tail" not in result.output
+    assert "raw-html" in {d.rule for d in result.diagnostics}
 
 
-def test_an_open_comment_ends_with_its_section() -> None:
-    output = text("# A\n\nShown <!-- never closed\n\nhidden\n\n# B\n\nVisible.\n")
-    assert "Shown" in output
-    assert "hidden" not in output
-    assert "Visible." in output
+def test_an_unclosed_comment_inside_a_paragraph_is_text() -> None:
+    # CommonMark: only a line that starts with <!-- opens an HTML block.
+    output = text("# A\n\nBefore <!-- open\n\nShown.\n")
+    assert "Before <!-- open" in output
+    assert "Shown." in output
+
+
+def test_hard_breaks_break_the_line_and_soft_breaks_do_not() -> None:
+    source = "# A\n\nLine one\\\nline two  \nline three\nline four\n"
+    assert "Line one\nline two\nline three line four\n" in text(source)
+    assert "Line one<br>\nline two<br>\nline three\nline four</p>" in html(source)
 
 
 def test_a_comment_opener_in_code_or_a_directive_does_not_open() -> None:
@@ -843,39 +1142,14 @@ def test_an_escaped_or_empty_comment_opener_does_not_open() -> None:
     assert "A b" in output
 
 
-def test_a_comment_opened_in_a_list_item() -> None:
-    output = text("# A\n\n- a\n- b <!-- x\n- hidden\n- c --> shown\n- d\n\n- Item <!-- start\n\n  hidden too\n\n"
-                  "  end --> tail\n")
-    assert "(a) a\n(b) b\n(c) shown\n(d) d" in output
-    assert "hidden" not in output
-    assert "tail" in output
-
-
-def test_a_comment_closing_in_a_list_keeps_its_items() -> None:
-    output = text("# A\n\nText <!-- start\n\n- one\n- two -->\n- three {#three}\n- four\n\nSee {{ref: three}}.\n")
-    assert "(a) three\n(b) four" in output
-    assert "See 1(a)." in output
-
-
 def test_a_dropped_comment_or_tag_leaves_one_space() -> None:
     result = render(FRONT + "# A\n\na <!-- x --> b <br> c <span>d</span> Line<br>two Word<b>bold</b>word\n",
                     format="text")
     assert "a b c d Line two Wordboldword" in result.output
-    warnings = [d for d in result.diagnostics if d.rule == "raw-html"]
-    assert len(warnings) == 1 and "in 1 place" in warnings[0].message
+    # Reported once, by the validator (§8.7).
+    assert [d.rule for d in result.diagnostics].count("raw-html") == 1
 
 
 def test_table_rows_are_as_wide_as_the_header() -> None:
     output = text("# A\n\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\n| x |\n")
     assert "| 1 | 2 |\n| x |  |" in output
-
-
-def test_template_decision_matches_the_validator_on_the_test_documents() -> None:
-    from legaldown import parse_document
-    from validator_spy import validator_template
-
-    from legaldown_render.validator_bridge import placed_markers
-
-    for name in ("features", "template"):
-        document = parse_document((DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8"))
-        assert placed_markers(document).template == validator_template(document)

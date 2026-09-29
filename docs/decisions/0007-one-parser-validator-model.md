@@ -29,8 +29,9 @@ The render tree is built **from the validator's `Document` only**:
 
 - **Block structure:** sections, blocks, list items, quotes, tables, and code all come from the
   validator's model.
-- **Markers:** placed exactly where the validator's own `find_markers()` places them.
-- **Template decision:** the validator's own formula over those markers.
+- **Markers:** placed exactly where the validator places them. Since validator 0.3.0 the
+  renderer reads them from `ValidationResult.placed_markers`.
+- **Template decision:** the validator's own, `ValidationResult.is_template`.
 - **Quote content, and code inside list items:** read with the validator's parser too.
 
 markdown-it-py stays, in **inline mode only**, for the Markdown inside one block's text: emphasis,
@@ -53,9 +54,13 @@ module, `validator_bridge.py`. That module is the list for roadmap item U3.
   - a paragraph's line breaks are joined
   - constructs the validator reads unusually, such as a heading inside an HTML comment, render
     as the validator reads them
-- One deliberate exception: a comment left open in a paragraph runs on to its `-->` across the
-  following blocks, because §8.6 requires every comment to be stripped. It never crosses a
-  section boundary (docs/architecture.md, stage 3).
+- One deliberate exception was added later: a comment left open in a paragraph ran on to its
+  `-->` across the following blocks, because §8.6 requires every comment to be stripped. It was
+  removed once the validator's model kept HTML blocks (validator #23), which is the path this
+  decision expects: the fix lands in the validator, and the renderer drops its workaround.
+  Table alignment came with the same change.
 - When the validator keeps nested lists (#14), the renderer gains them with no parser of its
-  own. The resolver and writers already handle nested lists.
+  own. The resolver and writers already handle nested lists. This happened with validator #61:
+  the builder turns its listed items and their depths into nested lists, and "2.1(b)(i)"
+  replaced "2.1(c)".
 - The build stage is smaller: about 100 lines of position rules and special cases are gone.

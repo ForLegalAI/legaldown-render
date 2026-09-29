@@ -16,6 +16,7 @@ from . import __version__
 from .api import RenderOptions, render
 from .errors import DocumentError, InternalError, RenderRefused
 from .style import StyleError, builtin_styles, dump_style, load_style, parse_override
+from .validator_bridge import read_answers
 from .writers import FORMATS, format_for_path
 
 
@@ -47,6 +48,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--locale", help="formatting locale, e.g. en-US or cs-CZ (default: the style's, else the document language)")
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
+    parser.add_argument("--answers", metavar="FILE",
+                        help="a YAML or JSON answers set (§15.7.1): the template is assembled with it and the "
+                             "assembled document rendered")
     parser.add_argument("--final", action="store_true",
                         help="the document is meant for signature: a remaining blank, questions key, condition, "
                              "choice, or drafting note is an error (§15.9); with --strict, it is refused")
@@ -86,8 +90,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"legaldown-render: cannot read {name}: {error.strerror or error}", file=sys.stderr)
         return 1
 
+    answers = None
+    if args.answers:
+        # Read as legaldown-validator's `legaldown assemble` reads it (§15.7.1).
+        answers, failure = read_answers(Path(args.answers))
+        if failure:
+            print(f"legaldown-render: {failure}", file=sys.stderr)
+            return 1
+
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,
-                            strict=args.strict, final=args.final, standalone=not args.fragment)
+                            strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment)
     try:
         result = render(source, options)
     except StyleError as error:
@@ -116,7 +128,9 @@ def _report(name: str, diagnostics: list, *, quiet: bool) -> None:
     if quiet:
         return
     for diagnostic in diagnostics:
-        print(f"{name}: {diagnostic.level}: [{diagnostic.rule}] {diagnostic.message}", file=sys.stderr)
+        # As the validator's CLI prints them: the line when the finding has one.
+        where = f"{name}:{diagnostic.line}" if diagnostic.line else name
+        print(f"{where}: {diagnostic.level}: [{diagnostic.rule}] {diagnostic.message}", file=sys.stderr)
 
 
 if __name__ == "__main__":

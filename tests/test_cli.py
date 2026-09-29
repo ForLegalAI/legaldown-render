@@ -14,7 +14,10 @@ def test_render_to_file_infers_the_format(tmp_path: Path, capsys: pytest.Capture
     out = tmp_path / "out.txt"
     assert main([FEATURES, "-o", str(out)]) == 0
     assert out.read_text().startswith("Services Agreement")
-    assert "[ref-broken]" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "[ref-broken]" in err
+    # A validator finding names its line, as the validator's CLI prints it.
+    assert f"{FEATURES}:100: warning: [raw-html]" in err
 
 
 def test_style_set_and_locale(capsys: pytest.CaptureFixture[str]) -> None:
@@ -40,6 +43,33 @@ def test_final_with_strict_exits_1(capsys: pytest.CaptureFixture[str], tmp_path:
     assert main([template, "--final", "--quiet", "-o", str(tmp_path / "out.html")]) == 0
     assert main([template, "--final", "--strict"]) == 1
     assert "template-construct-present" in capsys.readouterr().err
+
+
+def test_answers_file(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    template = str(DOCUMENTS / "template.lgd")
+    answers = tmp_path / "answers.yaml"
+    answers.write_text("client-name: Beta Ltd\nfee: '5000.00'\nnon-solicit: false\nforum: courts\n", encoding="utf-8")
+    assert main([template, "--answers", str(answers), "-f", "text", "-q"]) == 0
+    output = capsys.readouterr().out
+    assert "Disputes are resolved by the courts." in output and "arbitration" not in output
+
+    answers.write_text("forum: mediation\n", encoding="utf-8")
+    assert main([template, "--answers", str(answers), "-f", "text"]) == 1
+    assert "answer-invalid" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("content", "message"), [
+    (None, "cannot read"),
+    ("- a list\n", "mapping"),
+    ("date: 2026-13-45\n", "cannot read the answers"),
+])
+def test_unreadable_answers_exit_1(capsys: pytest.CaptureFixture[str], tmp_path: Path, content: str | None,
+                                   message: str) -> None:
+    answers = tmp_path / "answers.yaml"
+    if content is not None:
+        answers.write_text(content, encoding="utf-8")
+    assert main([str(DOCUMENTS / "template.lgd"), "--answers", str(answers)]) == 1
+    assert message in capsys.readouterr().err
 
 
 def test_print_and_list_styles(capsys: pytest.CaptureFixture[str]) -> None:

@@ -52,8 +52,9 @@ class Numbering:
     #: A built-in scheme. ``none`` shows no numbers, and references render
     #: the target's heading text instead (§13.3).
     scheme: Literal["decimal", "legal-outline", "mixed", "none"] = "decimal"
-    #: Overrides the scheme's formats, level by level from level 1 (at most
-    #: five, one per heading level, §4.1). Levels not listed keep the
+    #: Overrides the scheme's formats by part of a section number: the first
+    #: format for "2", the second for the ".1" of "2.1" (at most five, as
+    #: headings have five levels, §4.1). Levels not listed keep the
     #: scheme's format.
     levels: tuple[LevelFormat, ...] = ()
 
