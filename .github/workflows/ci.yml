@@ -73,6 +73,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      # The validator from main first, so the renderer's own range for it is
+      # satisfied before a release of that version is on PyPI.
+      - run: pip install "legaldown-validator @ git+https://github.com/ForLegalAI/legaldown-validator@main"
       - run: pip install -e ".[dev]"
-      - run: pip install --force-reinstall --no-deps "legaldown-validator @ git+https://github.com/ForLegalAI/legaldown-validator@main"
       - run: pytest -q
