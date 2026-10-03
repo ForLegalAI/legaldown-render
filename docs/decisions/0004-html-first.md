@@ -38,3 +38,5 @@ The leading option is WeasyPrint. It will be decided with a spike when v0.4 star
 - The first release has a small dependency footprint and fast tests.
 - The HTML writer's markup should be designed with print CSS in mind from the start, so the PDF
   path can reuse it.
+- 2026-10-03: v0.3 became the release built on legaldown-validator 0.4.0, so `docx` moves to
+  v0.4 and `pdf` to v0.5 (see the [roadmap](../roadmap.md)).

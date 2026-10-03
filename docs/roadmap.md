@@ -34,7 +34,7 @@ here.
 - `text` and `html` writers; the `legaldown-render` CLI
 - Golden tests, and a conformance run over the specification's examples and fixtures
 
-### v0.2 — Templates with answers (this release)
+### v0.2 — Templates with answers
 
 - Rendering with an answers set, through the core package's assembly (U4b)
 - `--answers answers.yaml` on the CLI
@@ -43,13 +43,20 @@ here.
   diagnostics with line numbers
 - Built on `legaldown-validator` 0.3.0; the first release on PyPI
 
-### v0.3 — DOCX
+### v0.3 — Validator 0.4.0 (this release)
+
+- Built on `legaldown-validator` 0.4.0 and only its public API (`legaldown`, `legaldown.syntax`,
+  `legaldown.grammar`); `validator_bridge.py` is removed (U3)
+- A deprecated validator API fails the tests, so a release never calls what the next minor
+  version removes
+
+### v0.4 — DOCX
 
 - `docx` writer behind the `[docx]` extra
 - To decide first: static numbers, or Word-native numbering with `REF` fields
   ([ADR 0004](decisions/0004-html-first.md))
 
-### v0.4 — PDF
+### v0.5 — PDF
 
 - Choose the engine ([ADR 0004](decisions/0004-html-first.md)). The leading option is WeasyPrint
   on the HTML writer; its print stylesheet already exists
