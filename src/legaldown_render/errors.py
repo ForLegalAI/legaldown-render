@@ -27,6 +27,7 @@ class RenderRefused(RenderError):
 
 
 class InternalError(RenderError):
-    """The renderer reached a state that is a bug, such as its parser and
-    legaldown-validator disagreeing about the document. It never produces
-    plausible-looking wrong output instead."""
+    """The renderer reached a state that is a bug, such as a marker the
+    validator placed where the builder cannot find it, a block kind the
+    builder does not know, or an unresolved node reaching a writer. It never
+    produces plausible-looking wrong output instead."""

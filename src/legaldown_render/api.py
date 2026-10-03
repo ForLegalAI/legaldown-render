@@ -49,9 +49,11 @@ class RenderOptions:
     #: document is refused.
     final: bool = False
     #: An answers set (§15.7.1): question id to answer, as YAML or JSON
-    #: would load it. With answers, a template is assembled first and the
-    #: assembled document is rendered (§15.8); without, a template renders
-    #: as its template view.
+    #: would load it. It is used as given, not coerced (``Template.coerce``):
+    #: the answers must already have the §15.7.1 shapes, e.g. a money amount
+    #: is a string in §10.3 format such as ``"5000.00"``, not a number.
+    #: With answers, a template is assembled first and the assembled document
+    #: is rendered (§15.8); without, a template renders as its template view.
     answers: Mapping[str, Any] | None = None
     #: HTML only: a complete page (True) or just the ``<article>`` (False).
     standalone: bool = True

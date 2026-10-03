@@ -65,7 +65,7 @@ semantic settings, and only stage 5 knows about file formats.
   (§3.6)
 - the **Core diagnostics**, each with a stable rule id
 
-A document that cannot be read at all, such as one whose frontmatter is not a YAML mapping,
+A document that cannot be read at all, such as one whose frontmatter is not valid YAML,
 raises `DocumentError`. Every other problem renders.
 
 ### 3. Build the render tree (`build.py`)
@@ -84,9 +84,10 @@ never decides a structural or LegalDown question itself:
 | Which list item a marker belongs to | `PlacedMarker.item`: the item's number among the list's items, in pre-order |
 | A lifted definition, `{{ref:}}` or `{{term:}}` block's source | The validator's `render_block()` |
 
-These are all the validator's public API: the model and the result from `legaldown`, the
-reading of source text from `legaldown.syntax`, and the language's constants and rules from
-`legaldown.grammar`.
+These are all the validator's public API: the model and the result from `legaldown`, and, for
+assembly, `parse_template` (`Template.form().assemble()`), `AssemblyError`, and the answers
+reader `load_answers`, also from `legaldown`; the reading of source text from `legaldown.syntax`;
+and the language's constants and rules from `legaldown.grammar`.
 
 Within one block's text, **markdown-it-py parses inline Markdown only**: emphasis, links, code
 spans, inline HTML. Directives are protected first by **sentinels**. Every directive, and every
@@ -115,8 +116,9 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 
 `Resolver.run()` works in three steps:
 
-1. **Survey.** It collects which definitions exist, whether template constructs are used, and
-   which placeholder ids are used with conflicting types (§10.7).
+1. **Survey.** It finds which placeholder ids are used with conflicting types (§10.7). Which
+   definitions exist (`result.index.definition_lookup`) and whether the document is a template
+   (`result.index.is_template`) are the validator's, so there is nothing to collect for them.
 2. **Structure.** Section numbers are the validator's own (`result.index.sections`), so a
    rendered number always matches the validator's: **alternatives** share a number (§15.8), and
    a skipped heading level counts as 1. The style only formats them, the n-th part of a number
@@ -235,7 +237,8 @@ line public (`Document.line_of`, U2).
 - Every text node and attribute is escaped.
 - Links and images whose URL has a scheme other than `http`, `https`, `mailto`, or `tel` render
   as text. markdown-it-py also refuses `javascript:`-style URLs when parsing.
-- At Rendering level, the only files read are the document and the style template. Attachment
+- At Rendering level, the only files read are the document, the style template, and the answers
+  file the CLI reads with `--answers` (the Python API takes answers as a mapping). Attachment
   files and includes are never opened.
 - Style values that are placed into CSS are stripped of `;{}<>`. `html.extra_css` is trusted
   configuration, so a hosted service must not accept styles from untrusted users.

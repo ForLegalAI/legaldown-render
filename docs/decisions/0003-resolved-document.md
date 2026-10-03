@@ -31,3 +31,7 @@ writer is a type error, not a runtime surprise.
   numbers by default. If DOCX needs Word-native numbering ([0004](0004-html-first.md)), the
   resolved document keeps the structure (levels, list nesting, target anchors) so a writer can
   choose to emit fields, but the resolved numbers remain the reference.
+- 2026-10-03: the resolved/unresolved check is made at runtime, not by the types: `Inline` holds
+  both kinds, and `assert_resolved` raises `InternalError` if an unresolved node reaches a writer.
+  Anchors are made by the resolver itself (`Resolver._anchor`, where the first unit to take a
+  name keeps it); there is no separate `anchors` resolver.

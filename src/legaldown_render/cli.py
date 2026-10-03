@@ -93,7 +93,8 @@ def main(argv: list[str] | None = None) -> int:
 
     answers = None
     if args.answers:
-        # Read as legaldown-validator reads an answers set (§15.7.1).
+        # Read by load_answers (§15.7.1). Unlike ``legaldown assemble``, the answers are not
+        # coerced (Template.coerce): they must already have the §15.7.1 shapes.
         try:
             answers = load_answers(args.answers)
         except OSError as error:
