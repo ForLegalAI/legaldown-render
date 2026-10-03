@@ -1,7 +1,7 @@
 # Conformance
 
 `legaldown-render` 0.2.0 targets **Level 2 — Rendering** of the LegalDown specification **0.2**
-(§17.3). Core parsing and validation come from `legaldown-validator` 0.3.0, which claims Level 1
+(§17.3). Core parsing and validation come from `legaldown-validator` 0.4, which claims Level 1
 — Core. Its own [CONFORMANCE.md](https://github.com/ForLegalAI/legaldown-validator/blob/main/CONFORMANCE.md)
 lists the Core rules it covers.
 

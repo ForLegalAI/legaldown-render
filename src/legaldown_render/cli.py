@@ -12,11 +12,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from legaldown import AnswersError, load_answers
+
 from . import __version__
 from .api import RenderOptions, render
 from .errors import DocumentError, InternalError, RenderRefused
 from .style import StyleError, builtin_styles, dump_style, load_style, parse_override
-from .validator_bridge import read_answers
 from .writers import FORMATS, format_for_path
 
 
@@ -92,10 +93,14 @@ def main(argv: list[str] | None = None) -> int:
 
     answers = None
     if args.answers:
-        # Read as legaldown-validator's `legaldown assemble` reads it (§15.7.1).
-        answers, failure = read_answers(Path(args.answers))
-        if failure:
-            print(f"legaldown-render: {failure}", file=sys.stderr)
+        # Read as legaldown-validator reads an answers set (§15.7.1).
+        try:
+            answers = load_answers(args.answers)
+        except OSError as error:
+            print(f"legaldown-render: cannot read {Path(args.answers)}: {error}", file=sys.stderr)
+            return 1
+        except AnswersError as error:
+            print(f"legaldown-render: {error}", file=sys.stderr)
             return 1
 
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,

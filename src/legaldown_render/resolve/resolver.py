@@ -24,11 +24,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 
-from legaldown import Diagnostic, Directive, Document, ValidationResult, slugify_identifier
-from legaldown.validator import (
+from legaldown import Diagnostic, Document, ValidationResult
+from legaldown.grammar import (
     ALWAYS,
+    DECISION_QUESTION_TYPES,
     IDENTIFIER_RE,
     KNOWN_CURRENCIES,
+    VALID_PLACEHOLDER_TYPES,
     Presence,
     condition_problem,
     exclusive,
@@ -36,7 +38,9 @@ from legaldown.validator import (
     is_valid_iso_date,
     is_valid_money_amount,
     parse_condition,
+    slugify_identifier,
 )
+from legaldown.syntax import Directive
 
 from ..build import plain_inlines
 from ..style import Style, effective_labels
@@ -85,9 +89,6 @@ from .values import DURATION_UNITS, Formatter
 DEFINITION_ANCHOR_PREFIX = "def:"
 #: The attachments heading's anchor, with a colon for the same reason.
 ATTACHMENTS_ANCHOR = "ld:attachments"
-
-_VALUE_TYPES = ("text", "date", "money", "duration")
-_DECISION_TYPES = ("boolean", "choice")
 
 #: Markers for a directive that breaks the §11.2 grammar: it carries no
 #: arguments, so its type's marker is shown without a value.
@@ -268,7 +269,7 @@ class Resolver:
     def _number_sections(self) -> list[Section]:
         """Number the sections, and record each one's presence (§15.3).
 
-        The numbers are the validator's own (``ValidationResult.sections``),
+        The numbers are the validator's own (``result.index.sections``),
         so a rendered number and a reference to it always agree with the
         validator: alternatives share a number (§15.8), and a skipped
         heading level counts as 1. The style only formats them, the n-th
@@ -279,7 +280,7 @@ class Resolver:
         levels = heading_levels(self.style.numbering)
         presences: dict[int, Presence] = {}  # level -> presence of the open section
         out: list[Section] = []
-        for section, indexed in zip(self.tree.sections, self.result.sections, strict=True):
+        for section, indexed in zip(self.tree.sections, self.result.index.sections, strict=True):
             # The heading's own level, clamped to 1-5 (§4.1), decides which
             # sections enclose it, and so its presence (§15.3).
             level = min(max(section.level, 1), 5)
@@ -576,7 +577,7 @@ class Resolver:
                 "numbering so that they differ.")
 
     def _term(self, directive: Directive, definition_id: str) -> Inline:
-        term = self.result.definition_lookup.get(definition_id)
+        term = self.result.index.definition_lookup.get(definition_id)
         if term is None:
             return FailureMarker(f"[UNDEFINED: {definition_id}]")
         text = directive.params.get("label") or self._plain_value(term)
@@ -598,10 +599,10 @@ class Resolver:
         return Value("money", self.formatter.money(amount, currency))
 
     def _party(self, directive: Directive, name: str) -> Inline:
-        return self._named("party", name, self.result.party_lookup, directive)
+        return self._named("party", name, self.result.index.party_lookup, directive)
 
     def _side(self, directive: Directive, name: str) -> Inline:
-        return self._named("side", name, self.result.side_lookup, directive)
+        return self._named("side", name, self.result.index.side_lookup, directive)
 
     def _named(self, kind: str, name: str, lookup: dict[str, str], directive: Directive) -> Inline:
         """``{{party:}}`` and ``{{side:}}`` (§13.5): failure markers first — a
@@ -640,9 +641,10 @@ class Resolver:
             return invalid
         placeholder_type = self._placeholder_type(directive)
         declared = self.questions.get(placeholder_id)
-        if isinstance(declared, dict) and declared.get("type") in _DECISION_TYPES:
+        declared_type = declared.get("type") if isinstance(declared, dict) else None
+        if isinstance(declared_type, str) and declared_type in DECISION_QUESTION_TYPES:
             return invalid  # a decision question's id is not a blank (§15.2)
-        if placeholder_type not in _VALUE_TYPES or placeholder_id in self.inconsistent_placeholders:
+        if placeholder_type not in VALID_PLACEHOLDER_TYPES or placeholder_id in self.inconsistent_placeholders:
             return invalid
         currency = directive.params.get("currency")
         if placeholder_type == "money" and currency is not None and currency not in KNOWN_CURRENCIES:
@@ -656,7 +658,7 @@ class Resolver:
         return Blank(placeholder_id, self.style.placeholders.blank, prompt)
 
     def _attach(self, directive: Directive, attachment_id: str) -> Inline:
-        title = self.result.attachment_lookup.get(attachment_id)
+        title = self.result.index.attachment_lookup.get(attachment_id)
         if title is None:
             return FailureMarker(f"[UNKNOWN ATTACHMENT: {attachment_id}]")
         anchor = self.attachment_anchors.get(attachment_id)
@@ -745,7 +747,7 @@ class Resolver:
                     name=self._frontmatter(party.legal_name or party.label or party.name),
                     details=tuple(details),
                 ))
-            label = self.result.side_lookup.get(side.name) or side.label or side.name
+            label = self.result.index.side_lookup.get(side.name) or side.label or side.name
             sides.append(SideInfo(self._frontmatter(label), tuple(parties)))
         return tuple(sides)
 
@@ -773,7 +775,7 @@ class Resolver:
             return ()
         blocks: list[SignatureParty] = []
         for side in self.metadata.sides:
-            label = self._frontmatter(self.result.side_lookup.get(side.name) or side.label or side.name)
+            label = self._frontmatter(self.result.index.side_lookup.get(side.name) or side.label or side.name)
             for party in side.parties:
                 # Where signature blocks are generated, legal_name MUST appear (§3.6).
                 blocks.append(SignatureParty(

@@ -285,9 +285,9 @@ def test_contents_follow_the_numbering_depth_not_the_heading_level() -> None:
     "# A\n\n###### B\n\n# C\n",
 ])
 def test_section_numbers_are_the_validators(body: str) -> None:
-    from legaldown import parse_document, validate_document
+    from legaldown import parse, validate
     result = render(FRONT + body, format="text")
-    expected = [entry.number for entry in validate_document(parse_document(FRONT + body)).sections]
+    expected = [entry.number for entry in validate(parse(FRONT + body)).index.sections]
     assert [section.designation for section in result.tree.sections] == expected
 
 
@@ -543,11 +543,13 @@ def test_item_opening_with_a_nested_list_keeps_its_label_first() -> None:
 def test_an_unresolved_node_is_an_internal_error() -> None:
     from dataclasses import replace
 
+    from legaldown.syntax import iter_directives
+
     from legaldown_render import InternalError
     from legaldown_render.tree import DirectiveSource, Paragraph, assert_resolved
 
     result = render(FRONT + "# A\n\n{{party: acme}}\n", format="text")
-    directive = next(iter(__import__("legaldown").iter_directives("{{party: acme}}")))
+    directive = next(iter(iter_directives("{{party: acme}}")))
     section = replace(result.tree.sections[0], blocks=(Paragraph((DirectiveSource(directive),)),))
     with pytest.raises(InternalError):
         assert_resolved(replace(result.tree, sections=(section,)))
@@ -664,12 +666,12 @@ def test_a_shared_number_excludes_every_unit_holding_it() -> None:
 
 
 def test_section_numbers_agree_with_the_validator() -> None:
-    from legaldown import parse_document, validate_document
+    from legaldown import parse, validate
 
     source = FRONT.replace("title: T", THREE_WAY) + (
         "# A {#x when=q:a}\n\n# B\n\n# C {#x when=q:b}\n\n# D {#d when=q:a}\n\n# E {#d when=q:b}\n")
     result = render(source, format="text")
-    expected = [entry.number for entry in validate_document(parse_document(source)).sections]
+    expected = [entry.number for entry in validate(parse(source)).index.sections]
     assert [section.designation for section in result.tree.sections] == expected == ["1", "2", "3", "4", "4"]
 
 
@@ -704,11 +706,11 @@ def test_hidden_lead_character_in_the_source_is_plain_text() -> None:
 
 
 def test_level_six_headings_are_numbered_as_the_validator_numbers_them() -> None:
-    from legaldown import parse_document, validate_document
+    from legaldown import parse, validate
 
     source = FRONT + "# A\n\n## B\n\n### C\n\n#### D\n\n##### E\n\n###### F\n"
     result = render(source, format="text")
-    expected = [entry.number for entry in validate_document(parse_document(source)).sections]
+    expected = [entry.number for entry in validate(parse(source)).index.sections]
     assert [section.designation for section in result.tree.sections] == expected
 
 
@@ -933,6 +935,22 @@ def test_deep_lists_and_quotes_render_as_the_validator_caps_them(output_format: 
         assert "deepest" in render(FRONT + "# A\n\n" + marker * 2000 + "deepest\n", format=output_format).output
 
 
+@pytest.mark.parametrize("depth", [16, 17])
+def test_a_quote_past_the_validators_depth_reads_as_its_text(depth: int) -> None:
+    # Past MAX_QUOTE_DEPTH the validator reads a quote as one paragraph of its
+    # text (legaldown.syntax.quote_blocks); a drafting note's text is what
+    # follows its marker line. Either side of the limit, a quote that holds
+    # only a comment renders no paragraph.
+    from legaldown.grammar import MAX_QUOTE_DEPTH
+
+    assert depth in (MAX_QUOTE_DEPTH, MAX_QUOTE_DEPTH + 1)
+    nested = "> " * (depth - 1)
+    note = text(f"# A\n\n{nested}> [!DRAFTING]\n{nested}> Ask *the* client.\n")
+    assert "Ask the client." in note and "[!DRAFTING]" not in note
+    for body in (f"{nested}> <!-- c -->\n", f"{nested}> [!DRAFTING]\n{nested}> <!-- c -->\n"):
+        assert '<p class="ld-p"></p>' not in html("# A\n\n" + body)
+
+
 def test_lists_and_inline_formatting_count_together() -> None:
     from legaldown_render.build import MAX_NESTING
     lists = "".join("  " * depth + f"- l{depth}\n" for depth in range(60))
@@ -983,9 +1001,9 @@ def test_a_level_six_heading_nests_where_its_number_puts_it() -> None:
 
 
 def _validator_rules(source: str) -> set[str]:
-    from legaldown import parse_document, validate_document
+    from legaldown import parse, validate
 
-    return {d.rule for d in validate_document(parse_document(source)).diagnostics}
+    return {d.rule for d in validate(parse(source)).diagnostics}
 
 
 def test_a_signature_block_heading_is_an_ordinary_section() -> None:

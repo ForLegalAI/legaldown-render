@@ -3,8 +3,8 @@
 
 There is one parser: ``legaldown-validator``'s. Its ``Document`` gives the
 sections, their blocks, and each block's text, and its ``ValidationResult``
-says where markers are placed and whether the document is a template
-(``placed_markers``, ``is_template``). The builder never decides a
+index says where markers are placed and whether the document is a template
+(``result.index.placed_markers``, ``result.index.is_template``). The builder never decides a
 structural or LegalDown question itself.
 
 Within one block's text it still needs inline Markdown — emphasis, links,
@@ -18,7 +18,8 @@ percent-encoded — can pass for a sentinel.
 
 Lists and quotes are built as the validator's model holds them: list items
 hold blocks, nested lists included, and a quote's content is the blocks the
-validator reads in it (ForLegalAI/legaldown-validator#71, #72).
+validator reads in it (``legaldown.syntax.quote_blocks``,
+ForLegalAI/legaldown-validator#71, #72).
 """
 from __future__ import annotations
 
@@ -31,15 +32,16 @@ from itertools import count
 from urllib.parse import unquote
 
 from legaldown import Block as ModelBlock
-from legaldown import (
+from legaldown import Document, PlacedMarker, ValidationResult
+from legaldown.syntax import (
     Directive,
-    Document,
-    PlacedMarker,
-    ValidationResult,
+    code_content,
+    drafting_note_blocks,
     find_definition_anchors,
     is_drafting_note,
     lex,
     list_items,
+    quote_blocks,
     render_block,
 )
 from markdown_it import MarkdownIt
@@ -70,7 +72,6 @@ from .tree import (
     Table,
     Text,
 )
-from .validator_bridge import FENCE_OPEN_RE, MAX_QUOTE_DEPTH, closes_fence, dedent, indent_width, quote_content
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
 # Leads the sentinel of source that renders nothing (a {{def:}}). It is
@@ -89,9 +90,6 @@ _BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 #: before resolving or writing it. (The validator caps lists at 64 levels
 #: and quotes at 16 itself.)
 MAX_NESTING = 100
-# A drafting note's first line (§15.6). Which quotes are drafting notes is
-# the validator's decision (is_drafting_note); this text is taken off.
-DRAFTING_MARKER = "[!DRAFTING]"
 
 
 def normalize_source(source: str) -> str:
@@ -177,7 +175,7 @@ class _Builder:
         # The markers the validator placed, by (section index or None for
         # the preamble, block index).
         self.placed: dict[tuple[int | None, int], list[PlacedMarker]] = {}
-        for marker in result.placed_markers:
+        for marker in result.index.placed_markers:
             self.placed.setdefault((marker.section, marker.block), []).append(marker)
         # Each text is lexed once in a render.
         self.lex = cache(lex)
@@ -373,7 +371,8 @@ class _Builder:
             case "quote":
                 return self.quote(block)
             case "code":
-                return _code_block(block.text)
+                code = code_content(block)
+                return CodeBlock(code.text, code.info)
             case "table":
                 width = len(block.headers)
                 # Every row as wide as the header: short rows padded, extra
@@ -436,28 +435,19 @@ class _Builder:
 
     def quote(self, block: ModelBlock) -> Block:
         """A block quote, its content the blocks the validator reads in it
-        (``quote_content``). Past the validator's quote depth, it reads the
-        quote's text as one, and so does the builder. A drafting note is
-        decided by the validator's own test (§15.6); its ``[!DRAFTING]``
-        marker, which starts its first paragraph or heading in the
-        validator's reading, is not shown."""
+        (``quote_blocks``). Past the validator's quote depth, it reads the
+        quote's text as one paragraph, and so does the builder. A drafting
+        note is decided by the validator's own test (§15.6), and its content
+        is the validator's reading without the ``[!DRAFTING]`` marker
+        (``drafting_note_blocks``)."""
         drafting = is_drafting_note(block)
         self._check_depth(1)
+        # The quotes and list items the quote is in, before entering it.
+        read = drafting_note_blocks if drafting else quote_blocks
+        children = read(block, depth=self.depth)
         self.depth += 1
         try:
-            if self.depth <= MAX_QUOTE_DEPTH:
-                children = list(quote_content(block.text, self.depth)[0])
-                if drafting:
-                    unmarked = _without_drafting_marker(children)
-                    # When the marker does not start the first paragraph or
-                    # heading (an indented marker line reads as code), the
-                    # note is the text after its marker line.
-                    children = unmarked if unmarked is not None else list(
-                        quote_content(block.text.partition("\n")[2], self.depth)[0])
-                blocks = self.blocks(children, None, markers=False)
-            else:
-                text = block.text.partition("\n")[2] if drafting else block.text
-                blocks = (Paragraph(self.text(text)),) if text.strip() else ()
+            blocks = self.blocks(children, None, markers=False)
         finally:
             self.depth -= 1
         return DraftingNote(blocks) if drafting else Quote(blocks)
@@ -470,7 +460,7 @@ class _Builder:
             Section(
                 level=section.level,
                 title=self.text(section.title),
-                identifier=self.result.sections[index].identifier,
+                identifier=self.result.index.sections[index].identifier,
                 condition=section.condition,
                 blocks=self.blocks(section.blocks, index),
             )
@@ -483,22 +473,8 @@ class _Builder:
             language=self.language,
             preamble=self.blocks(document.preamble, None),
             sections=sections,
-            is_template=self.result.is_template,
+            is_template=self.result.index.is_template,
         )
-
-
-def _without_drafting_marker(children: list[ModelBlock]) -> list[ModelBlock] | None:
-    """A drafting note's blocks, as the validator reads them, without the
-    ``[!DRAFTING]`` marker that starts the first of them (its first line is
-    the marker, §15.6); a block that held only the marker goes. None when
-    the marker does not start a first paragraph or heading. To be replaced by
-    the validator's own reading (ForLegalAI/legaldown-validator#88)."""
-    first = children[0] if children else None
-    if first is None or first.kind not in ("paragraph", "heading") \
-            or not first.text.upper().startswith(DRAFTING_MARKER):
-        return None
-    rest = first.text[len(DRAFTING_MARKER):].lstrip()
-    return ([replace(first, text=rest)] if rest else []) + children[1:]
 
 
 def _strip_markers(block: ModelBlock, placed: list[PlacedMarker]) -> tuple[ModelBlock, str, str]:
@@ -528,23 +504,6 @@ def _paragraph_source(block: ModelBlock) -> str:
     {{term:}} the parser lifted into fields is written back by the
     validator's own serializer."""
     return block.text if block.kind == "paragraph" else render_block(block)
-
-
-def _code_block(text: str) -> CodeBlock:
-    """A code block from the validator's model, read by the validator's
-    CommonMark rules: an indented block loses four columns from each line;
-    a fenced one loses its fences, and from each line as much indentation
-    as its opening fence had."""
-    lines = text.split("\n")
-    opening = FENCE_OPEN_RE.match(lines[0]) if lines else None
-    if opening is None:
-        return CodeBlock("\n".join(dedent(line, 4) for line in lines) + "\n")
-    body = lines[1:]
-    if body and closes_fence(body[-1], opening.group("fence")):
-        body = body[:-1]
-    indent = indent_width(lines[0])
-    body = [dedent(line, indent) for line in body]
-    return CodeBlock("\n".join(body) + ("\n" if body else ""), lines[0][opening.end():].strip())
 
 
 def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
