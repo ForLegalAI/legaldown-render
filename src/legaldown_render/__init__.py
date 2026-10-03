@@ -21,7 +21,7 @@ from .api import RenderOptions, RenderResult, render, render_file
 from .errors import DocumentError, InternalError, RenderError, RenderRefused
 from .style import Style, StyleError, builtin_styles, dump_style, load_style
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 #: The LegalDown specification version this renderer targets.
 SPEC_VERSION = "0.2"
