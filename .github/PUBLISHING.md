@@ -79,7 +79,7 @@ markdown-it-py) come from PyPI.
 - A release of `legaldown-validator` with a new minor version needs a renderer release too: the
   dependency is pinned to one minor version (`pyproject.toml`). Publish it once that validator
   release is on PyPI, since until then nothing can satisfy the range (the `validator-main` CI job
-  installs the validator from `main` first for this reason). The tests fail on any
-  `legaldown.LegaldownDeprecationWarning`, so a release never calls what the validator's next
-  minor version removes.
+  overrides the installed validator with `main`, so it tests main regardless of the range). The
+  tests fail on any `legaldown.LegaldownDeprecationWarning`, so a release never calls what the
+  validator's next minor version removes.
 - The package ships a `py.typed` marker, so type checkers use its annotations directly.
