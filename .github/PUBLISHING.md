@@ -9,8 +9,10 @@ verifies the identity of the workflow run itself.
 
 ## One-time PyPI setup
 
-This must exist before the first publish, and it must be done by a PyPI account that will own the
-project. Because the project does not exist on PyPI yet, register it as a **pending** publisher.
+The trusted publisher is already set up for `legaldown-render`, which is on PyPI. The steps below
+are for a fork or a rename: the publisher must exist before the first publish, and be registered by
+a PyPI account that will own the project. Until the project exists on PyPI, register it as a
+**pending** publisher.
 
 1. Sign in to <https://pypi.org> → **Your account** → **Publishing** →
    *Add a new pending publisher*.
@@ -44,7 +46,12 @@ version number can never be reused once published.
 
 1. Bump `__version__` in [`src/legaldown_render/__init__.py`](../src/legaldown_render/__init__.py) — it is the single
    source of truth; `pyproject.toml` reads it via `[tool.hatch.version]`.
-2. Commit, then publish a GitHub Release with the tag `vX.Y.Z`. Its notes are where this
+2. Update everything else that names the version. The two HTML goldens embed it
+   (`tests/golden/*.default.html`, in `<meta name="generator">`): regenerate them with
+   `pytest --update-golden tests/test_golden.py`, and check that `git diff tests/golden` shows
+   only that line. Also update the version named in [`CONFORMANCE.md`](../CONFORMANCE.md) and the
+   milestone in [`docs/roadmap.md`](../docs/roadmap.md).
+3. Commit, then publish a GitHub Release with the tag `vX.Y.Z`. Its notes are where this
    project records what changed in a release.
 
 The workflow builds the sdist and wheel, runs `twine check --strict`, **verifies the tag matches
@@ -53,7 +60,7 @@ built wheel by installing it and invoking the CLI, and uploads to PyPI.
 
 ## Dry run
 
-Before a first real release, exercise the whole path against TestPyPI:
+To rehearse a release, exercise the whole path against TestPyPI:
 
 ```
 Actions → Publish → Run workflow → target: testpypi

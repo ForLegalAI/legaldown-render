@@ -1,11 +1,11 @@
 """Stage 3: build the render tree from the validator's document model
-(docs/architecture.md, docs/decisions/0002).
+(docs/architecture.md, docs/decisions/0002 and 0007).
 
 There is one parser: ``legaldown-validator``'s. Its ``Document`` gives the
 sections, their blocks, and each block's text, and its ``ValidationResult``
 index says where markers are placed and whether the document is a template
-(``result.index.placed_markers``, ``result.index.is_template``). The builder never decides a
-structural or LegalDown question itself.
+(``result.index.placed_markers``, ``result.index.is_template``). The builder
+never decides a structural or LegalDown question itself.
 
 Within one block's text it still needs inline Markdown — emphasis, links,
 code spans — which markdown-it-py parses in inline mode only. Directives
@@ -87,8 +87,8 @@ _BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 #: together. Far beyond any real document, and far enough below Python's
 #: recursion limit that building, resolving, and writing the tree never
 #: reach it. The builder refuses a deeper document as it reaches the limit,
-#: before resolving or writing it. (The validator caps lists at 64 levels
-#: and quotes at 16 itself.)
+#: before resolving or writing it. (The validator itself caps lists at 64
+#: levels and quotes at 16, counting enclosing list items and quotes.)
 MAX_NESTING = 100
 
 

@@ -1,10 +1,11 @@
 """The HTML writer (§13.6).
 
-It writes one self-contained HTML5 file: semantic markup (``<section>``,
-``<ol>``, ``<dfn>``, ``<a href>``) and a stylesheet generated from the style
-template's presentation settings. Every label a reader sees — "4.2", "(b)" —
-is real text in the markup rather than a CSS counter, so the numbers are the
-ones resolution computed and survive copying and printing.
+It writes one self-contained HTML5 file, or only its ``<article>`` with
+``standalone=False`` (the CLI's ``--fragment``): semantic markup
+(``<section>``, ``<ol>``, ``<dfn>``, ``<a href>``) and a stylesheet generated
+from the style template's presentation settings. Every label a reader sees —
+"4.2", "(b)" — is real text in the markup rather than a CSS counter, so the
+numbers are the ones resolution computed and survive copying and printing.
 
 Safety (docs/architecture.md): every text node and attribute is escaped, raw
 HTML from the source never reaches this writer (§8.7), and a link whose URL

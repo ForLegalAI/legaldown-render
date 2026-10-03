@@ -70,3 +70,5 @@ module, `validator_bridge.py`. That module is the list for roadmap item U3.
   note's from `drafting_note_blocks`, which replaced the builder's own removal of the
   `[!DRAFTING]` marker (validator #88). A code block's content comes from `code_content`, and an
   answers file is read by `legaldown.load_answers`. `validator_bridge.py` was deleted.
+- 2026-10-03: a list item holds its blocks, nested lists included (`ListItem.blocks`), and the
+  builder nests them as it reads them; it no longer works from item depths.

@@ -39,4 +39,5 @@ The leading option is WeasyPrint. It will be decided with a spike when v0.4 star
 - The HTML writer's markup should be designed with print CSS in mind from the start, so the PDF
   path can reuse it.
 - 2026-10-03: v0.3 became the release built on legaldown-validator 0.4.0, so `docx` moves to
-  v0.4 and `pdf` to v0.5 (see the [roadmap](../roadmap.md)).
+  v0.4 and `pdf` to v0.5 (see the [roadmap](../roadmap.md)). The open questions' "v0.3" (DOCX
+  numbering) and "v0.4" (PDF spike) now read v0.4 and v0.5.

@@ -37,3 +37,6 @@ All formatting goes through the `locale/` module, so the dependency sits behind 
 - The base install grows by Babel's wheel. It is pure Python.
 - Output depends on the CLDR version, so Babel is pinned to a minor range and golden tests catch
   changes when it is upgraded.
+- 2026-10-03: currency codes are checked against the validator's `KNOWN_CURRENCIES`
+  (`legaldown.grammar`), not CLDR data: Babel only formats. The one interface is
+  `resolve/values.py` (`Formatter`), not a `locale/` module.

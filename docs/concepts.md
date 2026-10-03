@@ -21,7 +21,8 @@ these. Its inputs are:
 - **an answers set** (optional, templates only): the values used to assemble a template before
   rendering (§15.7)
 
-Its outputs are the **rendered file** (HTML, later DOCX and PDF) and a list of **diagnostics**.
+Its outputs are the **rendered file** (HTML or plain text, later DOCX and PDF) and a list of
+**diagnostics**.
 
 The source never changes during rendering. Given the same source, style template, and options,
 the renderer always produces the same output.
@@ -47,8 +48,8 @@ At Rendering level (§17.3) the renderer MUST:
 - render the template view when a template is rendered without answers, and assemble it first
   when it is rendered with answers (§15.8)
 
-List enumeration (§13.2), style templates (§13.7), and signature blocks (§2.2) are SHOULD. We
-plan to support all three, because a legal renderer without them is not usable in practice.
+List enumeration (§13.2), style templates (§13.7), and signature blocks (§2.2) are SHOULD. This
+renderer supports all three, because a legal renderer without them is not usable in practice.
 
 A construct beyond this level, such as `{{include:}}`, is never dropped. It renders as
 `[NOT PROCESSED: include schedules/pricing.lgd]` with a Warning (§17.5).
@@ -83,8 +84,8 @@ lets rendered output be diffed in Git just like the source.
 
 **6. It is safe with documents you did not write.** Raw HTML in the source is never emitted
 (§8.7). All text is escaped for the target format. Link URLs are checked against an allow-list of
-schemes. At Rendering level the renderer reads no files other than the document and the chosen
-style template.
+schemes. At Rendering level the renderer reads no files other than the document, the chosen
+style template, and the answers file the CLI is given with `--answers`.
 
 ## Vocabulary
 

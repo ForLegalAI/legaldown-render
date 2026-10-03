@@ -68,8 +68,8 @@ legaldown-render --print-style --style continental              # every setting,
 
 Diagnostics go to stderr, one per line with its rule id. The exit code is 0 when the document
 rendered, even if it has errors (they show as markers), 1 when rendering was refused (strict mode,
-or a template that cannot be assembled with its answers) or a file cannot be read, and 2 for an
-invalid style or setting.
+or a template that cannot be assembled with its answers) or the document or answers file cannot be
+read, 2 for an invalid style, setting, or usage, and 70 for an internal error (a bug to report).
 
 ## Python
 
