@@ -78,6 +78,7 @@ markers = [
 ]
 # A deprecated legaldown-validator API fails the tests: the next minor
 # release removes it, and the dependency range admits only one minor version.
+# Every deprecation the validator raises is of this one category.
 filterwarnings = [
-    'error:(legaldown\.|import_definitions):DeprecationWarning',
+    "error::legaldown.LegaldownDeprecationWarning",
 ]

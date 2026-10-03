@@ -49,6 +49,6 @@ cannot carry everything a renderer needs:
 - The renderer depends on markdown-it-py.
 - The outline check turns any disagreement between the two parsers into a loud bug report.
 - Some renderer features wait for upstream changes. That is deliberate.
-- Since validator 0.4.0, the directive grammar and the other readings of source text come from its
-  supported tooling modules, `legaldown.syntax` and `legaldown.grammar`. `legaldown.directives`
-  is internal there.
+- 2026-10-03: since validator 0.4.0, the directive grammar and the other readings of source
+  text come from its supported tooling modules, `legaldown.syntax` and `legaldown.grammar`.
+  `legaldown.directives` is internal there.

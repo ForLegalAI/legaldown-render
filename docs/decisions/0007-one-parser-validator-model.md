@@ -64,9 +64,9 @@ module, `validator_bridge.py`. That module is the list for roadmap item U3.
   the builder turns its listed items and their depths into nested lists, and "2.1(b)(i)"
   replaced "2.1(c)".
 - The build stage is smaller: about 100 lines of position rules and special cases are gone.
-- The bridge is gone since validator 0.4.0, which made all of it public (roadmap U3). The
-  result's decisions moved to `result.index` (`placed_markers`, `is_template`, `sections`). A
-  quote's content comes from `legaldown.syntax.quote_blocks`, and a drafting note's from
-  `drafting_note_blocks`, which replaced the builder's own removal of the `[!DRAFTING]` marker
-  (validator #88). A code block's content comes from `code_content`, and an answers file is read by
-  `legaldown.load_answers`. `validator_bridge.py` was deleted.
+- 2026-10-03: the bridge is gone since validator 0.4.0, which made all of it public (roadmap
+  U3). The result's decisions moved to `result.index` (`placed_markers`, `is_template`,
+  `sections`). A quote's content comes from `legaldown.syntax.quote_blocks`, and a drafting
+  note's from `drafting_note_blocks`, which replaced the builder's own removal of the
+  `[!DRAFTING]` marker (validator #88). A code block's content comes from `code_content`, and an
+  answers file is read by `legaldown.load_answers`. `validator_bridge.py` was deleted.

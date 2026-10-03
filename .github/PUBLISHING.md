@@ -77,5 +77,9 @@ markdown-it-py) come from PyPI.
 - The distribution is named `legaldown-render`; the import name is `legaldown_render`
   (`pip install legaldown-render` → `import legaldown_render`).
 - A release of `legaldown-validator` with a new minor version needs a renderer release too: the
-  dependency is pinned to one minor version (`pyproject.toml`).
+  dependency is pinned to one minor version (`pyproject.toml`). Publish it once that validator
+  release is on PyPI, since until then nothing can satisfy the range (the `validator-main` CI job
+  installs the validator from `main` first for this reason). The tests fail on any
+  `legaldown.LegaldownDeprecationWarning`, so a release never calls what the validator's next
+  minor version removes.
 - The package ships a `py.typed` marker, so type checkers use its annotations directly.

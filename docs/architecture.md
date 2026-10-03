@@ -190,7 +190,7 @@ src/legaldown_render/
 ├── style/
 │   ├── model.py       the style dataclasses (every field has a default)
 │   ├── loader.py      layering, extends, overrides, validation
-│   ├── labels.py      built-in labels per language (en, cs)
+│   ├── labels.py      built-in labels per language (en, cs, de, fr, pl, sk)
 │   └── builtin/       default.yaml, continental.yaml, outline.yaml
 └── writers/           html.py, text.py
 ```
@@ -209,8 +209,10 @@ All of them are pure Python. The DOCX and PDF writers will bring their dependenc
 The renderer uses only the validator's public API: `legaldown`, and the tooling modules
 `legaldown.syntax` and `legaldown.grammar` (roadmap item U3, done in validator 0.4.0). Before 1.0
 a minor release of the validator may change that API, so the dependency is pinned to one minor
-version, and the tests fail on any of its `DeprecationWarning`s (`filterwarnings` in
-`pyproject.toml`), since the next minor release removes what is deprecated.
+version, and the tests fail on any of its deprecation warnings, since the next minor release
+removes what is deprecated. The validator raises every one of them as a
+`legaldown.LegaldownDeprecationWarning`, the one category `filterwarnings` in `pyproject.toml`
+turns into an error.
 
 ## Errors and diagnostics
 
@@ -224,7 +226,8 @@ Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can ev
 `ref-not-enumerated`, a specification rule id, plus renderer-specific ids prefixed `render-`:
 `render-not-processed`, `render-locale-fallback`, and `render-ref-ambiguous`. The validator's
 diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
-have none yet, because a block's line is not public in the validator (U2).
+have none yet: they are about a directive within a block, and the validator makes only a block's
+line public (`Document.line_of`, U2).
 
 ## Security
 
