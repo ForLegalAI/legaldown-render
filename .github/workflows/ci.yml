@@ -74,5 +74,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
+      # Force-reinstalled last, with --no-deps, so main is tested even when its
+      # version is outside the renderer's range.
       - run: pip install --force-reinstall --no-deps "legaldown-validator @ git+https://github.com/ForLegalAI/legaldown-validator@main"
       - run: pytest -q

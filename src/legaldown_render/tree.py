@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 
-from legaldown import Directive
+from legaldown.syntax import Directive
 
 from .errors import InternalError
 
@@ -75,7 +75,7 @@ class Image:
 
 @dataclass(frozen=True, slots=True)
 class DirectiveSource:
-    """A directive as lexed by ``legaldown.directives``, not yet resolved."""
+    """A directive as lexed by ``legaldown.syntax``, not yet resolved."""
 
     directive: Directive
 

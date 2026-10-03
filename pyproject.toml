@@ -31,7 +31,7 @@ classifiers = [
 dependencies = [
     # The only LegalDown parser (docs/decisions/0002). A minor bump may change
     # the model, so the range is pinned to one minor version.
-    "legaldown-validator>=0.3.0,<0.4",
+    "legaldown-validator>=0.4.0,<0.5",
     # Inline Markdown (emphasis, links, code spans) within the validator's
     # blocks, parsed in inline mode only (docs/decisions/0007).
     "markdown-it-py>=3.0,<5",
@@ -75,4 +75,10 @@ addopts = "-ra --strict-markers"
 pythonpath = ["src"]
 markers = [
     "conformance: renders the LegalDown specification's examples and fixtures (needs a checkout of the specification)",
+]
+# A deprecated legaldown-validator API fails the tests: the next minor
+# release removes it, and the dependency range admits only one minor version.
+# Every deprecation the validator raises is of this one category.
+filterwarnings = [
+    "error::legaldown.LegaldownDeprecationWarning",
 ]

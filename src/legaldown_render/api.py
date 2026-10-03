@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, assemble, parse_document, validate_document
+from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, parse, parse_template, validate
 
 from .build import build_tree, normalize_source
 from .errors import DocumentError, RenderRefused
@@ -104,7 +104,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.answers is not None:
         source, assembled = _assemble(source, options.answers)
     document = _parse(source)
-    result = validate_document(document, final=options.final)
+    result = validate(document, final=options.final)
     diagnostics = assembled + list(result.diagnostics)
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
@@ -131,13 +131,14 @@ def _assemble(source: str, answers: Mapping[str, Any]) -> tuple[str, list[Diagno
     no output, or the answers do (``answer-invalid``, ``answer-missing``),
     or the template needs files a renderer below Full does not read
     (includes, LegalDown attachments, translations; §17.6)."""
-    findings = validate_document(_parse(source)).diagnostics
+    findings = validate(_parse(source)).diagnostics
     errors = sum(1 for d in findings if d.level == "error")
     if errors:
         raise RenderRefused(findings, f"Assembly refused: the template has {errors} error(s), "
                                       "and only a template without errors can be assembled (§15.7.2).")
     try:
-        result = assemble(source, answers)
+        # No resolve=: a template that needs other files is refused (§17.6).
+        result = parse_template(source).form(answers).assemble()
     except AssemblyError as error:
         raise DocumentError(f"The template cannot be assembled: {error}") from error
     if not result.ok:
@@ -150,7 +151,7 @@ def _assemble(source: str, answers: Mapping[str, Any]) -> tuple[str, list[Diagno
 
 def _parse(source: str) -> Document:
     try:
-        return parse_document(source)
+        return parse(source)
     except (ValueError, yaml.YAMLError) as error:
         raise DocumentError(f"The document cannot be read: {error}") from error
 
