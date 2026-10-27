@@ -69,7 +69,12 @@ legaldown-render --print-style --style continental              # every setting,
 Diagnostics go to stderr, one per line with its rule id. The exit code is 0 when the document
 rendered, even if it has errors (they show as markers), 1 when rendering was refused (strict mode,
 or a template that cannot be assembled with its answers) or the document or answers file cannot be
-read, 2 for an invalid style, setting, or usage, and 70 for an internal error (a bug to report).
+read (a document that is not UTF-8 included) or the output file cannot be written, 2 for an invalid
+style, setting, or usage, and 70 for an internal error (a bug to report).
+
+Documents are read as UTF-8, and standard output is written as UTF-8 whatever the console's encoding.
+`-o` takes its format from the file extension (`.html`, `.htm`, `.txt`, `.text`); a name with no
+extension is HTML, and any other extension (`.docx`, `.pdf`, `.md`) needs an explicit `--format`.
 
 ## Python
 
@@ -83,9 +88,11 @@ open("contract.html", "w").write(result.output)
 ```
 
 `render()` also accepts a `RenderOptions`. Pass `answers={...}` to render a template filled in.
-Problems in the document never raise. Only an invalid style (`StyleError`), an unreadable document
-(`DocumentError`), strict mode, or a template that cannot be assembled with its answers
-(`RenderRefused`) do.
+Problems in the document never raise. Only an invalid style (`StyleError`), an unknown output
+format (`OptionsError`), an unreadable document (`DocumentError`), strict mode, or a template that
+cannot be assembled with its answers (`RenderRefused`) do. All of them are `RenderError`s, and
+`StyleError` and `OptionsError` are also `ValueError`s. They can be pickled, so they cross process
+boundaries (`multiprocessing`, `concurrent.futures`) intact.
 
 ## Styles and preferences
 

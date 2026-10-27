@@ -18,8 +18,8 @@ https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md
 from __future__ import annotations
 
 from .api import RenderOptions, RenderResult, render, render_file
-from .errors import DocumentError, InternalError, RenderError, RenderRefused
-from .style import Style, StyleError, builtin_styles, dump_style, load_style
+from .errors import DocumentError, InternalError, OptionsError, RenderError, RenderRefused, StyleError
+from .style import Style, builtin_styles, dump_style, load_style
 
 __version__ = "0.3.0"
 
@@ -43,6 +43,7 @@ __all__ = [
     "dump_style",
     "builtin_styles",
     "RenderError",
+    "OptionsError",
     "DocumentError",
     "RenderRefused",
     "InternalError",

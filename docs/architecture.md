@@ -182,7 +182,7 @@ src/legaldown_render/
 ├── __init__.py        public API, __version__, SPEC_VERSION, CONFORMANCE_LEVEL
 ├── api.py             render(), render_file(), RenderOptions, RenderResult
 ├── cli.py             the legaldown-render command
-├── errors.py          RenderError, DocumentError, RenderRefused, InternalError
+├── errors.py          RenderError, StyleError, OptionsError, DocumentError, RenderRefused, InternalError
 ├── tree.py            render tree nodes (source and resolved inlines, blocks, document)
 ├── build.py           stage 3
 ├── resolve/
@@ -220,8 +220,10 @@ turns into an error.
 
 - **Document problems** render as failure markers and are listed in `diagnostics`. `strict=True`
   raises `RenderRefused` instead, carrying the diagnostics.
-- **Configuration problems** (an invalid style, setting, locale, or format) raise before
-  rendering, with every problem named.
+- **Configuration problems** raise before rendering, with every problem named: an invalid style,
+  setting, or locale raises `StyleError`; an unknown output format raises `OptionsError`. Both are
+  `RenderError`s (and `ValueError`s, as they always were). Every renderer error pickles, so it
+  survives `multiprocessing`.
 - **Internal inconsistencies** raise `InternalError`, and the CLI exits with 70.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
