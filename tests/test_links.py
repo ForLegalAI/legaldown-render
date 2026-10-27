@@ -100,7 +100,8 @@ def test_the_validators_own_report_is_not_repeated(monkeypatch: pytest.MonkeyPat
 
     def validate(document, **kwargs):  # type: ignore[no-untyped-def]
         result = real_validate(document, **kwargs)
-        found = Diagnostic(rule="path-not-relative", level="error", line=5,
+        # Line 6 is the paragraph's: a report at another line is another finding.
+        found = Diagnostic(rule="path-not-relative", level="error", line=6,
                            message="Image path 'https://x/p.png' is not relative (§2.3).")
         result.diagnostics.append(found)
         return result
@@ -109,7 +110,7 @@ def test_the_validators_own_report_is_not_repeated(monkeypatch: pytest.MonkeyPat
     result = render(FRONT + "# A\n\n![a](https://x/p.png) ![b](/other.png)\n")
     errors = [d for d in result.diagnostics if d.rule == "path-not-relative"]
     assert len(errors) == 2  # the validator's, and ours for the path it did not name
-    assert any(d.line == 5 for d in errors)
+    assert all(d.line == 6 for d in errors)
     assert any("/other.png" in d.message for d in errors)
 
 

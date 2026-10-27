@@ -22,16 +22,23 @@ and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
 ``{{term:}}`` may show, ``render-term-limit`` for terms that refer to each other too deeply or too often,
 and ``path-not-relative`` for an image whose path is not relative (§2.3), which
 the validator does not check yet.
+
+Every one of them names the file and the line it is at (§16.9): the first line
+of the block, list item or heading being resolved, or the line of a frontmatter
+key (``diagnostics.key_line``), tracked in :attr:`Resolver.line`. A finding in
+a term's text is at the term's definition, since that is where the text is
+worked out whatever reference asked for it first.
 """
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 from urllib.parse import unquote
 
-from legaldown import Diagnostic, Document, ValidationResult
+from legaldown import Diagnostic, Document, Party, ValidationResult
 from legaldown.grammar import (
     ALWAYS,
     DECISION_QUESTION_TYPES,
@@ -50,6 +57,7 @@ from legaldown.grammar import (
 from legaldown.syntax import Directive
 
 from ..build import plain_inlines
+from ..diagnostics import covered_by, key_line, repeats
 from ..style import Style, effective_labels
 from ..style.model import LevelFormat
 from ..tree import (
@@ -83,6 +91,7 @@ from ..tree import (
     TermRef,
     Text,
     Value,
+    iter_located_body_inlines,
     iter_tree_inlines,
     map_tree_inlines,
     plain_text,
@@ -183,6 +192,12 @@ class Resolver:
         self.labels = effective_labels(style.labels, tree.language)
         self.textual = style.numbering.scheme == "none"
         self.diagnostics: list[Diagnostic] = []
+        # The line (§16.9) of what is being resolved, which a diagnostic
+        # names: see _at.
+        self.line: int | None = None
+        # A definition id -> the line of its first {{def:}} in the body (see
+        # _survey), where its term's text is worked out.
+        self.term_lines: dict[str, int | None] = {}
         self.targets: dict[str, _Target] = {}
         self.used_anchors: set[str] = set()
         # For render-ref-ambiguous: every designation a numbered unit — a
@@ -234,20 +249,16 @@ class Resolver:
         # In document order, so that the first of several definitions of a
         # term is the one that keeps its anchor.
         preamble = tuple(self._resolve_block(block) for block in preamble)
-        sections = tuple(
-            replace(
-                section,
-                title=resolve(section.title),
-                blocks=tuple(self._resolve_block(block) for block in section.blocks),
-                condition_label=self._condition(section.condition),
-            )
-            for section in sections
-        )
-        attachments = tuple(replace(a, title=resolve(a.title)) for a in attachments)
+        sections = tuple(self._resolve_section(section) for section in sections)
+        attachments = tuple(self._resolve_attachment(index, a) for index, a in enumerate(attachments))
+        with self._at(key_line(self.document, "title")):
+            title = resolve(self.tree.title)
+        with self._at(key_line(self.document, "subtitle")):
+            subtitle = resolve(self.tree.subtitle)
         resolved = replace(
             self.tree,
-            title=resolve(self.tree.title),
-            subtitle=resolve(self.tree.subtitle),
+            title=title,
+            subtitle=subtitle,
             locale=self.formatter.tag,
             preamble=preamble,
             sections=sections,
@@ -272,6 +283,19 @@ class Resolver:
         # given an anchor: definitions in titles or alt text are not, and a
         # definition may live in an attachment or an amended original.
         return map_tree_inlines(resolved, self._settle_term_target)
+
+    def _resolve_section(self, section: Section) -> Section:
+        with self._at(section.line):
+            return replace(
+                section,
+                title=self._resolve_inlines(section.title),
+                blocks=tuple(self._resolve_block(block) for block in section.blocks),
+                condition_label=self._condition(section.condition),
+            )
+
+    def _resolve_attachment(self, index: int, attachment: AttachmentPart) -> AttachmentPart:
+        with self._at(key_line(self.document, "attachments", index, "title")):
+            return replace(attachment, title=self._resolve_inlines(attachment.title))
 
     def _contents(
         self, sections: tuple[Section, ...], attachments: tuple[AttachmentPart, ...],
@@ -321,6 +345,24 @@ class Resolver:
                 if directive.name == "placeholder" and directive.positional and not directive.malformed:
                     types.setdefault(directive.positional, set()).add(self._placeholder_type(directive))
         self.inconsistent_placeholders = {pid for pid, found in types.items() if len(found) > 1}
+        for inline, line in iter_located_body_inlines(self.tree):
+            if isinstance(inline, DefinitionSource):
+                self.term_lines.setdefault(self._definition_id(inline), line)
+
+    @contextmanager
+    def _at(self, line: int | None) -> Iterator[None]:
+        """Name *line* in the diagnostics reported meanwhile; None for a
+        finding with no line (a document built without a source)."""
+        outer, self.line = self.line, line
+        try:
+            yield
+        finally:
+            self.line = outer
+
+    def _here(self, line: int | None) -> AbstractContextManager[None]:
+        """:meth:`_at` for a unit that may have no line of its own, which
+        then has the line of the unit around it."""
+        return self._at(self.line if line is None else line)
 
     # -- anchors --------------------------------------------------------------
 
@@ -365,7 +407,8 @@ class Resolver:
             self.section_presences.append(presences[level])
             parts = [int(part) for part in indexed.number.split(".")]
             if self.textual:
-                label, designation = None, self._title_text(section.title)
+                with self._at(section.line):
+                    label, designation = None, self._title_text(section.title)
             else:
                 designation = ""
                 for position, counter in enumerate(parts):
@@ -470,12 +513,14 @@ class Resolver:
                                             parent=section.designation if section else "", presence=presence,
                                             quoted=quoted)
             case Quote(blocks=blocks):
-                return Quote(tuple(self._structure(child, section=section, depth=depth, presence=presence,
-                                                   quoted=True) for child in blocks))
+                return replace(block, blocks=tuple(self._structure(child, section=section, depth=depth,
+                                                                   presence=presence, quoted=True)
+                                                   for child in blocks))
             case DraftingNote(blocks=blocks):
-                return DraftingNote(tuple(self._structure(child, section=section, depth=depth, presence=presence,
-                                                          quoted=True) for child in blocks),
-                                    label=self.labels.drafting_note)
+                return replace(block, blocks=tuple(self._structure(child, section=section, depth=depth,
+                                                                   presence=presence, quoted=True)
+                                                   for child in blocks),
+                               label=self.labels.drafting_note)
             case _:
                 return block
 
@@ -534,27 +579,32 @@ class Resolver:
     # -- blocks ---------------------------------------------------------------
 
     def _resolve_block(self, block: Block) -> Block:
+        with self._here(getattr(block, "line", None)):
+            return self._resolved_block(block)
+
+    def _resolved_block(self, block: Block) -> Block:
         resolve = self._resolve_inlines
         match block:
             case Paragraph():
                 return replace(block, inlines=resolve(block.inlines), condition_label=self._condition(block.condition))
             case List(items=items):
-                return replace(block, items=tuple(
-                    replace(item, blocks=tuple(self._resolve_block(child) for child in item.blocks),
-                            condition_label=self._condition(item.condition))
-                    for item in items
-                ))
+                return replace(block, items=tuple(self._resolve_item(item) for item in items))
             case Quote(blocks=blocks):
-                return Quote(tuple(self._resolve_block(child) for child in blocks))
+                return replace(block, blocks=tuple(self._resolve_block(child) for child in blocks))
             case DraftingNote(blocks=blocks):
                 return replace(block, blocks=tuple(self._resolve_block(child) for child in blocks))
-            case Table(header=header, rows=rows, align=align):
-                return Table(tuple(resolve(cell) for cell in header),
-                             tuple(tuple(resolve(cell) for cell in row) for row in rows), align)
+            case Table(header=header, rows=rows):
+                return replace(block, header=tuple(resolve(cell) for cell in header),
+                               rows=tuple(tuple(resolve(cell) for cell in row) for row in rows))
             case CodeBlock():
                 return block
             case _:
                 return block
+
+    def _resolve_item(self, item: ListItem) -> ListItem:
+        with self._here(item.line):
+            return replace(item, blocks=tuple(self._resolve_block(child) for child in item.blocks),
+                           condition_label=self._condition(item.condition))
 
     def _condition(self, condition: str) -> str | None:
         if not condition:
@@ -720,22 +770,26 @@ class Resolver:
         known = self._targets_known
 
         def work() -> str:
-            if not known:
-                text = self._title_text(source.children)
-            else:
-                anchors = set(self.used_anchors)
-                try:
-                    text = plain_text(self._resolve_inlines(source.children))
-                finally:
-                    self.used_anchors = anchors
-            if len(text) > _MAX_TERM_TEXT:
-                self._warn(
-                    "render-term-too-long",
-                    f"The term of '{printable(definition_id)}' is longer than {_MAX_TERM_TEXT} characters once its "
-                    f"references are resolved; '{{{{term: {printable(definition_id)}}}}}' shows the definition id.",
-                )
-                return definition_id
-            return text
+            # Worked out where the term is defined, whichever reference asks
+            # first, so what it reports is at the definition.
+            with self._here(self.term_lines.get(definition_id)):
+                if not known:
+                    text = self._title_text(source.children)
+                else:
+                    anchors = set(self.used_anchors)
+                    try:
+                        text = plain_text(self._resolve_inlines(source.children))
+                    finally:
+                        self.used_anchors = anchors
+                if len(text) > _MAX_TERM_TEXT:
+                    self._warn(
+                        "render-term-too-long",
+                        f"The term of '{printable(definition_id)}' is longer than {_MAX_TERM_TEXT} characters once "
+                        f"its references are resolved; '{{{{term: {printable(definition_id)}}}}}' shows the "
+                        f"definition id.",
+                    )
+                    return definition_id
+                return text
 
         return self._while_open(self.term_texts if known else self.term_texts_early, definition_id, work)
 
@@ -832,7 +886,17 @@ class Resolver:
             return FailureMarker(f"[INVALID {kind.upper()}: {name}]")
         if name not in lookup:
             return FailureMarker(f"[UNKNOWN {kind.upper()}: {name}]")
-        return Value(kind, directive.params.get("label") or self._plain_value(lookup[name]))
+        key = self._side_key(name) if kind == "side" else self._party_key(name)
+        return Value(kind, directive.params.get("label") or self._plain_value(lookup[name], *key))
+
+    def _side_key(self, name: str) -> tuple[Any, ...]:
+        """The frontmatter path of side *name*, or ``()``."""
+        return next((("sides", i) for i, side in enumerate(self.metadata.sides) if side.name == name), ())
+
+    def _party_key(self, name: str) -> tuple[Any, ...]:
+        """The frontmatter path of party *name*, or ``()``."""
+        return next((("sides", i, "parties", j) for i, side in enumerate(self.metadata.sides)
+                     for j, party in enumerate(side.parties) if party.name == name), ())
 
     def _duration(self, directive: Directive, value: str) -> Inline:
         unit = directive.params.get("unit")
@@ -898,7 +962,9 @@ class Resolver:
         else:
             declared = next((a for a in self.metadata.attachments if a.id == attachment_id), None)
             href = declared.file if declared and declared.file else None
-        return Value("attach", directive.params.get("label") or self._plain_value(title), href)
+        key = next((("attachments", i, "title") for i, a in enumerate(self.metadata.attachments)
+                    if a.id == attachment_id), ())
+        return Value("attach", directive.params.get("label") or self._plain_value(title, *key), href)
 
     def _choose(self, directive: Directive, question_id: str) -> Inline:
         invalid = FailureMarker(f"[INVALID CHOICE: {question_id}]" if question_id else "[INVALID CHOICE]")
@@ -931,12 +997,15 @@ class Resolver:
 
     # -- frontmatter ----------------------------------------------------------
 
-    def _plain_value(self, text: str) -> str:
+    def _plain_value(self, text: str, *key: Any) -> str:
         """A frontmatter string with its directives (placeholders, §3.10)
-        resolved, as plain text."""
+        resolved, as plain text. *key* is the path of the frontmatter value in
+        the document, when the text is shown elsewhere (a title or a name
+        in the body): what it reports is at that key, not where it is shown."""
         if "{{" not in text:
             return text
-        return plain_text(self._resolve_inlines(plain_inlines(text)))
+        with self._at(key_line(self.document, *key)) if key else nullcontext():
+            return plain_text(self._resolve_inlines(plain_inlines(text)))
 
     def _frontmatter(self, text: str) -> tuple[Inline, ...]:
         return self._resolve_inlines(plain_inlines(text))
@@ -945,9 +1014,11 @@ class Resolver:
         rows: list[tuple[str, tuple[Inline, ...]]] = []
         metadata = self.metadata
         if self.style.title_block.effective_date and metadata.effective_date:
-            rows.append((self.labels.effective_date or "", self._date_or_text(metadata.effective_date)))
+            with self._at(key_line(self.document, "effective_date")):
+                rows.append((self.labels.effective_date or "", self._date_or_text(metadata.effective_date)))
         if self.style.title_block.version and metadata.version:
-            rows.append((self.labels.version or "", self._frontmatter(metadata.version)))
+            with self._at(key_line(self.document, "version")):
+                rows.append((self.labels.version or "", self._frontmatter(metadata.version)))
         return tuple(rows)
 
     def _date_or_text(self, value: str) -> tuple[Inline, ...]:
@@ -957,30 +1028,34 @@ class Resolver:
 
     def _sides(self) -> tuple[SideInfo, ...]:
         sides: list[SideInfo] = []
-        for side in self.metadata.sides:
-            parties: list[PartyInfo] = []
-            for party in side.parties:
-                details: list[tuple[str, tuple[Inline, ...]]] = []
-                if party.identification_number:
-                    details.append((self.labels.identification_number or "", self._frontmatter(party.identification_number)))
-                if party.date_of_birth:
-                    details.append((self.labels.date_of_birth or "", self._date_or_text(party.date_of_birth)))
-                if party.address:
-                    details.append((self.labels.address or "", self._frontmatter(party.address)))
-                for custom in party.custom_fields:
-                    details.append((custom.label, self._frontmatter(custom.value)))
-                for rep in party.representatives:
-                    name, title = self._frontmatter(rep.name), self._frontmatter(rep.title)
-                    value = name + (Text(", "),) + title if name and title else name or title
-                    if value:
-                        details.append((self.labels.represented_by or "", value))
-                parties.append(PartyInfo(
-                    name=self._frontmatter(party.legal_name or party.label or party.name),
-                    details=tuple(details),
-                ))
+        for side_index, side in enumerate(self.metadata.sides):
+            parties = tuple(self._party_info(side_index, party_index, party)
+                            for party_index, party in enumerate(side.parties))
             label = self.result.index.side_lookup.get(side.name) or side.label or side.name
-            sides.append(SideInfo(self._frontmatter(label), tuple(parties)))
+            with self._at(key_line(self.document, "sides", side_index, "label")):
+                sides.append(SideInfo(self._frontmatter(label), parties))
         return tuple(sides)
+
+    def _party_info(self, side_index: int, party_index: int, party: Party) -> PartyInfo:
+        with self._at(key_line(self.document, "sides", side_index, "parties", party_index)):
+            details: list[tuple[str, tuple[Inline, ...]]] = []
+            if party.identification_number:
+                details.append((self.labels.identification_number or "", self._frontmatter(party.identification_number)))
+            if party.date_of_birth:
+                details.append((self.labels.date_of_birth or "", self._date_or_text(party.date_of_birth)))
+            if party.address:
+                details.append((self.labels.address or "", self._frontmatter(party.address)))
+            for custom in party.custom_fields:
+                details.append((custom.label, self._frontmatter(custom.value)))
+            for rep in party.representatives:
+                name, title = self._frontmatter(rep.name), self._frontmatter(rep.title)
+                value = name + (Text(", "),) + title if name and title else name or title
+                if value:
+                    details.append((self.labels.represented_by or "", value))
+            return PartyInfo(
+                name=self._frontmatter(party.legal_name or party.label or party.name),
+                details=tuple(details),
+            )
 
     def _attachments(self) -> tuple[AttachmentPart, ...]:
         """Attachment placeholders (§13.8), in declared order. At the
@@ -1005,24 +1080,34 @@ class Resolver:
         if not (self.style.signatures.enabled and self.metadata.include_signatures):
             return ()
         blocks: list[SignatureParty] = []
-        for side in self.metadata.sides:
-            label = self._frontmatter(self.result.index.side_lookup.get(side.name) or side.label or side.name)
-            for party in side.parties:
-                # Where signature blocks are generated, legal_name MUST appear (§3.6).
-                blocks.append(SignatureParty(
-                    side=label,
-                    name=self._frontmatter(party.legal_name or party.label or party.name),
-                    signatories=tuple(
-                        (self._frontmatter(rep.name), self._frontmatter(rep.title)) for rep in party.representatives
-                    ),
-                ))
+        for side_index, side in enumerate(self.metadata.sides):
+            with self._at(key_line(self.document, "sides", side_index, "label")):
+                label = self._frontmatter(self.result.index.side_lookup.get(side.name) or side.label or side.name)
+            for party_index, party in enumerate(side.parties):
+                with self._at(key_line(self.document, "sides", side_index, "parties", party_index)):
+                    # Where signature blocks are generated, legal_name MUST appear (§3.6).
+                    blocks.append(SignatureParty(
+                        side=label,
+                        name=self._frontmatter(party.legal_name or party.label or party.name),
+                        signatories=tuple(
+                            (self._frontmatter(rep.name), self._frontmatter(rep.title))
+                            for rep in party.representatives
+                        ),
+                    ))
         return tuple(blocks)
 
     # -- diagnostics ----------------------------------------------------------
 
+    def _found(self, rule: str, level: str, message: str) -> Diagnostic:
+        """A diagnostic of the renderer's, at the line being resolved, in the
+        document's file (§16.9)."""
+        return Diagnostic(rule=rule, level=level, message=message, line=self.line, file=self.document.filename)
+
     def _warn(self, rule: str, message: str) -> None:
-        diagnostic = Diagnostic(rule=rule, level="warning", message=message)
-        if diagnostic not in self.diagnostics:
+        """Report a Warning, unless the same one (rule and message) is
+        reported already: wherever it recurs, it stands at its first line."""
+        diagnostic = self._found(rule, "warning", message)
+        if not repeats(diagnostic, self.diagnostics):
             self.diagnostics.append(diagnostic)
 
     def _link_refused(self, href: str) -> None:
@@ -1040,25 +1125,23 @@ class Resolver:
     def _not_relative(self, path: str) -> None:
         """Report an image *path* that is not relative as the Core Error
         ``path-not-relative`` (§2.3, §16.2), unless the validator has
-        reported it. The renderer has no line for an image, so a path the
-        validator named is the one it has covered. markdown-it has
-        percent-encoded the path ("C:\\x" reads "C:%5Cx"), so it is decoded
-        to name the path as written."""
+        reported it (:func:`~legaldown_render.diagnostics.covered_by`: its
+        report of the path, at this line). markdown-it has percent-encoded
+        the path ("C:\\x" reads "C:%5Cx"), so it is decoded to name the path
+        as written."""
         path = unquote(path)
+        shown = printable(path)
+        diagnostic = self._found(
+            "path-not-relative", "error",
+            f"Image path '{shown}' is not relative (§2.3): file references are relative paths with no "
+            f"URI scheme. Its alt text is shown instead.",
+        )
         # Assumption: the validator quotes the path in its message as '<path>',
         # as written. Matching the quoted form keeps a path that is a prefix of
         # another ("/a" and "/ab") from being counted as already reported.
-        if any(d.rule == "path-not-relative" and f"'{path}'" in d.message for d in self.result.diagnostics):
+        if covered_by(diagnostic, path, self.result.diagnostics) or repeats(diagnostic, self.diagnostics):
             return
-        path = printable(path)
-        diagnostic = Diagnostic(
-            rule="path-not-relative",
-            level="error",
-            message=f"Image path '{path}' is not relative (§2.3): file references are relative paths with no "
-                    f"URI scheme. Its alt text is shown instead.",
-        )
-        if diagnostic not in self.diagnostics:
-            self.diagnostics.append(diagnostic)
+        self.diagnostics.append(diagnostic)
 
 
 _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
