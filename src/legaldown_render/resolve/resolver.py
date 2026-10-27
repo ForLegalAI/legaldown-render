@@ -62,7 +62,7 @@ from legaldown.grammar import (
 from legaldown.syntax import Directive
 
 from ..build import plain_inlines
-from ..diagnostics import KeyLines, covered_by, repeats
+from ..diagnostics import KeyLines, covered_by, record
 from ..style import Style, effective_labels
 from ..style.model import LevelFormat
 from ..tree import (
@@ -1172,11 +1172,9 @@ class Resolver:
         return Diagnostic(rule=rule, level=level, message=message, line=self.line, file=self.document.filename)
 
     def _warn(self, rule: str, message: str) -> None:
-        """Report a Warning, unless the same one (rule and message) is
-        reported already: wherever it recurs, it stands at its first line."""
-        diagnostic = self._found(rule, "warning", message)
-        if not repeats(diagnostic, self.diagnostics):
-            self.diagnostics.append(diagnostic)
+        """Report a Warning; the same one (rule and message) reported again is
+        one, at the lowest line it was seen at."""
+        record(self._found(rule, "warning", message), self.diagnostics)
 
     def _link_refused(self, href: str) -> None:
         """Report a link whose URL does not use a scheme links may use
@@ -1202,7 +1200,8 @@ class Resolver:
 
         A report is left out when the validator made it already
         (:func:`~legaldown_render.diagnostics.covered_by`: its report of the
-        path, at this line) or this resolver did (the same message). The
+        path, at this line); one this resolver made is kept once, at the lowest
+        line (:func:`~legaldown_render.diagnostics.record`). The
         validator quotes the path in its message as '<path>', as written;
         matching the quoted form keeps a path that is a prefix of another
         ("/a" and "/ab") from being counted as already reported."""
@@ -1217,8 +1216,8 @@ class Resolver:
             rule, what = "path-outside-root", ("is outside the document root (§2.3): a file reference may "
                                                "not leave the root.")
         diagnostic = self._found(rule, "error", f"{label} '{printable(shown)}' {what} {effect}")
-        if not (covered_by(diagnostic, shown, self.result.diagnostics) or repeats(diagnostic, self.diagnostics)):
-            self.diagnostics.append(diagnostic)
+        if not covered_by(diagnostic, shown, self.result.diagnostics):
+            record(diagnostic, self.diagnostics)
         return True
 
     def _attachment_label(self, attachment_id: str) -> str:

@@ -416,6 +416,21 @@ def test_the_same_finding_on_two_lines_is_reported_once_at_the_first() -> None:
     assert lines_of(result, "render-link-refused") == [at(source, "Three")]
 
 
+def test_a_finding_seen_again_at_a_lower_line_is_reported_at_the_lower() -> None:
+    # The body is resolved before the title, so the title's is the later sighting.
+    source = '---\ntitle: "T {{include: x.lgd}}"\n---\n\n# A\n\nBody {{include: x.lgd}}\n'
+    assert at(source, "title:") < at(source, "Body")
+    assert lines_of(render(source), "render-not-processed") == [at(source, "title:")]
+
+
+def test_the_renderers_diagnostics_are_in_the_order_of_their_lines() -> None:
+    source = ('---\ntitle: "T {{include: t.lgd}}"\nsubtitle: "S {{include: s.lgd}}"\n---\n\n# A\n\n'
+              "![a](/x.png)\n\nBody {{include: b.lgd}}\n")
+    result = render(source)
+    lines = [d.line for d in result.diagnostics if d.rule in ("render-not-processed", "path-not-relative")]
+    assert lines == sorted(lines) and len(lines) == 4
+
+
 def test_different_findings_of_one_rule_each_have_their_line() -> None:
     source = HEAD + "\n# A\n\nOne ![a](/x.png).\n\nTwo ![b](/y.png).\n"
     assert lines_of(render(source), "path-not-relative") == [at(source, "One"), at(source, "Two")]

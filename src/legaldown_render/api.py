@@ -22,7 +22,7 @@ import yaml
 from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, parse, parse_template, validate
 
 from .build import build_tree, normalize_source
-from .diagnostics import key_line, repeats
+from .diagnostics import by_line, key_line, repeats
 from .errors import DocumentError, OptionsError, RenderRefused, StyleError
 from .resolve import Formatter, parse_locale, resolve_tree
 from .style import Style, load_style
@@ -144,8 +144,9 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
 
     tree, extra = _resolve(document, result, style, base)
     # The renderer's findings that the validator's or the assembly's already
-    # name (the same rule, level and message), wherever they are, are not repeated.
-    diagnostics += [d for d in extra if not repeats(d, diagnostics)]
+    # name (the same rule, level and message), wherever they are, are not repeated;
+    # the rest follow in the order of their lines.
+    diagnostics += [d for d in by_line(extra) if not repeats(d, diagnostics)]
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 

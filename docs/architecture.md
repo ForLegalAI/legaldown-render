@@ -263,9 +263,12 @@ worked out at the term's definition (`Resolver.term_lines`, recorded by `_survey
 reference asks first. `Diagnostic.file` is `RenderOptions.filename`, which `render_file` and the CLI
 set to the file name as the validator does (`Document.filename`, without the directory).
 
-**Repeats.** `Resolver._warn` and `api.render` leave out a diagnostic whose rule, level and message
-a reported one has already, wherever it is (`diagnostics.repeats`), so a repeated finding is
-reported at its first line only. The renderer's `path-not-relative` and `path-outside-root` are left
+**Repeats.** `Resolver._warn` and `Resolver._reference` add a diagnostic through `diagnostics.record`,
+which keeps one finding (rule, level, message) once, at the lowest line it was seen at: the
+resolver works out the body before the title block, so a later sighting at a lower line moves the
+reported one. `api.render` lists the renderer's diagnostics in the order of their lines (`diagnostics.by_line`,
+none last) after the validator's, and leaves out those the validator's or the assembly's name already
+(`diagnostics.repeats`). The renderer's `path-not-relative` and `path-outside-root` are left
 out when the validator reported the same path at the same line, or at none (`diagnostics.covered_by`).
 
 ## Security

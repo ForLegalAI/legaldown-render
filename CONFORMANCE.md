@@ -73,8 +73,10 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   (also where the body shows it, as `{{attach:}}` or `{{party:}}` do). A finding in a term's text
   is at the term's definition, whichever reference asks for it first; `render-term-limit` is at the
   definition being worked out when the limit was reached. The same finding (rule, level and
-  message) is reported once, at its first line: the same refused link, or the same non-relative
-  image path, on two lines is one diagnostic, at the first of them. A document with no source to
+  message) is reported once, at the lowest line it is seen at: the same refused link, or the same
+  non-relative image path, on two lines is one diagnostic, at the earlier of them, whichever the
+  renderer reached first (it works out the body before the title block). The renderer's own
+  diagnostics are listed in the order of their lines (none last), after the validator's. A document with no source to
   name a line of (built from a dict) reports no line. With `answers`, the lines are those of the
   assembled document (§15.8), not of the template file.
 - **File references (§2.3).** The renderer reports `path-not-relative` and `path-outside-root`
