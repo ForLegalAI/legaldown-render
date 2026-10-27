@@ -19,7 +19,8 @@ style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
 and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
 ``render-link-refused`` for a link whose URL scheme is not one links may use
 (§8.7), ``render-term-too-long`` for a term whose text is longer than a
-``{{term:}}`` may show, and ``path-not-relative`` for an image whose path is not relative (§2.3), which
+``{{term:}}`` may show, ``render-term-limit`` for terms that refer to each other too deeply or too often,
+and ``path-not-relative`` for an image whose path is not relative (§2.3), which
 the validator does not check yet.
 """
 from __future__ import annotations
@@ -124,6 +125,16 @@ _MALFORMED = {
 #: times this.
 _MAX_TERM_TEXT = 1000
 
+#: The most term texts worked out in one document (each real computation, not
+#: a text taken from the cache), and the most terms open inside one another.
+#: Past either, a ``{{term:}}`` shows its label or definition id and the
+#: Warning ``render-term-limit`` is reported. A document of terms that name
+#: each other (k terms each naming all k) would otherwise take time
+#: exponential in k, and a long chain of terms would exhaust the stack. No
+#: real document comes near them.
+_MAX_TERM_RUNS = 2000
+_MAX_TERM_DEPTH = 32
+
 #: How many texts (one per different set of open terms around it) are kept for
 #: one term, so that a pathological tangle of cycles cannot fill memory.
 _TERM_TEXTS_PER_TERM = 32
@@ -195,6 +206,7 @@ class Resolver:
         # because they were open.
         self._seen: set[str] = set()
         self._cut: set[str] = set()
+        self._term_runs = 0
         # False until every target is registered and the placeholder types are
         # known (run() sets it just before the inlines are resolved).
         self._targets_known = False
@@ -665,12 +677,16 @@ class Resolver:
             # The term as rendered at its definition; the validator's own
             # text (an empty term reads as its id, a definition not in the
             # body) is the fallback.
-            text = label or self._term_text(definition_id) or self._plain_open(definition_id, term)
+            text = label or self._term_text(definition_id)
+            if text == "":
+                text = self._plain_open(definition_id, term)
+            if text is None:
+                text = definition_id  # past the limits (see _while_open)
         # Settled once everything is resolved (see _settle_term_target).
         target = DEFINITION_ANCHOR_PREFIX + definition_id
         return TermRef(text, target, self.style.definitions.term_style)
 
-    def _term_text(self, definition_id: str) -> str:
+    def _term_text(self, definition_id: str) -> str | None:
         """The plain text of the term at the first definition of *definition_id*
         in the body, as the reader sees it there: its Markdown, references,
         placeholders and other terms resolved exactly as at the definition
@@ -687,7 +703,8 @@ class Resolver:
         through others, shows its label or id and goes no further (see
         :meth:`_while_open`). A text longer than :data:`_MAX_TERM_TEXT` is the
         definition id instead, and the Warning ``render-term-too-long`` says
-        so, once per id."""
+        so, once per id. ``None`` is a term past the limits of
+        :meth:`_while_open`."""
         source = self.term_sources.get(definition_id)
         if source is None:
             return ""
@@ -713,37 +730,53 @@ class Resolver:
 
         return self._while_open(self.term_texts if known else self.term_texts_early, definition_id, work)
 
-    def _plain_open(self, definition_id: str, term: str) -> str:
+    def _plain_open(self, definition_id: str, term: str) -> str | None:
         """The validator's *term* text of a definition as plain text, with
         the definition marked open while its directives resolve."""
         key = f"{definition_id}\0{int(self._targets_known)}"
         return self._while_open(self.term_texts_plain, definition_id, lambda: self._plain_value(term), key=key)
 
     def _while_open(self, cache: dict[str, list[_TermText]], definition_id: str, work: Callable[[], str],
-                    *, key: str | None = None) -> str:
+                    *, key: str | None = None) -> str | None:
         """The text *work* gives with *definition_id* open, kept in *cache*
         (under *key*, default the id), so a chain of terms that each use the
         next one twice is worked out once per term, not once per use.
 
-        What a text reads depends on which terms are open around it only
-        where a reference was cut short at an open term (it shows that term's
-        label or id). A text with no cut at a term opened *before* this one is
-        the term's own text, as the reader sees it at its definition, and is
-        reused wherever the term is needed. A text with such a cut (a cycle
-        back through an enclosing term) records the terms it named and the
-        ones it was cut short at, and is reused only where exactly those of
-        the terms it named are open. A cut at this term itself, or at one
-        opened inside it, is its own business and does not count. Without a
-        cycle every term is worked out once; with one, once for each way round
-        it is reached.
+        What a text reads depends on which terms are open around it: a
+        reference to an open term is cut short and shows its label or id. A
+        kept text records the terms it named (``seen``) and those it was cut
+        short at that were open *before* this one (``cut``: a cycle back
+        through an enclosing term). It is reused only where exactly those of
+        the terms it named are open, so it reads as it would if worked out
+        afresh there. A cut at this term itself, or at one opened inside it, is
+        its own business and does not count. Without a cycle every term is
+        worked out once.
+
+        A cycle can still ask for a great many different texts (k terms that
+        each name all k have more ways round than any cache holds), so the work
+        is limited: past :data:`_MAX_TERM_DEPTH` terms open at once, or
+        :data:`_MAX_TERM_RUNS` texts worked out in the document, the result is
+        ``None`` (the reference shows its label or id) and the Warning
+        ``render-term-limit`` says so, once.
         """
         key = definition_id if key is None else key
         around = set(self._terms_open)
         for kept in cache.get(key, ()):
-            if not kept.cut or kept.seen & around == kept.cut:
+            if kept.seen & around == kept.cut:
                 self._seen |= kept.seen
                 self._cut |= kept.cut
                 return kept.text
+        if len(self._terms_open) >= _MAX_TERM_DEPTH or self._term_runs >= _MAX_TERM_RUNS:
+            # Terms that refer to each other this deeply or this often are
+            # not resolved further: like a cut, the reference shows its label
+            # or id, and nothing is kept.
+            self._warn(
+                "render-term-limit",
+                "Defined terms refer to each other too deeply or too often to resolve fully; "
+                "some {{term:}} references show their definition id.",
+            )
+            return None
+        self._term_runs += 1
         self._terms_open.append(definition_id)
         outer = self._seen, self._cut
         self._seen, self._cut = set(), set()

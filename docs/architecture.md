@@ -239,7 +239,7 @@ turns into an error.
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
 `ref-not-enumerated` and `path-not-relative` (an Error for an image path that is not relative, §2.3,
 reported here because validator 0.4 does not check image paths), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested or 2,000 computed term texts a `{{term:}}` shows its id), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
 diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
 have none yet: they are about a directive within a block, and the validator makes only a block's
 line public (`Document.line_of`, U2).
@@ -264,11 +264,14 @@ line public (`Document.line_of`, U2).
   (links, images, value links). A link with no text shows its URL as written (percent-encoding
   undone; the `href` stays encoded); the text writer leaves out ` <url>` when the URL, less a
   `mailto:` or `tel:` prefix, is the text.
-- A diagnostic never carries a raw control character from the document: a path or URL quoted in a
-  message (`path-not-relative`, `render-link-refused`) goes through `urls.printable`, which writes
-  every C0/C1 control, DEL, Unicode format character (bidi controls, zero-width), and U+2028/9 as
-  `\xNN` or `\uNNNN`, so a crafted URL cannot move the cursor, set a terminal title, or forge a
-  line on stderr.
+- What the CLI prints on stderr never carries a raw control character from the document: `cli._report`
+  passes the file name and every diagnostic message (the renderer's and the validator's, which quote
+  ids, paths and terms as written) through `urls.printable`, which writes every C0/C1 control, DEL,
+  Unicode format character (bidi controls, zero-width), and U+2028/9 as `\xNN` or `\uNNNN`, so a
+  crafted document cannot move the cursor, set a terminal title, or forge a line. The messages the
+  API returns are not all escaped: only a path or URL quoted by the renderer's own rules
+  (`path-not-relative`, `render-link-refused`) is, at its source; a caller that shows other
+  messages must do the same.
 - An image path must be relative with no URI scheme (§2.3), so a remote resource is never fetched
   or embedded. Resolution, not a writer, enforces it: an image whose path has a scheme (`https:`,
   `file:`, `data:`, a Windows drive such as `C:\x`) or starts with `/` or `\` (`//host`) is
@@ -299,7 +302,7 @@ line public (`Document.line_of`, U2).
 |---|---|
 | `tests/test_golden.py` | The test documents under each built-in style, compared byte for byte with `tests/golden/`. Regenerate with `pytest --update-golden` and review the diff |
 | `tests/test_render.py` | Numbering schemes, designations, fallbacks, every failure marker, template view, labels by language, HTML safety, unique anchors, determinism, strict mode, locales |
-| `tests/test_wp3_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme deny-list, empty URLs and empty link text |
+| `tests/test_wp3_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme allow-list, empty URLs and empty link text |
 | `tests/test_style.py`, `tests/test_values.py` | Style layering and validation; counters and locale formatting |
 | `tests/test_cli.py` | The command |
 | `tests/conformance/` | Every example and fixture in the specification repository renders, every internal link has a target, and each invalid fixture renders its rule's failure marker. Needs `$LEGALDOWN_SPEC_DIR` or a sibling `../LegalDown` checkout |
