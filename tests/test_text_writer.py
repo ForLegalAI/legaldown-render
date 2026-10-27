@@ -3,6 +3,7 @@ and alignment, quotes and list items (also those that open with a table, code
 or a quote), list indent, and the labels a style may blank."""
 from __future__ import annotations
 
+import legaldown
 import pytest
 
 from legaldown_render import render
@@ -72,6 +73,17 @@ def test_the_writer_needs_no_style_and_defaults_to_the_default_styles_separator(
 def test_a_pipe_in_a_cell_is_escaped() -> None:
     output = text("# A\n\n| a | b |\n|---|---|\n| x \\| y | z |\n")
     assert "| a | b |\n|---|---|\n| x \\| y | z |" in output
+
+
+@pytest.mark.parametrize("cell", ["a | b", "a \\| b", "a \\\\| b", "a\\ b", "ends\\", "x\\|y"])
+def test_a_cell_with_pipes_and_backslashes_is_read_back_as_it_was(cell: str) -> None:
+    # The text writer's table is read by the validator's reader (the tool a
+    # LegalDown reader is expected to use), so a cell's plain text, pipes and
+    # backslashes included, must come back from it unchanged.
+    markup = cell.replace("\\", "\\\\").replace("|", "\\|")  # the cell's text as GFM table markup
+    output = text(f"# A\n\n| H | K |\n|---|---|\n| {markup} | z |\n")
+    tables = [block for _, _, block in legaldown.parse(output).iter_blocks() if block.kind == "table"]
+    assert [table.rows for table in tables] == [[[cell, "z"]]]
 
 
 def test_alignment_survives_in_the_separator_row() -> None:
