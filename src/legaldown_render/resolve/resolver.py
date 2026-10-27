@@ -16,13 +16,16 @@ writes it into the tree, so that writers only lay it out:
 The validator has already reported every document-level Error for the
 failures shown here, so the resolver only adds the diagnostics that need a
 style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
-and ``render-not-processed`` for constructs beyond the Rendering level (§17.5).
+and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
+and ``path-not-relative`` for an image whose path is not relative (§2.3), which
+the validator does not check yet.
 """
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
+from urllib.parse import unquote
 
 from legaldown import Diagnostic, Document, ValidationResult
 from legaldown.grammar import (
@@ -81,6 +84,7 @@ from ..tree import (
     plain_text,
     unlinked,
 )
+from ..urls import is_relative_path
 from .numbering import RENUMBERED, extend, fill, format_counter, heading_levels
 from .values import DURATION_UNITS, Formatter
 
@@ -510,11 +514,13 @@ class Resolver:
         out: list[Inline] = []
         for inline in inlines:
             resolved = self._resolve_inline(inline)
-            if resolved is not None:
+            if isinstance(resolved, tuple):
+                out.extend(resolved)
+            elif resolved is not None:
                 out.append(resolved)
         return tuple(out)
 
-    def _resolve_inline(self, inline: Inline) -> Inline | None:
+    def _resolve_inline(self, inline: Inline) -> Inline | tuple[Inline, ...] | None:
         match inline:
             case DirectiveSource(directive=directive):
                 return self._directive(directive)
@@ -530,9 +536,16 @@ class Resolver:
             case Link(children=children, title=title):
                 return replace(inline, children=self._resolve_inlines(children),
                                title=self._resolve_inlines(_attribute_text(title)))
-            case Image(children=children, title=title):
-                return replace(inline, children=self._resolve_inlines(_attribute_text(children)),
-                               title=self._resolve_inlines(_attribute_text(title)))
+            case Image(src=src, children=children, title=title):
+                alt = self._resolve_inlines(_attribute_text(children))
+                if not is_relative_path(src):
+                    # §2.3: an image path is relative and has no URI scheme, so a
+                    # remote or absolute image is never fetched or embedded. Its
+                    # alt text stands in; the validator (0.4) does not check
+                    # image paths, so the renderer reports the Core rule.
+                    self._not_relative(src)
+                    return alt
+                return replace(inline, children=alt, title=self._resolve_inlines(_attribute_text(title)))
             case _:
                 return inline
 
@@ -835,6 +848,25 @@ class Resolver:
 
     def _warn(self, rule: str, message: str) -> None:
         diagnostic = Diagnostic(rule=rule, level="warning", message=message)
+        if diagnostic not in self.diagnostics:
+            self.diagnostics.append(diagnostic)
+
+    def _not_relative(self, path: str) -> None:
+        """Report an image *path* that is not relative as the Core Error
+        ``path-not-relative`` (§2.3, §16.2), unless the validator has
+        reported it. The renderer has no line for an image, so a path the
+        validator named is the one it has covered. markdown-it has
+        percent-encoded the path ("C:\\x" reads "C:%5Cx"), so it is decoded
+        to name the path as written."""
+        path = unquote(path)
+        if any(d.rule == "path-not-relative" and path in d.message for d in self.result.diagnostics):
+            return
+        diagnostic = Diagnostic(
+            rule="path-not-relative",
+            level="error",
+            message=f"Image path '{path}' is not relative (§2.3): an image path is a relative path with no URI "
+                    f"scheme, and a remote resource is never fetched. Its alt text is shown instead.",
+        )
         if diagnostic not in self.diagnostics:
             self.diagnostics.append(diagnostic)
 

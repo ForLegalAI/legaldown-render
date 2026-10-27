@@ -38,6 +38,8 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
+| Links (§8.7) | ✅ Every link is a hyperlink in HTML and shows `text <url>` in plain text, whatever its scheme (`ftp:`, `sip:`, `urn:`, ...), except one whose URL is empty or uses `javascript:`, `vbscript:`, `file:`, or `data:`, which shows its text alone. A link with no text shows its URL; the text writer omits `<url>` for an autolink |
+| Images and file-reference paths (§8.7, §2.3) | ✅ A relative path (`../` included, as §2.3 defines no default document root) renders `<img>` in HTML and its alt text in plain text. A path with a URI scheme (`data:` too), an absolute one (`/`, `\`, `//host`), or a Windows drive path is never fetched or embedded: the alt text is shown and the Error `path-not-relative` is reported, which `--strict` refuses |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML table is dropped with the Warning |
 | Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
 | Final check (§15.9, SHOULD) | ✅ `--final` / `final=True`: the validator's `placeholder-unfilled` and `template-construct-present` Errors; with `--strict`, the document is refused |
@@ -50,6 +52,10 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 - **Line numbers.** The validator's diagnostics name their line, and the CLI prints it. The
   renderer's own (`render-ref-ambiguous`, `ref-not-enumerated`, `render-not-processed`) do not
   yet ([validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93)).
+- **`path-not-relative` for images.** The renderer reports the Core rule `path-not-relative`
+  (§2.3, §16.2) for an image path, because the validator (0.4) does not check image paths; it
+  leaves its own report out when the validator names the same path. The Error has no line number.
+  The containment rule (`path-outside-root`) is not checked: no document root is configured.
 - **Nesting limit.** The validator reads lists 64 levels deep and quotes 16; deeper, an item's or
   quote's content is its text. The renderer follows it, and refuses (`DocumentError`) a document
   whose lists, quotes, and inline formatting (emphasis, links) together nest more than 100 levels,

@@ -180,6 +180,13 @@ class _Builder:
         self.language = document.metadata.language or "en"
         # Inline parsing only: block structure is the validator's.
         self.md = MarkdownIt("commonmark", {"html": True})
+        # markdown-it would leave ``[x](javascript:...)`` as literal text and
+        # ``![x](file:///...)`` unparsed, so neither could be told apart from
+        # prose. The builder keeps the node instead: the resolver reports an
+        # image path that is not relative (§2.3) and replaces the image with
+        # its alt text, and the writers show a refused link as its text
+        # (`urls.DENIED_SCHEMES`), which is the safety markdown-it was for.
+        self.md.validateLink = lambda url: True
         self.env: dict = {}
         self.payloads: list[_Payload] = []
         # The markers the validator placed, by (section index or None for
