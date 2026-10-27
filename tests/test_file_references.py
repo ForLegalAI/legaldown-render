@@ -86,6 +86,10 @@ RULES = (NOT_RELATIVE, OUTSIDE)
     ("..%00/x.png", ".", False, None),
     ("a\x1fb/x", ".", False, "not-relative"),
     ("a\x7fb/x", ".", False, "not-relative"),
+    ("a\x1bb/x", ".", False, "not-relative"),
+    # What a browser strips at either end is not inside the path.
+    ("a.lgd\n", ".", False, None),
+    ("\x00a.lgd\x00", ".", False, None),
     ("a\x85b/x", ".", False, "not-relative"),
 ])
 def test_the_check(path: str, base: str | None, url: bool, expected: str | None) -> None:
@@ -205,6 +209,12 @@ def test_a_path_with_a_control_character_is_not_relative(kind: str) -> None:
     path = {"include": "a\x00b.lgd", "image": "..%00/x.png"}[kind]
     source = _frontmatter("").replace("Body.", {"include": f"{{{{include: {path}}}}}", "image": f"![x]({path})"}[kind])
     assert [rule for rule, _ in findings(render(source))] == [NOT_RELATIVE]
+
+
+@pytest.mark.parametrize("scalar", [">", "|", ">-", "|+"])
+def test_a_block_scalar_file_is_not_a_control_character(scalar: str) -> None:
+    source = _frontmatter(f"attachments:\n  - id: annex\n    title: Annex\n    file: {scalar}\n      annex.pdf\n")
+    assert findings(render(source)) == []
 
 
 @pytest.mark.parametrize("path", [".. ./x.png", "... /x.png", "..../x.png"])

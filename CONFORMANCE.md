@@ -101,8 +101,9 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   (the renderer's reading; a leading `\` is not relative anyway); `..` followed by dots and
   spaces (`.. `, `...`) is `..`, and `.` followed by spaces is `.` (Windows reads them so);
   tabs and newlines inside a scheme, and spaces and control characters at either end, are ignored
-  as a browser ignores them. A path with a control character (NUL, a newline, any other of
-  Unicode category Cc) in it, after the decoding below, is `path-not-relative`. Percent-encoding is
+  as a browser ignores them. A control character left inside a path (NUL, ESC, any other of Unicode
+  category Cc), after the decoding below and what is ignored above, makes it `path-not-relative`;
+  a newline at the end of a YAML block scalar is ignored. Percent-encoding is
   decoded once, only for what is used as a URL, an image's source and the link `{{attach:}}` would
   make to an attachment's file: there `%2e%2e/` is `../`. A path in the frontmatter or an
   `{{include:}}` is a file name, read as written, where `%2e%2e` is a directory with that name.

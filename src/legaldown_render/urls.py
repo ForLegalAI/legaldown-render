@@ -102,7 +102,7 @@ def file_reference_problem(path: str, *, base: str | None = None, url: bool = Fa
       (``https://``, ``file://``, ``data:``), which includes a Windows drive
       path (``C:\\x``, ``C:/x``, a scheme as far as a parser can tell), or
       starts with ``/`` or ``\\`` (so also ``//host``), or has a control
-      character (NUL, a newline, ...);
+      character inside it (NUL, ESC, ...);
     * ``"outside-root"`` (``path-outside-root``): there is a document root
       (*base* is not None) and the path leaves it.
 
@@ -117,19 +117,18 @@ def file_reference_problem(path: str, *, base: str | None = None, url: bool = Fa
     so that a path that goes up on Windows is not missed; it matters only with a
     root, a leading one is already not relative), and so are ``.. ``, ``...``
     and ``. `` with trailing dots and spaces, which Windows reads as ``..`` and
-    ``.``. A path with a control character (NUL, a newline, ...) is not a file
-    name a renderer can name safely, and is ``not-relative``. What a
-    browser ignores before it reads the scheme (tabs and newlines, control
-    characters and spaces at either end) is ignored in finding one. *url* says the path is consumed as a URL
-    (an image's source, a link's target), where percent-encoding counts as the
+    ``.``. What a browser ignores (tabs and newlines anywhere, control
+    characters and spaces at either end: a YAML block scalar ends in a newline)
+    is ignored. A control character left inside the path (NUL, ESC, ...) is not
+    a file name a renderer can name safely, and is ``not-relative``. *url*
+    says the path is consumed as a URL (an image's source, a link's target), where percent-encoding counts as the
     character it encodes (``%2e%2e`` is ``..``, ``%2f`` a separator), once; a
     path from frontmatter or an ``{{include:}}`` is a file name and is read as
     written, in which ``%2e%2e`` is a directory with that name."""
-    decoded = unquote(path) if url else path
-    read = _as_read(decoded)
+    read = _as_read(unquote(path) if url else path)
     if not read:
         return None
-    if _SCHEME_RE.match(read) or read[0] in "/\\" or any(unicodedata.category(c) == "Cc" for c in decoded):
+    if _SCHEME_RE.match(read) or read[0] in "/\\" or any(unicodedata.category(c) == "Cc" for c in read):
         return "not-relative"
     if base is None:
         return None
