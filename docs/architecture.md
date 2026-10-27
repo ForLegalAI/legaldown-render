@@ -137,7 +137,7 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 | `{{ref:}}` | `CrossRef(designation, anchor)` (§13.3). A ref to an unnumbered item or paragraph falls back to its section's designation, with `ref-not-enumerated` | `[BROKEN REF: id]` |
 | `{{term:}}` | `TermRef(label or term, def anchor)` (§7.3, §13.4) | `[UNDEFINED: id]` |
 | `"Term" {{def:}}` | `DefinedTerm` without quotation marks, anchored at `def:<id>` (§7.2) | n/a |
-| `{{date:}}` `{{money:}}` `{{duration:}}` | `Value`, formatted for the locale by Babel (ADR 0005) | `[INVALID DATE: …]`, `[INVALID AMOUNT: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION: …]`, `[INVALID DURATION UNIT: …]` |
+| `{{date:}}` `{{money:}}` `{{duration:}}` | `Value`, formatted for the locale by Babel (ADR 0005): amounts and durations keep every written digit, and a duration without a pattern in the locale falls back to another length, the language alone, then English with `render-locale-fallback` | `[INVALID DATE: …]`, `[INVALID AMOUNT: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION: …]`, `[INVALID DURATION UNIT: …]` |
 | `{{party:}}` `{{side:}}` | `Value(label or display name)` (§3.6) | `[INVALID PARTY: …]`, `[UNKNOWN PARTY: …]`, and the side forms |
 | `{{field:}}` | `Value(raw value)` | `[INVALID FIELD: …]` |
 | `{{placeholder:}}` | `Blank`, with the question's prompt if the style asks for it | `[INVALID PLACEHOLDER: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION UNIT: …]` |
@@ -226,7 +226,7 @@ turns into an error.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
 `ref-not-enumerated`, a specification rule id, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-locale-fallback`, and `render-ref-ambiguous`. The validator's
+`render-not-processed`, `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), and `render-ref-ambiguous`. The validator's
 diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
 have none yet: they are about a directive within a block, and the validator makes only a block's
 line public (`Document.line_of`, U2).

@@ -620,7 +620,13 @@ class Resolver:
             return FailureMarker(f"[INVALID DURATION: {value}]")
         if unit not in DURATION_UNITS:
             return FailureMarker(f"[INVALID DURATION UNIT: {unit}]" if unit else "[INVALID DURATION UNIT]")
-        return Value("duration", self.formatter.duration(value, unit))
+        shown = self.formatter.format_duration(value, unit)
+        if shown.english_fallback:
+            # One Warning per locale and unit: _warn drops a repeat. A value
+            # is never shown as a raw CLDR unit id (§10.5).
+            self._warn("render-locale-fallback",
+                       f"No CLDR pattern for '{DURATION_UNITS[unit]}' in '{self.formatter.tag}'; English used.")
+        return Value("duration", shown.text)
 
     def _field(self, directive: Directive, value: str) -> Inline:
         field_type = directive.params.get("type")
