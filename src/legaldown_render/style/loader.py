@@ -312,7 +312,9 @@ def _template_problems(style: Style) -> list[str]:
     hide the condition, which §15.8 requires to be shown). An empty template
     is exempt from the required fields where the resolver falls back to the
     bare field for it (``labels.condition``): it already shows the condition.
-    Where there is no such fallback, an empty template lacks its fields."""
+    Where there is no such fallback, an empty template lacks its fields.
+    :func:`~.model.template_settings` lists only the settings that substitute
+    fields, and drops the required fields of one the style does not use."""
     problems = []
     for key, template, fields in template_settings(style):
         found = set(_FIELD_RE.findall(template))

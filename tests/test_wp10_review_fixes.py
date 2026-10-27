@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from legaldown_render import render
+from legaldown_render import StyleError, render
+from legaldown_render.style import load_style
 from legaldown_render.urls import displayed_url, is_link_target, printable
 
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -153,3 +154,51 @@ def test_a_link_with_no_text_shows_the_written_url() -> None:
     body = "# A\n\nSee [](<https://e/a b/é>).\n"
     assert 'href="https://e/a%20b/%C3%A9">https://e/a b/é</a>' in html(body)
     assert "See https://e/a b/é." in text(body)
+
+
+# -- 6: a style is validated where its settings are used ------------------------
+
+def _problems(overrides: dict[str, object]) -> list[str]:
+    with pytest.raises(StyleError) as caught:
+        load_style("default", overrides=overrides)
+    return caught.value.problems
+
+
+NO_N = [{"label": "x", "ref": "x"}]
+
+
+@pytest.mark.parametrize(("overrides", "key"), [
+    ({"enumeration.levels": NO_N}, "enumeration.levels[0].ref"),
+    ({"enumeration.levels": NO_N, "enumeration.enabled": False, "enumeration.ordered": "enumerate"},
+     "enumeration.levels[0].ref"),
+    ({"numbering.levels": NO_N}, "numbering.levels[0].ref"),
+    ({"paragraphs.numbered": True, "paragraphs.format": {"label": "x", "ref": "x"}}, "paragraphs.format.ref"),
+])
+def test_a_ref_that_is_in_use_must_have_its_counter(overrides: dict[str, object], key: str) -> None:
+    assert any(p.startswith(key) and "{n}" in p for p in _problems(overrides))
+
+
+@pytest.mark.parametrize("overrides", [
+    {"enumeration.levels": NO_N, "enumeration.enabled": False},
+    {"numbering.levels": NO_N, "numbering.scheme": "none"},
+    {"paragraphs.format": {"label": "x", "ref": "x"}},
+    {"paragraphs.format": {"label": "x", "ref": ""}},
+])
+def test_a_ref_that_is_not_in_use_may_leave_out_its_counter(overrides: dict[str, object]) -> None:
+    load_style("default", overrides=overrides)
+
+
+def test_a_typo_is_flagged_even_where_the_setting_is_not_used() -> None:
+    problems = _problems({"numbering.scheme": "none", "numbering.levels": [{"label": "{n}", "ref": "{m}"}]})
+    assert any(p.startswith("numbering.levels[0].ref") and "{m}" in p and "unknown field" in p for p in problems)
+
+
+def test_a_plain_label_may_contain_braced_words() -> None:
+    style = load_style("default", overrides={"labels.drafting_note": "Note {see below}", "labels.colon": "{x}:"})
+    assert style.labels.drafting_note == "Note {see below}"
+    assert style.labels.colon == "{x}:"
+
+
+def test_the_labels_that_substitute_still_check_their_fields() -> None:
+    assert _problems({"labels.condition": "{condtion}"})
+    assert _problems({"labels.attachment_file": "{fil}"})
