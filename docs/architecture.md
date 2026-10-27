@@ -178,8 +178,11 @@ resolved (a reference shows `references.format` applied to its target's designat
 `# About {{ref: ov}}` is "About Overview"), a broken reference shows its marker. An item's or
 paragraph's designation is its section's with the item pieces after it ("Termination (a)"). A
 heading can refer to a heading, item or paragraph anywhere, so designations are worked out in
-four steps, only when a heading, or a term a heading uses, holds a `{{ref:}}` (otherwise the first
-step's text is final):
+four steps. They run only when the scheme is `none` and a section heading, or the text of a term a
+heading uses (directly or through other terms), holds a `{{ref:}}`; for a term whose definition is
+not in the body, the validator's own text of it is searched for `{{`. Otherwise the first step's text
+is final and nothing more is done. (A value of the frontmatter that a heading shows, with
+`{{party:}}` or `{{attach:}}`, is not searched: a `{{ref:}}` in it is not designated through.)
 
 1. Every section, item and paragraph is numbered on a **provisional** designation: the heading's
    text-only reading (`Resolver._title_text`, which leaves references out). Each target records
@@ -198,14 +201,18 @@ step's text is final):
 
 A heading that reads itself again (directly, through other headings or terms, or through its own
 item) reads as its provisional text where the circle closes, with the Warning
-`render-designation-cycle`. A walk through more than 32 headings, a designation longer than 1,000
-characters once its references are resolved (a chain of headings that each cite the next twice would
-ask for 2^n), or inline levels nested past 60 while headings and terms are read through each other,
+`render-designation-cycle`. A heading read from the text of a term it uses is such a circle, and what
+it reads there is not kept (it is worked out again where the term is not open). A walk through more
+than 32 headings, a designation longer than 1,000 characters once its references are resolved (a
+chain of headings that each cite the next twice would ask for 2^n), or inline levels nested past 60
+(counted from where the outermost open term began, or from the heading where the walk started: so a
+heading with 59 or more nested emphasis levels that holds a reference can reach it after one hop)
 also give the heading's provisional text, with `render-designation-limit` (so does a term the walk
-cut by the term limits); a `{{ref:}}` never shows more than the first 1,000 characters of a
-designation. So a heading in a cycle or past a cap, or one whose terms reach into one, may read
-differently from the designation references show; the Warning says so. Every other heading reads
-exactly as its designation.
+cut by the term limits). A ring of more than 32 headings is therefore reported as a limit, not as a
+cycle. A `{{ref:}}` shows at most the first 1,000 characters of a heading (the item or paragraph
+piece after it is kept), and `render-designation-limit` says so for that heading. So a heading in a
+cycle or past a cap, or one whose terms reach into one, may read differently from the designation
+references show; the Warning says so. Every other heading reads exactly as its designation.
 
 ### 5. Write (`writers/`)
 
@@ -275,7 +282,7 @@ Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can ev
 `ref-not-enumerated`, `path-not-relative` and `path-outside-root` (Errors for a file reference that is
 not relative, or that leaves the document root, §2.3; reported here because validator 0.4 checks
 neither), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters under the `none` scheme, or a reference to a heading longer than that), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
 diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
 `file:line:`.
 

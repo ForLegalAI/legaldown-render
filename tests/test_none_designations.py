@@ -428,3 +428,80 @@ def test_file_reference_findings_are_reported_once_whatever_designates_them(tmp_
                                     ("path-outside-root", _line(source, "# A ")),
                                     ("path-outside-root", _line(source, "# A "))])
     assert [d.line for d in result.diagnostics if d.rule == "render-not-processed"] == [_line(source, "# A ")]
+
+
+def test_a_heading_read_from_a_term_it_uses_is_a_circle_and_is_reported() -> None:
+    # A is read from the text of t, which A uses, so t is cut short in it: what A reads there
+    # depends on where it was asked for, and is not kept.
+    body = ('# Intro {{term: t}} {#i}\n\n# A {{term: t}} {#a}\n\nSee {{ref: a}}.\n\n"x {{ref: a}}" {{def: t}}\n')
+    source = FRONT + body
+    result = render(source, format="text", overrides=NONE)
+    assert [d.line for d in result.diagnostics if d.rule == "render-designation-cycle"] == [_line(source, "# A ")]
+
+
+def test_a_term_with_a_term_in_it_at_the_deepest_formatting_of_a_block() -> None:
+    # The levels a block has where its first term opens are its own: only those added inside count.
+    for depth in (58, 98):
+        for scheme in ("decimal", "none"):
+            body = f'# H\n\n{_wrap(depth, "{{term: a}}")}\n\n"A {{{{term: b}}}}" {{{{def: a}}}}\n\n"B" {{{{def: b}}}}\n'
+            result = render(FRONT + body, format="text", overrides={"numbering.scheme": scheme})
+            assert " A B " in next(line for line in result.output.splitlines() if line.startswith("x ")), (depth, scheme)
+            assert "render-term-limit" not in {d.rule for d in result.diagnostics}, (depth, scheme)
+
+
+def test_a_term_chain_inside_deep_formatting_is_cut_not_a_stack_overflow() -> None:
+    n = 40
+    defs = "".join(f'"T{i} {_wrap(40, "{{term: t" + str(i + 1) + "}}")}" {{{{def: t{i}}}}}\n\n' for i in range(n))
+    body = f'# A\n\n{_wrap(98, "{{term: t0}}")}\n\n{defs}"End" {{{{def: t{n}}}}}\n'
+    for scheme in ("decimal", "none"):
+        result = render(FRONT + body, format="text", overrides={"numbering.scheme": scheme})
+        assert "render-term-limit" in {d.rule for d in result.diagnostics}
+
+
+def test_a_reference_to_an_item_under_a_long_heading_keeps_the_item_piece() -> None:
+    result = run("# " + "word " * 300 + "{#a}\n\n- one {#i}\n\nSee {{ref: i}}.\n")
+    shown = next(line for line in result.output.splitlines() if line.startswith("See "))
+    assert shown.endswith("\u2026 (a).")
+    assert len(shown) < 1010
+    message = next(d.message for d in result.diagnostics if d.rule == "render-designation-limit")
+    assert message.startswith("A reference to the heading 'word word") and "refer to each other" not in message
+
+
+def test_a_term_defined_in_the_body_is_not_searched_in_the_validators_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[int] = []
+    real = Resolver._designate
+    monkeypatch.setattr(Resolver, "_designate", lambda self, sections: (called.append(1), real(self, sections))[1])
+    run('# Fee {{term: fee}} {#a}\n\n"Fee {{placeholder: p}}" {{def: fee}}\n\nSee {{ref: a}}.\n')
+    assert called == []
+
+
+def _tangle(rng: random.Random) -> str:
+    """Headings, items and terms that refer to each other at random, circles included."""
+    n = rng.randint(2, 6)
+    terms = [f"t{i}" for i in range(rng.randint(1, 3))]
+    ids = [f"h{i}" for i in range(n)] + [f"h{i}i" for i in range(n)]
+    out = []
+    for i in range(n):
+        parts = [f"W{i}"]
+        for _ in range(rng.randint(0, 2)):
+            parts.append("{{ref: " + rng.choice(ids) + "}}" if rng.random() < 0.6
+                         else "{{term: " + rng.choice(terms) + "}}")
+        out.append(f"# {' '.join(parts)} {{#h{i}}}\n\n- item {{#h{i}i}}\n")
+    for term in terms:
+        parts = [term.upper()]
+        if rng.random() < 0.7:
+            parts.append("{{ref: " + rng.choice(ids) + "}}")
+        if rng.random() < 0.3:
+            parts.append("{{term: " + rng.choice(terms) + "}}")
+        out.append(f'"{" ".join(parts)}" {{{{def: {term}}}}}\n')
+    return "\n".join(out)
+
+
+def test_a_heading_that_reads_differently_from_its_designation_is_always_reported() -> None:
+    rng = random.Random(329)
+    reported = {"render-designation-cycle", "render-designation-limit", "render-term-limit"}
+    for _ in range(250):
+        source = FRONT + _tangle(rng)
+        result = render(source, format="text", overrides=NONE)
+        if any(" ".join(plain_text(s.title).split()) != s.designation for s in result.tree.sections):
+            assert reported & {d.rule for d in result.diagnostics}, source

@@ -166,12 +166,14 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   also in a heading read before the targets are known (§13.3). Terms that name each other can still
   ask for more different texts than any cache holds, so the extra work is bounded: a term's first text
   is free, and past 200,000 inline nodes resolved inside later texts of the same term (nested ones
-  included), 32 terms open inside one another, or 60 inline levels (emphasis, links, terms) nested
-  inside an open term, a `{{term:}}` shows its `label=` or definition id and the Warning
-  `render-term-limit` is reported, once. The nesting limit only applies where one unit is read
-  inside another (inside an open term, or while designations are worked out, below): a term in a
-  single block, however deeply formatted (the builder allows 100 levels), is never cut by it. Any number of terms that do not name each
-  other resolve in full and never reach the limit. A term text is capped at 1,000 characters
+  included), 32 terms open inside one another, or 60 inline levels (emphasis, links, terms) added
+  inside the outermost open term, a `{{term:}}` shows its `label=` or definition id and the Warning
+  `render-term-limit` is reported, once. The nesting limit counts from where the outermost open term
+  began, so the levels a block already has there (the builder allows 100 in a block) are not counted: a
+  term in a single block, however deeply formatted, and the first term in it, are never cut by it,
+  and a term inside it is cut only when its own text nests 60 or more levels further. While
+  designations are worked out (below) the count is from the heading. Any number of terms that do not
+  name each other resolve in full and never reach the limit. A term text is capped at 1,000 characters
   of plain text, checked as it is built (no real defined term comes near it; a chain of terms that each
   read the next twice would otherwise ask for a text of 2^n words): a longer one is shown by its
   definition id in `{{term:}}` (a `label=` still wins), and the Warning `render-term-too-long` names the
@@ -195,8 +197,13 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   inline levels while headings and terms are read through each other, or longer than 1,000
   characters once resolved are designated by their text as written, without the references in them
   (`render-designation-limit`), and a reference shows at most the first 1,000 characters of a
-  designation. A heading in a cycle or past a cap, or one whose terms reach into one, may read
-  differently from the designation references show; the Warning says so. Alternative sections
+  designation (an item or paragraph keeps its own piece after it), which `render-designation-limit`
+  also says. A ring of more than 32 headings is reported as a limit, not a cycle, and a heading with 59
+  or more nested emphasis levels that holds a reference can reach the nesting limit after one hop. A
+  heading read from the text of a term it uses is a cycle through that term. A heading in a cycle or
+  past a cap, or one whose terms reach into one, may read differently from the designation
+  references show; the Warning says so. A heading that shows a frontmatter value (`{{party:}}`,
+  `{{attach:}}`) whose text holds a `{{ref:}}` is not designated through it. Alternative sections
   sharing an identifier (§15.4) keep their own heading text, and a reference to the identifier
   shows the first alternative's.
 - **Labels under the `none` scheme.** A style label that shows `{section}` (such as the default
