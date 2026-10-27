@@ -13,7 +13,7 @@ Preferences are split in two, on purpose:
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePath
 from typing import Any
@@ -209,7 +209,7 @@ def _assemble(source: str, answers: Mapping[str, Any], filename: str = "") -> tu
     no output, or the answers do (``answer-invalid``, ``answer-missing``),
     or the template needs files a renderer below Full does not read
     (includes, LegalDown attachments, translations; §17.6)."""
-    findings = validate(_parse(source, filename)).diagnostics
+    findings = _named(validate(_parse(source, filename)).diagnostics, filename)
     errors = sum(1 for d in findings if d.level == "error")
     if errors:
         raise RenderRefused(findings, f"Assembly refused: the template has {errors} error(s), "
@@ -219,12 +219,20 @@ def _assemble(source: str, answers: Mapping[str, Any], filename: str = "") -> tu
         result = parse_template(source).form(answers).assemble()
     except AssemblyError as error:
         raise DocumentError(f"The template cannot be assembled: {error}") from error
+    diagnostics = _named(result.diagnostics, filename)
     if not result.ok:
-        errors = [d for d in result.diagnostics if d.level == "error"]
-        raise RenderRefused(result.diagnostics, f"Assembly refused: {len(errors)} error(s) in the answers or "
-                                                "the template (§15.7).")
+        errors = [d for d in diagnostics if d.level == "error"]
+        raise RenderRefused(diagnostics, f"Assembly refused: {len(errors)} error(s) in the answers or "
+                                         "the template (§15.7).")
     # The source was normalized, and assembly keeps its line breaks.
-    return result.output, list(result.diagnostics)
+    return result.output, diagnostics
+
+
+def _named(diagnostics: Iterable[Diagnostic], filename: str) -> list[Diagnostic]:
+    """*diagnostics* with *filename* as the ``file`` of each one that names no
+    file (§16.9): the assembly's findings are the document's, and the
+    assembler does not know the file it was given."""
+    return [replace(d, file=filename) if not d.file else d for d in diagnostics]
 
 
 def _parse(source: str, filename: str = "") -> Document:

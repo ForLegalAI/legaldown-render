@@ -18,6 +18,7 @@ import legaldown_render.api as api
 from legaldown_render import RenderOptions, render, render_file
 from legaldown_render.cli import main
 from legaldown_render.diagnostics import key_line
+from legaldown_render.errors import RenderRefused
 
 HEAD = "---\ntitle: T\n---\n"
 
@@ -418,6 +419,23 @@ def test_assembly_names_the_file_too() -> None:
     # The lines are those of the assembled document (the answers are filled in).
     [found] = [d for d in result.diagnostics if d.rule == "render-not-processed"]
     assert found.line is not None
+
+
+def test_an_assembly_warning_names_the_file() -> None:
+    template = ("---\ntitle: T\nquestions:\n  q:\n    type: text\n    prompt: Q\n---\n\n# A\n\n"
+                "Hello {{placeholder: q}}\n")
+    result = render(template, RenderOptions(answers={"q": "world", "zzz": "1"}, filename="t.lgd"))
+    [unknown] = [d for d in result.diagnostics if d.rule == "answer-unknown"]
+    assert unknown.file == "t.lgd"
+
+
+def test_a_refused_assembly_names_the_file_in_every_diagnostic() -> None:
+    template = ("---\ntitle: T\nquestions:\n  q:\n    type: text\n    prompt: Q\n---\n\n# A\n\n"
+                "Hello {{placeholder: q}}\n")
+    with pytest.raises(RenderRefused) as refused:
+        render(template, RenderOptions(answers={"q": 5}, filename="t.lgd"))
+    assert [d.rule for d in refused.value.diagnostics] == ["answer-invalid"]
+    assert {d.file for d in refused.value.diagnostics} == {"t.lgd"}
 
 
 # -- The command line ------------------------------------------------------------------------
