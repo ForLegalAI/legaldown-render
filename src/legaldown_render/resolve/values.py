@@ -4,8 +4,8 @@
 Values are stored canonically in the source — ISO dates, decimal amounts with
 a period — and only their display varies by locale. Amounts are handled as
 ``Decimal`` from the source text and are never rounded or truncated (§10.3):
-money is padded to its currency's minor units, and any further digits written
-in the source are kept. A duration keeps every digit it is written with too,
+money is padded to its currency's minor units, and every digit written in
+the source is kept (the fraction shows the larger of the two). A duration keeps every digit it is written with too,
 and its plural follows the digits it displays (§10.5).
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from decimal import Decimal
 
 from babel import Locale, UnknownLocaleError
 from babel.dates import format_date
-from babel.numbers import format_currency, parse_pattern
+from babel.numbers import format_currency, get_currency_precision, parse_pattern
 
 from ..errors import InternalError
 from ..style.model import Values
@@ -169,17 +169,28 @@ class Formatter:
 
     def _money(self, amount: str, currency: str) -> str:
         value = Decimal(amount)
-        if self.values.money == "name":
-            return format_currency(value, currency, locale=self.locale, format_type="name",
-                                   decimal_quantization=False)
-        pattern = None
-        if self.values.money == "code":
-            standard = self.locale.currency_formats["standard"].pattern
-            pattern = standard.replace("¤", "¤¤") if "¤¤" not in standard else standard
-        text = format_currency(value, currency, format=pattern, locale=self.locale, decimal_quantization=False)
+        mode = self.values.money
+        if mode == "name":
+            source = self.locale.decimal_formats[None].pattern
+        else:
+            source = self.locale.currency_formats["standard"].pattern
+            if mode == "code" and "¤¤" not in source:
+                source = source.replace("¤", "¤¤")
+        # Fraction digits shown: the currency's minor units, or every digit
+        # written when there are more (§10.3). Babel's own quantizing would
+        # drop a trailing zero beyond the minor units ("1.500" EUR), so the
+        # digit count is fixed in the pattern, and currency_digits is off.
+        pattern = parse_pattern(source)
+        digits = max(get_currency_precision(currency), len(amount.partition(".")[2]))
+        pattern.frac_prec = (digits, digits)
+        text = format_currency(value, currency, format=pattern, locale=self.locale, currency_digits=False,
+                               format_type="name" if mode == "name" else "standard",
+                               decimal_quantization=False)
+        if mode == "name":
+            return text
         # CLDR spaces an alphabetic symbol or code from the digits, on
         # whichever side it stands ("USD 10,000.00", "10 000,00 CZK").
-        return _LETTER_DIGIT.sub(" ", text)
+        return _LETTER_DIGIT.sub("\u00a0", text)
 
     def duration(self, value: str, unit: str) -> str:
         """A duration (already validated) such as "12 months" or "12 měsíců"."""

@@ -168,3 +168,39 @@ def test_symbol_after_the_digits_is_spaced_too() -> None:
 def test_code_mode_still_spaced() -> None:
     assert formatter("en", money="code").money("5", "CZK") == "CZK\xa05.00"
     assert formatter("de", money="code").money("5", "CZK") == "5,00\xa0CZK"
+
+
+# -- money keeps every written fraction digit, padded to the minor units ------
+
+@pytest.mark.parametrize(("amount", "currency", "expected"), [
+    ("1.1230", "EUR", "€1.1230"),
+    ("1.500", "EUR", "€1.500"),
+    ("1.50", "EUR", "€1.50"),
+    ("5", "EUR", "€5.00"),
+    ("5.5", "EUR", "€5.50"),
+    ("5", "JPY", "¥5"),
+    ("0.125", "JPY", "¥0.125"),
+    ("5.0", "JPY", "¥5.0"),
+    ("1234.5670", "USD", "$1,234.5670"),
+])
+def test_money_fraction_digits_symbol(amount: str, currency: str, expected: str) -> None:
+    assert formatter("en-US").money(amount, currency) == expected
+
+
+def test_money_fraction_digits_code_and_name() -> None:
+    code = formatter("en-US", money="code")
+    name = formatter("en-US", money="name")
+    assert code.money("1.500", "EUR") == "EUR\xa01.500"
+    assert code.money("5", "EUR") == "EUR\xa05.00"
+    assert code.money("0.125", "JPY") == "JPY\xa00.125"
+    assert code.money("5", "JPY") == "JPY\xa05"
+    assert name.money("1.500", "EUR") == "1.500 euros"
+    assert name.money("5", "EUR") == "5.00 euros"
+    assert name.money("0.125", "JPY") == "0.125 Japanese yen"
+    assert name.money("5", "JPY") == "5 Japanese yen"
+
+
+def test_money_trailing_zeros_in_other_locales_and_long_amounts() -> None:
+    assert formatter("cs-CZ").money("1.500", "CZK") == "1,500\xa0Kč"
+    assert formatter("de", money="code").money("1.1230", "EUR") == "1,1230\xa0EUR"
+    assert formatter("en-US").money("1" * 40 + ".1230", "EUR") == f"€{int('1' * 40):,}.1230"
