@@ -117,3 +117,82 @@ def test_a_money_amount_in_name_mode_with_a_4400_digit_fraction_renders() -> Non
 def test_a_4400_digit_fraction_uses_the_other_category_in_czech() -> None:
     output = render(FRONT + f"# A\n\n{{{{duration: 1.{LONG}, unit=Y}}}}", format="text", locale="cs-CZ").output
     assert output.rstrip().endswith(" let")  # "other", not the "many" of "2,5 roku"
+
+
+# -- 4: only the program reconfigures the streams -------------------------------
+
+
+def _wrapper(encoding: str, **options: object) -> io.TextIOWrapper:
+    return io.TextIOWrapper(io.BytesIO(), encoding=encoding, **options)  # type: ignore[arg-type]
+
+
+def test_in_process_main_leaves_the_streams_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    out, err = _wrapper("cp1252", newline="\r\n"), _wrapper("cp1252")
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stderr", err)
+    assert main([FEATURES, "-f", "text", "-q"]) == 0
+    assert main(["--list-styles"]) == 0
+    assert (sys.stdout.encoding, sys.stdout.errors) == ("cp1252", "strict")
+    assert (sys.stderr.encoding, sys.stderr.errors) == ("cp1252", "strict")
+    out.flush()
+    # Not even the newline translation of the caller's stream changed.
+    assert b"\r\n" in out.buffer.getvalue()  # type: ignore[attr-defined]
+
+
+def test_main_as_the_program_reconfigures_the_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    out, err = _wrapper("cp1252", newline="\r\n"), _wrapper("cp1252")
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stderr", err)
+    monkeypatch.setattr(sys, "argv", ["legaldown-render", "--list-styles"])
+    assert main() == 0
+    out.flush()
+    assert (out.encoding, err.errors) == ("utf-8", "backslashreplace")
+    data = out.buffer.getvalue()  # type: ignore[attr-defined]
+    assert data and b"\r" not in data and data.endswith(b"\n")
+
+
+def test_the_console_script_calls_main_without_argv() -> None:
+    # The script entry point calls main() with no argument, so it is "the program".
+    pyproject = (SRC.parent / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'legaldown-render = "legaldown_render.cli:main"' in pyproject
+
+
+# -- 5: LF line endings everywhere ------------------------------------------------
+
+
+def _run(args: list[str]) -> subprocess.CompletedProcess[bytes]:
+    env = dict(os.environ, PYTHONPATH=str(SRC), PYTHONIOENCODING="cp1252", PYTHONUTF8="0")
+    return subprocess.run([sys.executable, "-m", "legaldown_render.cli", *args], capture_output=True, env=env,
+                          check=False)
+
+
+@pytest.mark.parametrize("fmt", ["html", "text"])
+def test_standard_output_has_lf_line_endings(fmt: str) -> None:
+    done = _run([FEATURES, "-f", fmt, "-q"])
+    assert done.returncode == 0, done.stderr
+    assert b"\n" in done.stdout and b"\r" not in done.stdout
+
+
+@pytest.mark.parametrize("fmt", ["html", "text"])
+def test_an_output_file_has_lf_line_endings(tmp_path: Path, fmt: str) -> None:
+    target = tmp_path / "out.bin"
+    assert main([FEATURES, "-q", "-f", fmt, "-o", str(target)]) == 0
+    data = target.read_bytes()
+    assert b"\n" in data and b"\r" not in data
+    assert data == render(Path(FEATURES).read_text(encoding="utf-8"), format=fmt).output.encode("utf-8")
+
+
+def test_an_output_file_is_written_without_newline_translation(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Windows' text mode would turn "\n" into CRLF unless the file is opened
+    # with newline="\n": that is what the CLI asks for.
+    calls: list[dict[str, object]] = []
+    real = Path.write_text
+
+    def spy(self: Path, data: str, *args: object, **kwargs: object) -> int:
+        calls.append(kwargs)
+        return real(self, data, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "write_text", spy)
+    assert main([FEATURES, "-q", "-o", str(tmp_path / "out.txt")]) == 0
+    assert calls == [{"encoding": "utf-8", "newline": "\n"}]

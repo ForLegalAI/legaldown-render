@@ -55,6 +55,8 @@ def test_stdin_to_stdout_is_utf8_whatever_the_console_encoding(fmt: str) -> None
     expected = render(CZECH, format=fmt).output.encode("utf-8")
     done = _run(["-", "-f", fmt, "-q"], CZECH.encode("utf-8"))
     assert done.returncode == 0, done.stderr
+    # Exact bytes: the output is UTF-8 with LF line endings on every platform, so
+    # the same comparison holds on Windows (no CRLF translation of stdout).
     assert done.stdout == expected
     assert "Příloha".encode() in done.stdout
 
@@ -64,6 +66,7 @@ def test_file_to_stdout_is_utf8_whatever_the_console_encoding(tmp_path: Path) ->
     path.write_bytes(CZECH.encode("utf-8"))
     done = _run([str(path), "-f", "text", "-q"])
     assert done.returncode == 0, done.stderr
+    # Exact bytes, as above: UTF-8 with LF line endings on every platform.
     assert done.stdout == render(CZECH, format="text").output.encode("utf-8")
 
 

@@ -7,7 +7,8 @@ be written; 2 — a usage or style problem; 70 — an internal error (a bug to
 report).
 
 Documents and output are always UTF-8 (the HTML says ``<meta charset="utf-8">``),
-never the console's or the locale's encoding.
+never the console's or the locale's encoding, and output has LF line endings on
+every platform.
 """
 from __future__ import annotations
 
@@ -85,13 +86,15 @@ def _parser() -> argparse.ArgumentParser:
 def _configure_streams() -> None:
     """Make the standard streams safe for any content, whatever the console's
     encoding: the document and the style are UTF-8, so what is written to
-    standard output is UTF-8 as well, and a diagnostic that quotes characters
+    standard output is UTF-8 as well, with LF line endings (no translation to
+    CRLF on Windows), and a diagnostic that quotes characters
     the console cannot show escapes them (``\\u2192``) instead of failing with a
     UnicodeEncodeError. Replaced streams without ``reconfigure`` (a test
-    capture, a StringIO) are left alone."""
+    capture, a StringIO) are left alone. :func:`main` calls this only when it
+    runs as the program (see there)."""
     if hasattr(sys.stdout, "reconfigure"):
         with contextlib.suppress(ValueError, OSError):
-            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     if hasattr(sys.stderr, "reconfigure"):
         with contextlib.suppress(ValueError, OSError):
             sys.stderr.reconfigure(errors="backslashreplace")
@@ -109,7 +112,13 @@ def _read_source(path: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    _configure_streams()
+    """Run the command: *argv* is the argument list, or None for the process's
+    own (``sys.argv``). Only then is ``main`` the program, as the console script
+    and ``python -m legaldown_render.cli`` call it, and only then are the
+    standard streams reconfigured: a caller that passes *argv* is in-process
+    code whose ``sys.stdout`` and ``sys.stderr`` are not ours to change."""
+    if argv is None:
+        _configure_streams()
     parser = _parser()
     args = parser.parse_args(argv)
     overrides = dict(args.overrides)
@@ -181,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     _report(name, result.diagnostics, quiet=args.quiet)
     if args.output:
         try:
-            Path(args.output).write_text(result.output, encoding="utf-8")
+            Path(args.output).write_text(result.output, encoding="utf-8", newline="\n")
         except OSError as error:
             print(f"legaldown-render: cannot write {args.output}: {error.strerror or error}", file=sys.stderr)
             return 1

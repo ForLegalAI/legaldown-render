@@ -72,7 +72,10 @@ or a template that cannot be assembled with its answers) or the document or answ
 read (a document that is not UTF-8 included) or the output file cannot be written, 2 for an invalid
 style, setting, or usage, and 70 for an internal error (a bug to report).
 
-Documents are read as UTF-8, and standard output is written as UTF-8 whatever the console's encoding.
+Documents are read as UTF-8, and output is UTF-8 with LF line endings, on standard output and in
+`-o` files, whatever the console's encoding and the platform's newline. The command reconfigures
+the standard streams only when it runs as the program; calling `legaldown_render.cli.main([...])`
+from Python leaves `sys.stdout` and `sys.stderr` as they are.
 Without `--format`, `-o` takes the format from the file extension: `.html` and `.htm` write HTML,
 `.txt` and `.text` plain text. The extension of a document format this renderer does not write
 (`.docx`, `.doc`, `.odt`, `.rtf`, `.pdf`, `.md`, `.markdown`, `.epub`, `.tex`, in any case) is a usage
