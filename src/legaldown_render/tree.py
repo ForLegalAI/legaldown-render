@@ -509,3 +509,12 @@ def plain_text(inlines: tuple[Inline, ...]) -> str:
             case _ if getattr(inline, "children", None) is not None:
                 parts.append(plain_text(inline.children))
     return "".join(parts)
+
+
+def has_visible_content(inlines: tuple[Inline, ...]) -> bool:
+    """True if resolved *inlines* show anything: text other than white space,
+    or an image (which has a picture even when its alt text is empty)."""
+    if plain_text(inlines).strip():
+        return True
+    return any(isinstance(inline, Image) or has_visible_content(getattr(inline, "children", None) or ())
+               for inline in inlines)

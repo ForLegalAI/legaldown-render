@@ -63,7 +63,7 @@ IV. Broken References
 
 These are deliberately wrong: [BROKEN REF: nowhere], [UNDEFINED: nothing], [INVALID DATE: 2026-13-45], [INVALID AMOUNT], [UNKNOWN CURRENCY: XYZ], [UNKNOWN PARTY: nobody], [INVALID PARTY: Bad_Name], [UNKNOWN SIDE: nobody], [INVALID DURATION: -1], [INVALID DURATION UNIT: M], [INVALID FIELD: value], [UNKNOWN DIRECTIVE: trem], [UNKNOWN ATTACHMENT: schedule-z], [INVALID PLACEHOLDER: fee], and [NOT PROCESSED: include includes/extra.lgd].
 
-Raw HTML is dropped. A safe link <https://example.com> stays; [an unsafe one](javascript:alert(1)) does not.
+Raw HTML is dropped. A safe link <https://example.com> stays; an unsafe one does not.
 
 ---
 

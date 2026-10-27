@@ -35,8 +35,28 @@ from ..tree import (
     Text,
     Value,
 )
+from ..urls import is_link_target
 
 _INDENT = "    "
+_ADDRESS_SCHEMES = ("mailto:", "tel:")
+
+
+def _link_text(href: str, text: str) -> str:
+    """A link as plain text: its text, followed by ``<url>`` unless the URL is
+    no more than the text says. The same links are links as in HTML
+    (:func:`~legaldown_render.urls.is_link_target`); one that is not shows its
+    text alone, and one with no text shows its URL."""
+    if not is_link_target(href):
+        return text
+    url = href.strip()
+    if not text.strip():
+        return url
+    address = url
+    for prefix in _ADDRESS_SCHEMES:
+        if url.lower().startswith(prefix):
+            address = url[len(prefix):]
+    # An internal link has no URL worth printing; an autolink's text is its URL.
+    return text if url.startswith("#") or text in (url, address) else f"{text} <{url}>"
 
 
 def inline_text(inlines: tuple[Inline, ...]) -> str:
@@ -55,8 +75,7 @@ def inline_text(inlines: tuple[Inline, ...]) -> str:
             case Emphasis(children=children) | Strong(children=children) | DefinedTerm(children=children):
                 parts.append(inline_text(children))
             case Link(href=href, children=children):
-                text = inline_text(children)
-                parts.append(text if href.startswith("#") or href == text else f"{text} <{href}>")
+                parts.append(_link_text(href, inline_text(children)))
             case Image(children=children):
                 parts.append(inline_text(children))
             case Choice(options=options, separator=separator):

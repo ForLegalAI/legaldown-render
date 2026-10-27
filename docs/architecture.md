@@ -233,7 +233,8 @@ turns into an error.
 - **Internal inconsistencies** raise `InternalError`, and the CLI exits with 70.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
-`ref-not-enumerated`, a specification rule id, plus renderer-specific ids prefixed `render-`:
+`ref-not-enumerated` and `path-not-relative` (an Error for an image path that is not relative, §2.3,
+reported here because validator 0.4 does not check image paths), specification rule ids, plus renderer-specific ids prefixed `render-`:
 `render-not-processed`, `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), and `render-ref-ambiguous`. The validator's
 diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
 have none yet: they are about a directive within a block, and the validator makes only a block's
@@ -243,8 +244,23 @@ line public (`Document.line_of`, U2).
 
 - Raw HTML in the source is never emitted (§8.7).
 - Every text node and attribute is escaped.
-- Links and images whose URL has a scheme other than `http`, `https`, `mailto`, or `tel` render
-  as text. markdown-it-py also refuses `javascript:`-style URLs when parsing.
+- A link is a hyperlink (§8.7) unless its URL is empty or its scheme is `javascript`, `vbscript`,
+  `file`, or `data` (a deny-list, `urls.DENIED_SCHEMES`, judged as a browser reads the URL: tabs,
+  newlines, controls, and case are ignored). Every other scheme (`ftp:`, `sip:`, `urn:`, ...) is
+  linked. A link that is not made renders as its text alone, in HTML and in text alike. The
+  builder keeps such links as nodes (it turns off markdown-it-py's own `validateLink`, which
+  would leave them as literal Markdown), so the writers' check is the one that applies;
+  that deny-list is the gate for every `href` and `src` the HTML writer emits (links, images,
+  value links), and markdown-it-py's check is off so that the resolver can report §2.3 paths.
+  A link with no text shows its URL; the text writer leaves out ` <url>` when the URL, less a
+  `mailto:` or `tel:` prefix, is the text.
+- An image path must be relative with no URI scheme (§2.3), so a remote resource is never fetched
+  or embedded. Resolution, not a writer, enforces it: an image whose path has a scheme (`https:`,
+  `file:`, `data:`, a Windows drive such as `C:\x`) or starts with `/` or `\` (`//host`) is
+  replaced by its alt text and reported as the Core Error `path-not-relative`, which `--strict`
+  refuses. An image with an empty path shows its alt text too, with no diagnostic (§2.3 has no
+  rule for it). `../` stays allowed: §2.3 defines no default document root. The writers' image check
+  is a second line.
 - At Rendering level, the only files read are the document, the style template, and the answers
   file the CLI reads with `--answers` (the Python API takes answers as a mapping). Attachment
   files and includes are never opened.
@@ -257,6 +273,7 @@ line public (`Document.line_of`, U2).
 |---|---|
 | `tests/test_golden.py` | The test documents under each built-in style, compared byte for byte with `tests/golden/`. Regenerate with `pytest --update-golden` and review the diff |
 | `tests/test_render.py` | Numbering schemes, designations, fallbacks, every failure marker, template view, labels by language, HTML safety, unique anchors, determinism, strict mode, locales |
+| `tests/test_wp3_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme deny-list, empty URLs and empty link text |
 | `tests/test_style.py`, `tests/test_values.py` | Style layering and validation; counters and locale formatting |
 | `tests/test_cli.py` | The command |
 | `tests/conformance/` | Every example and fixture in the specification repository renders, every internal link has a target, and each invalid fixture renders its rule's failure marker. Needs `$LEGALDOWN_SPEC_DIR` or a sibling `../LegalDown` checkout |

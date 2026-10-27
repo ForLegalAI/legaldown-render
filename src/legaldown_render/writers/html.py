@@ -9,7 +9,13 @@ numbers are the ones resolution computed and survive copying and printing.
 
 Safety (docs/architecture.md): every text node and attribute is escaped, raw
 HTML from the source never reaches this writer (§8.7), and a link whose URL
-uses a scheme outside :data:`SAFE_SCHEMES` renders as plain text.
+is empty or uses a script, ``file:``, or ``data:`` scheme
+(:data:`~legaldown_render.urls.DENIED_SCHEMES`, judged as a browser reads the
+URL) renders as its text alone. Every other scheme is a hyperlink (§8.7).
+This check is the gate for every ``href`` and ``src`` the writer emits (a link,
+an image, a value's link): the builder turns markdown-it's own check off.
+An image path that is not relative (§2.3) never gets here: resolution has
+replaced the image with its alt text and reported it.
 """
 from __future__ import annotations
 
@@ -47,17 +53,12 @@ from ..tree import (
     TermRef,
     Text,
     Value,
+    has_visible_content,
     plain_text,
 )
+from ..urls import is_link_target, is_safe_href
 
-SAFE_SCHEMES = frozenset({"http", "https", "mailto", "tel"})
-_SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
-# What the WHATWG URL parser ignores before it reads a scheme: tabs and
-# newlines anywhere, and C0 controls and spaces at either end. Checking the
-# URL as a browser will read it means "java\tscript:" cannot slip through.
-_URL_IGNORED_RE = re.compile(r"[\t\n\r]")
-_URL_TRIMMED = "".join(chr(code) for code in range(0x21))
-
+__all__ = ["HtmlWriter", "is_safe_href", "stylesheet"]
 
 def _text(value: str) -> str:
     return escape(value, quote=False)
@@ -65,13 +66,6 @@ def _text(value: str) -> str:
 
 def _attr(value: str) -> str:
     return escape(value, quote=True)
-
-
-def is_safe_href(href: str) -> bool:
-    """True for relative URLs, fragments, and the schemes in SAFE_SCHEMES,
-    judged as a browser parses the URL."""
-    scheme = _SCHEME_RE.match(_URL_IGNORED_RE.sub("", href).strip(_URL_TRIMMED))
-    return scheme is None or scheme.group(1).lower() in SAFE_SCHEMES
 
 
 class HtmlWriter:
@@ -319,11 +313,13 @@ class HtmlWriter:
             case Code(text=text):
                 return f"<code>{_text(text)}</code>"
             case Link(href=href, children=children, title=title):
-                if not is_safe_href(href):
+                # A link with no text shows its URL (§8.7: it is still a hyperlink).
+                shown = children if has_visible_content(children) else (Text(href.strip()),)
+                if not is_link_target(href):
                     return self.inlines(children)
                 title_attr = f' title="{_attr(plain_text(title))}"' if title else ""
                 outer, self._in_link = self._in_link, True
-                content = self.inlines(children)
+                content = self.inlines(shown)
                 self._in_link = outer
                 return f'<a href="{_attr(href)}"{title_attr}>{content}</a>'
             case Image(src=src, children=children, title=title):
