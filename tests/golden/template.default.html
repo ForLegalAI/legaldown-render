@@ -58,7 +58,9 @@ p.ld-condition { margin: 0 0 0.5em; }
 .ld-signature-line { border-top: 1px solid currentColor; width: 80%; margin-bottom: 0.3em; }
 @media print {
   .ld-document { max-width: none; padding: 0; }
-  .ld-separator-page-break .ld-attachment { break-before: page; }
+  .ld-attachments.ld-separator-page-break { break-before: page; }
+  .ld-separator-page-break .ld-attachment + .ld-attachment { break-before: page; }
+  .ld-attachments-heading { break-after: avoid; }
   .ld-signatures { break-inside: avoid; }
   a { color: inherit; }
 }

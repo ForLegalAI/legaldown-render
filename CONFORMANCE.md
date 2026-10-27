@@ -31,7 +31,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Feature | Status |
 |---|---|
 | List enumeration (§13.2) | ✅ Configurable per depth; can be disabled. Ordered lists are always renumbered. Nested lists keep their structure, so a nested item is referenced as "2.1(b)(i)" |
-| Paragraph numbering and section-qualified items (§13.2) | ✅ Style settings; the `continental` style uses both |
+| Paragraph numbering and section-qualified items (§13.2) | ✅ Style settings; the `continental` style uses both. A preamble item has no section, so its label is "1", not ".1", as its designation is (`{section}` and the `.` after it are dropped) |
 | Style templates in a separate file (§13.7) | ✅ YAML, layered and validated; see [docs/style-templates.md](docs/style-templates.md) |
 | Signature blocks (§2.2) | ✅ One per party, with `legal_name` and each representative |
 | Labels following the document language (§13.7) | ✅ Built in for `en`, `cs`, `de`, `fr`, `pl`, and `sk`; any label can be set by a style |
