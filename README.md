@@ -61,10 +61,19 @@ legaldown-render contract.lgd --style continental --locale cs-CZ -o smlouva.html
 legaldown-render contract.lgd --set numbering.scheme=legal-outline --set enumeration.enabled=false
 legaldown-render contract.lgd --set contents.enabled=true --set contents.depth=3   # table of contents
 legaldown-render contract.lgd --strict                          # refuse if the document has errors
+legaldown-render contract.lgd --root . --strict                 # file references may not leave this directory
 legaldown-render contract.lgd --final --strict                  # refuse if blanks or template constructs remain
 legaldown-render template.lgd --answers answers.yaml -o nda.html # fill in a template, then render it
 legaldown-render --print-style --style continental              # every setting, as YAML
 ```
+
+`--root DIR` sets the document root (§2.3): a file reference that leaves it (an `{{include:}}`
+path, an attachment's, `amends`, `supersedes`, a translation's, an image's) is the Error
+`path-outside-root`, and the file is not used. Paths that are not relative (a URI scheme, an absolute
+path, a Windows drive) are the Error `path-not-relative` with or without a root. Nothing is ever
+read or fetched, and the check is lexical, so symbolic links are not followed. The document must be
+inside DIR (exit 2 otherwise); standard input counts as at DIR itself. Set a root when you render documents
+you do not control: without one, `../` is allowed (§2.3 defines no default).
 
 `--locale` sets how dates, money, and durations are formatted. The words the renderer generates
 (such as "Represented by" or "Signatures") follow the document's `language` (§13.7), whatever the locale.
@@ -75,7 +84,7 @@ The exit code is 0 when the document
 rendered, even if it has errors (they show as markers), 1 when rendering was refused (strict mode,
 or a template that cannot be assembled with its answers) or the document or answers file cannot be
 read (a document that is not UTF-8 included) or the output file cannot be written, 2 for an invalid
-style, setting, or usage, and 70 for an internal error (a bug to report).
+style, setting, or usage (a document outside `--root` too), and 70 for an internal error (a bug to report).
 
 Documents are read as UTF-8, and output is UTF-8 with LF line endings, on standard output and in
 `-o` files, whatever the console's encoding and the platform's newline. The command reconfigures
@@ -105,8 +114,13 @@ with open("contract.html", "w", encoding="utf-8", newline="\n") as output:
 `render()` also accepts a `RenderOptions`. Pass `answers={...}` to render a template filled in.
 Each diagnostic has its `line` and its `file`: `render_file()` and the command name the file (its
 name, without the directory); for text given to `render()`, pass `filename=`.
+`document_root=` is the `--root` of the command line, and `document_path=` says where the document
+is in it (`render_file()` sets it from its path; text given to `render()` is at the root); a
+document outside the root raises `OptionsError`. For example, a hosting service that renders
+uploaded text:
+`render(text, document_root="/srv/docs/tenant-1")`.
 Problems in the document never raise. Only an invalid style (`StyleError`), an unknown output
-format (`OptionsError`), an unreadable document (`DocumentError`), strict mode, or a template that
+format or a document outside its root (`OptionsError`), an unreadable document (`DocumentError`), strict mode, or a template that
 cannot be assembled with its answers (`RenderRefused`) do. All of them are `RenderError`s, and
 `StyleError` and `OptionsError` are also `ValueError`s. They can be pickled, so they cross process
 boundaries (`multiprocessing`, `concurrent.futures`) intact. `overrides=` takes dotted settings and

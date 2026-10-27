@@ -233,14 +233,15 @@ turns into an error.
   raises `RenderRefused` instead, carrying the diagnostics.
 - **Configuration problems** raise before rendering, with every problem named: an invalid style,
   setting, or locale raises `StyleError` (this includes a `{field}` that a text template does not
-  accept or lacks, a `--set` value that is not valid YAML, and an `extends` cycle); an unknown output format raises `OptionsError`. Both are
+  accept or lacks, a `--set` value that is not valid YAML, and an `extends` cycle); an unknown output format, or a document that is not inside the configured document root, raises `OptionsError`. Both are
   `RenderError`s (and `ValueError`s, as they always were). Every renderer error pickles, so it
   survives `multiprocessing`.
 - **Internal inconsistencies** raise `InternalError`, and the CLI exits with 70.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
-`ref-not-enumerated` and `path-not-relative` (an Error for an image path that is not relative, §2.3,
-reported here because validator 0.4 does not check image paths), specification rule ids, plus renderer-specific ids prefixed `render-`:
+`ref-not-enumerated`, `path-not-relative` and `path-outside-root` (Errors for a file reference that is
+not relative, or that leaves the document root, §2.3; reported here because validator 0.4 checks
+neither), specification rule ids, plus renderer-specific ids prefixed `render-`:
 `render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, or 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), a `{{term:}}` shows its id), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
 diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
 `file:line:`.
@@ -264,8 +265,8 @@ set to the file name as the validator does (`Document.filename`, without the dir
 
 **Repeats.** `Resolver._warn` and `api.render` leave out a diagnostic whose rule, level and message
 a reported one has already, wherever it is (`diagnostics.repeats`), so a repeated finding is
-reported at its first line only. The renderer's `path-not-relative` is left out when the validator
-reported the same path at the same line, or at none (`diagnostics.covered_by`).
+reported at its first line only. The renderer's `path-not-relative` and `path-outside-root` are left
+out when the validator reported the same path at the same line, or at none (`diagnostics.covered_by`).
 
 ## Security
 
@@ -297,13 +298,31 @@ reported the same path at the same line, or at none (`diagnostics.covered_by`).
   API returns are not all escaped: only a path or URL quoted by the renderer's own rules
   (`path-not-relative`, `render-link-refused`) is, at its source; a caller that shows other
   messages must do the same.
-- An image path must be relative with no URI scheme (§2.3), so a remote resource is never fetched
-  or embedded. Resolution, not a writer, enforces it: an image whose path has a scheme (`https:`,
-  `file:`, `data:`, a Windows drive such as `C:\x`) or starts with `/` or `\` (`//host`) is
-  replaced by its alt text and reported as the Core Error `path-not-relative`, which `--strict`
-  refuses. An image with an empty path shows its alt text too, with no diagnostic (§2.3 has no
-  rule for it). `../` stays allowed: §2.3 defines no default document root. The writers' image check
-  is a second line.
+- Every file reference (§2.3) must be relative with no URI scheme, and within the document root
+  when one is configured, so a remote resource is never fetched or embedded and no path leads
+  outside the tree the document belongs to. The references are `{{include:}}` paths,
+  `attachments[].file`, `amends.file`, `supersedes.file` (the object form; a plain string
+  describes the document and is no path), `translations` values, and image paths. Resolution, not a
+  writer, enforces it (`Resolver._reference`, one place for every kind, over
+  `urls.file_reference_problem`): an image whose path has a scheme (`https:`, `file:`, `data:`, a
+  Windows drive such as `C:\x`) or starts with `/` or `\` (`//host`), or leaves the root, is replaced by
+  its alt text; an `{{attach:}}` whose file fails is its text with no link; an include marker and
+  an attachment placeholder's path stay as text. Each is reported as the Core Error
+  `path-not-relative` or `path-outside-root`, which `--strict` refuses. An image with an empty path
+  shows its alt text too, with no diagnostic (§2.3 has no rule for it). The checks are lexical,
+  as §2.3 says: no `resolve()`, no symbolic link followed, no file read or tested for existence.
+  The root is `RenderOptions.document_root` (`--root DIR`); with none, `../` is allowed, §2.3
+  defining no default root (a service rendering documents it does not control SHOULD set one). A
+  path's base is the document's directory relative to the root (`api._document_base`: the lexical
+  `relpath` of the directory of `document_path` to the root, `/`-separated; the document at the
+  root when it has no path, as text given to `render()` and standard input are); a document
+  outside the root, or on another Windows drive, is an `OptionsError`, since the boundary would
+  mean nothing. A backslash is read as a separator (the renderer's reading, so a path that goes up
+  on Windows is not missed), `..`/`.` with trailing spaces are `..`/`.`, and percent-encoding is
+  decoded once, only for what is used as a URL (an image's `src`, the link an `{{attach:}}`
+  makes): `%2e%2e` is `..` there, and a directory name in a frontmatter or include path. The
+  writers' image check is a second line. Markdown links are not file references (§8.7): they stay
+  governed by the allow-list above, since the renderer reads nothing at their targets.
 - At Rendering level, the only files read are the document, the style template, and the answers
   file the CLI reads with `--answers` (the Python API takes answers as a mapping). Attachment
   files and includes are never opened.
@@ -337,6 +356,7 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_terms_budget.py` | Reuse of worked-out term texts, the work budget and depth limit for terms that name each other. Bounds the work by counting resolved directives, never by timing |
 | `tests/test_diagnostic_lines.py` | The line and file of every renderer diagnostic: in each kind of block (paragraph, list item, nested item, table, quote, heading, preamble) and at frontmatter keys, the repeats left out, the tree nodes' lines, and `file:line:` on the command line |
 | `tests/test_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme allow-list, empty URLs and empty link text, and how a refusal is reported |
+| `tests/test_file_references.py` | File references (§2.3): the lexical check (relative, `../`, scheme, drive, backslash, encoding), each kind of reference with and without a root and from a subdirectory, what is shown instead, the options and `--root`, strict, and the lines |
 | `tests/test_text_writer.py` | The plain-text layout: attachment separators, tables, quotes, list items and indent, blanked labels |
 | `tests/test_html.py` | The HTML writer's print stylesheet for attachments |
 | `tests/test_labels.py` | The built-in labels of parties, per language |

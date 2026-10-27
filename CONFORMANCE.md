@@ -17,7 +17,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 |---|---|
 | Section numbering generated at render time, configurable per job (§13.1) | ✅ `decimal`, `legal-outline`, `mixed`, `none`, and custom level formats; per job with `--set numbering.scheme=…` |
 | Resolution of every §11.1 directive except `{{include:}}`, with every failure marker (§6.3, §7.3, §13.3–§13.5, §15.8) | ✅ |
-| `{{include:}}` below Full (§17.5) | ✅ Renders `[NOT PROCESSED: include path]` with a Warning (`render-not-processed`) |
+| `{{include:}}` below Full (§17.5) | ✅ Renders `[NOT PROCESSED: include path]` with a Warning (`render-not-processed`); the path is checked as a file reference (§2.3) |
 | Party and side display rules (§3.6) | ✅ |
 | At least one output format (§13.6) | ✅ HTML (recommended) and plain text (optional) |
 | A heading in a list item or a quote | ✅ Shown as a bold line: it is not a section (§4.1), so it has no number or anchor |
@@ -40,7 +40,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments (see "Text after a comment", below) |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
 | Links (§8.7) | ⚠️ Partial, a documented deviation for safety with untrusted documents: links with schemes outside the allow-list render as text with a `render-link-refused` Warning. A link is a hyperlink in HTML and shows `text <url>` in plain text when its URL is relative, a fragment, or has one of the schemes `http`, `https`, `mailto`, `tel`, `ftp`, `ftps`, `sftp`, `sip`, `sips`, `sms`, `urn`, `geo`, `news` (an allow-list, judged as a browser reads the URL). Any other scheme (`javascript:`, `file:`, `data:`, protocol handlers such as `ms-msdt:`, `vscode:`, `search-ms:`, and pseudo-schemes such as `C:\x` or `localhost:8080`), or an empty URL, is not a link: its text is shown alone, and the Warning `render-link-refused` is reported for a non-empty URL. A link with no text shows its URL as written; the text writer omits `<url>` for an autolink |
-| Images and file-reference paths (§8.7, §2.3) | ✅ A relative path (`../` included, as §2.3 defines no default document root) renders `<img>` in HTML and its alt text in plain text. A path with a URI scheme (`data:` too), an absolute one (`/`, `\`, `//host`), or a Windows drive path is never fetched or embedded: the alt text is shown and the Error `path-not-relative` is reported, which `--strict` refuses. An empty path shows the alt text with no diagnostic |
+| Images and file-reference paths (§8.7, §2.3) | ✅ Every file reference (`{{include:}}`, `attachments[].file`, `amends.file`, `supersedes.file`, a `translations` value, an image) must be relative, and within the document root when one is configured (`--root DIR`, `document_root=`; see "File references", below). A path with a URI scheme (`data:` too), an absolute one (`/`, `\`, `//host`), or a Windows drive path is the Error `path-not-relative`; a path that leaves the root is the Error `path-outside-root`; `--strict` refuses both. Such an image shows its alt text and is never fetched or embedded; an `{{attach:}}` shows its text with no link; an include marker and an attachment's path stay as text, and no file is ever read. A relative path (`../` included, as §2.3 defines no default root) renders `<img>` in HTML and its alt text in plain text. An empty image path shows the alt text with no diagnostic |
 | Plain-text layout (§13.6, optional) | ✅ `attachments.separator` (§13.8): `none` prints no `---`; `rule` and `page-break` both print one before the attachments heading and between consecutive attachments, so the heading stays with the first (text has no pages). One quote stays one quote (blank lines keep the `>`), and the blocks of a list item are set apart by blank lines and indented under the item's label, whatever its condition label; an item that opens with a nested list, table, code block or quote has its label on a line of its own, so that block stays valid. A pipe in a table cell is backslash-escaped, and the separator row marks column alignment (`:---`, `:---:`, `---:`). A label a style blanks drops its `label: ` prefix in the title block, party details and signature blocks (a signature row with neither label nor value is omitted); HTML keeps an empty `<dt>` so its grid layout and the `<dl>` stay valid |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML table is dropped with the Warning |
 | Visual blank for a placeholder (§13.5 rule 6) | ✅ `placeholders.blank`; a blank that is empty, or only whitespace or invisible format characters (U+200B, U+FEFF), renders `[TBD: id]` |
@@ -54,7 +54,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   A template with Errors is refused too, since §15.7.2 defines no output for one.
 - **Line numbers (§16.9).** Every diagnostic names its line, the validator's and the renderer's
   own (`render-ref-ambiguous`, `ref-not-enumerated`, `render-not-processed`,
-  `render-link-refused`, `path-not-relative`, `render-term-limit`, `render-term-too-long`,
+  `render-link-refused`, `path-not-relative`, `path-outside-root`, `render-term-limit`, `render-term-too-long`,
   `render-locale-fallback`), and the CLI prints it as `file:line:`. The renderer's line is the
   **first line of the block it is in**, as `Document.line_of` gives it, whatever line the
   directive itself is on: a paragraph's, a table's header row, a quote's first `>`, a code
@@ -75,11 +75,33 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   image path, on two lines is one diagnostic, at the first of them. A document with no source to
   name a line of (built from a dict) reports no line. With `answers`, the lines are those of the
   assembled document (§15.8), not of the template file.
-- **`path-not-relative` for images.** The renderer reports the Core rule `path-not-relative`
-  (§2.3, §16.2) for an image path, because the validator (0.4) does not check image paths. It
-  leaves its own report out when the validator names the same path at the same line (or no line),
-  and keeps it for a path the validator did not name, or the same path at another line.
-  The containment rule (`path-outside-root`) is not checked: no document root is configured.
+- **File references (§2.3).** The renderer reports `path-not-relative` and `path-outside-root`
+  (§2.3, §16.2) for every file reference itself, because the validator (0.4) checks neither rule.
+  It leaves its own report out when the validator names the same path at the same line (or no
+  line), and keeps it for a path the validator did not name, or the same path at another line.
+  A path with both problems (`/../x`) is `path-not-relative`. The reports are at the line of the
+  block holding the `{{include:}}` or image, or of the frontmatter key (`attachments[].file`,
+  `amends.file`, `supersedes.file`, `translations.<language>`), like the rest.
+  The checks are lexical, as §2.3 says: no path is resolved against the file system, no symbolic
+  link is followed, and no file is read or its existence checked (that is Full, §17.4).
+  The containment rule runs only where a root is set, as §2.3 says (it defines no default root,
+  and a renderer for documents it does not control SHOULD set one): `--root DIR`, or
+  `RenderOptions.document_root`. The root is the boundary, and the base of a path is the directory
+  of the document relative to it, so `../shared/a.lgd` is within the root from `<root>/contracts/x.lgd`
+  and outside it from `<root>/x.lgd`. `render_file` and the command line say where the document is
+  (`RenderOptions.document_path`); text given to `render()`, or standard input, is at the root. A
+  document outside the root, or on another Windows drive, is an `OptionsError` (exit 2).
+  How a path is read: a backslash is a separator, so `..\..\x` leaves the root as `../../x` does
+  (the renderer's reading; a leading `\` is not relative anyway); `..` and `.` followed by spaces
+  are `..` and `.` (Windows reads them so); tabs and newlines inside a scheme, and spaces and
+  control characters at either end, are ignored as a browser ignores them. Percent-encoding is
+  decoded once, only for what is used as a URL, an image's source and the link `{{attach:}}` would
+  make to an attachment's file: there `%2e%2e/` is `../`. A path in the frontmatter or an
+  `{{include:}}` is a file name, read as written, where `%2e%2e` is a directory with that name.
+  `supersedes` as a plain string describes the superseded document (§3.2) and is not a path.
+  Markdown links (`[text](/etc/passwd)`, §8.7) are not file references and stay governed by the
+  link allow-list (`render-link-refused`): they are links the reader may follow, not files the
+  renderer would read.
 - **Nesting limit.** The validator reads lists 64 levels deep and quotes 16; deeper, an item's or
   quote's content is its text. The renderer follows it, and refuses (`DocumentError`) a document
   in which the enclosing lists and quotes plus one text's inline formatting (emphasis, links) nest
