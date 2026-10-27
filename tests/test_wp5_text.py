@@ -45,10 +45,11 @@ def text(body: str, **overrides: object) -> str:
 @pytest.mark.parametrize("separator", ["rule", "page-break"])
 def test_a_separator_precedes_each_attachment(separator: str) -> None:
     output = text("# A\n\nBody.\n", **{"attachments.separator": separator})
-    assert "Attachments\n\n---\n\nSchedule A\nFile: a.lgd\n\n---\n\nSchedule B\nFile: b.pdf\n" in output
+    # The heading stays with the first attachment; a rule falls before it and between attachments.
+    assert "Body.\n\n---\n\nAttachments\n\nSchedule A\nFile: a.lgd\n\n---\n\nSchedule B\nFile: b.pdf\n" in output
 
 
-def test_none_prints_no_separator_between_or_before_attachments() -> None:
+def test_none_prints_no_separator_around_attachments() -> None:
     output = text("# A\n\nBody.\n", **{"attachments.separator": "none"})
     assert "Body.\n\nAttachments\n\nSchedule A\nFile: a.lgd\n\nSchedule B\nFile: b.pdf\n" in output
     # The one `---` left is the one before the signatures.
@@ -57,7 +58,7 @@ def test_none_prints_no_separator_between_or_before_attachments() -> None:
 
 
 def test_the_default_style_separates_attachments() -> None:
-    assert text("# A\n\nBody.\n").count("---") >= 2
+    assert text("# A\n\nBody.\n").count("---") == 3  # heading, between attachments, signatures
 
 
 def test_the_writer_needs_no_style_and_defaults_to_the_default_styles_separator() -> None:
@@ -148,3 +149,23 @@ def test_a_label_still_prefixes_its_value() -> None:
     output = text("# A\n\nBody.\n")
     assert "Registration No.: DE-1" in output
     assert "Effective date: June 1, 2026" in output
+
+
+def test_a_blanked_signature_label_prints_the_value_alone() -> None:
+    body = "# A\n\nBody.\n"
+    output = text(body, **{"labels.signature_name": "", "labels.signature_title": ""})
+    assert "Name:" not in output and "Title:" not in output
+    assert "Date:\nPlace:" in output
+
+
+def test_a_signature_row_with_no_label_and_no_value_is_omitted() -> None:
+    output = text("# A\n\nBody.\n", **{"labels.signature_date": "", "labels.signature_place": ""})
+    assert output.endswith("______________________________\nName:\nTitle:\n")
+    assert "\n:" not in output
+
+
+def test_a_blanked_signature_label_with_a_representative_shows_the_name() -> None:
+    source = FRONT.replace("identification_number: DE-1", "representatives:\n          - name: John Smith\n"
+                           "            title: CEO") + "# A\n\nBody.\n"
+    output = render(source, format="text", overrides={"labels.signature_name": "", "labels.signature_title": ""}).output
+    assert "______________________________\nJohn Smith\nCEO\nDate:\nPlace:\n" in output

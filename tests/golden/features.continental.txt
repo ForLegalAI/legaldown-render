@@ -65,9 +65,9 @@ This Services Agreement (this Agreement) is made between Acme and Beta Industrie
 
 (2) Raw HTML is dropped. A safe link <https://example.com> stays; an unsafe one does not.
 
-Attachments
-
 ---
+
+Attachments
 
 Schedule A: Service Description
 File: attachments/service-description.lgd

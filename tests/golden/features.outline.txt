@@ -65,9 +65,9 @@ These are deliberately wrong: [BROKEN REF: nowhere], [UNDEFINED: nothing], [INVA
 
 Raw HTML is dropped. A safe link <https://example.com> stays; an unsafe one does not.
 
-Attachments
-
 ---
+
+Attachments
 
 Schedule A: Service Description
 File: attachments/service-description.lgd

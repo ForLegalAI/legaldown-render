@@ -99,9 +99,10 @@ class TextWriter:
     """Writes a resolved tree as plain text.
 
     *attachment_separator* is the style's ``attachments.separator`` (§13.8):
-    ``none`` prints nothing between attachments; ``rule`` and ``page-break``
-    both print a ``---`` line before each attachment, as plain text has no
-    pages to break. The default is the default style's value.
+    ``none`` prints no ``---`` at all; ``rule`` and ``page-break`` both print
+    one before the attachments heading and between consecutive attachments, as
+    plain text has no pages to break (the HTML layout: the heading stays with
+    the first attachment). The default is the default style's value.
     """
 
     extension = "txt"
@@ -142,9 +143,11 @@ class TextWriter:
                 chunks.append(f"[{section.condition_label}]")
             chunks += [self.block(block) for block in section.blocks]
         if tree.attachments:
+            if self.attachment_separator != "none":
+                chunks.append("---")
             chunks.append(tree.attachments_label)
-            for attachment in tree.attachments:
-                if self.attachment_separator != "none":
+            for index, attachment in enumerate(tree.attachments):
+                if index and self.attachment_separator != "none":
                     chunks.append("---")
                 lines = [inline_text(attachment.title)]
                 if attachment.condition_label:
@@ -225,15 +228,19 @@ class TextWriter:
 
     def signature(self, signature: SignatureParty, labels: dict[str, str], colon: str) -> str:
         lines = [inline_text(signature.side), inline_text(signature.name)]
+
+        def row(key: str, value: str = "", *, strip: str | None = " ") -> list[str]:
+            # A blanked label leaves the value alone; a row with neither is
+            # omitted. Date and place keep a no-break space of the colon (their
+            # value is to be written in); name and title lose all trailing space.
+            line = _labelled(labels[key], colon, value).rstrip(strip)
+            return [line] if line.strip() else []
+
         # With no declared representative, one blank signing line.
         for name, title in signature.signatories or (((), ()),):
-            lines += [
-                "",
-                "_" * 30,
-                f"{labels['name']}{colon}{inline_text(name)}".rstrip(),
-                f"{labels['title']}{colon}{inline_text(title)}".rstrip(),
-            ]
-        lines += [f"{labels['date']}{colon}".rstrip(" "), f"{labels['place']}{colon}".rstrip(" ")]
+            lines += ["", "_" * 30, *row("name", inline_text(name), strip=None),
+                      *row("title", inline_text(title), strip=None)]
+        lines += [*row("date"), *row("place")]
         return "\n".join(lines)
 
 
