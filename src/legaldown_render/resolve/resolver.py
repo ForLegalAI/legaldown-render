@@ -18,7 +18,8 @@ failures shown here, so the resolver only adds the diagnostics that need a
 style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
 and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
 ``render-link-refused`` for a link whose URL scheme is not one links may use
-(§8.7), and ``path-not-relative`` for an image whose path is not relative (§2.3), which
+(§8.7), ``render-term-too-long`` for a term whose text is longer than a
+``{{term:}}`` may show, and ``path-not-relative`` for an image whose path is not relative (§2.3), which
 the validator does not check yet.
 """
 from __future__ import annotations
@@ -113,6 +114,15 @@ _MALFORMED = {
     "include": "[NOT PROCESSED: include]",
 }
 
+
+#: The longest plain text a ``{{term:}}`` may show, in characters. No real
+#: defined term comes near it; one longer is a term that reads other terms
+#: that read other terms (each reference repeating the text of the next, so a
+#: short document can ask for a text of 2**n words), and its reference shows
+#: the definition id instead (``render-term-too-long``). Checked as each term
+#: text is built, so no text grows past the source plus the nested references
+#: times this.
+_MAX_TERM_TEXT = 1000
 
 #: How many texts (one per different set of open terms around it) are kept for
 #: one term, so that a pathological tangle of cycles cannot fill memory.
@@ -675,7 +685,9 @@ class Resolver:
         definition inside a term keeps its place in document order. The
         definition is open meanwhile, so a ``{{term:}}`` inside it, directly or
         through others, shows its label or id and goes no further (see
-        :meth:`_while_open`)."""
+        :meth:`_while_open`). A text longer than :data:`_MAX_TERM_TEXT` is the
+        definition id instead, and the Warning ``render-term-too-long`` says
+        so, once per id."""
         source = self.term_sources.get(definition_id)
         if source is None:
             return ""
@@ -683,12 +695,21 @@ class Resolver:
 
         def work() -> str:
             if not known:
-                return self._title_text(source.children)
-            anchors = set(self.used_anchors)
-            try:
-                return plain_text(self._resolve_inlines(source.children))
-            finally:
-                self.used_anchors = anchors
+                text = self._title_text(source.children)
+            else:
+                anchors = set(self.used_anchors)
+                try:
+                    text = plain_text(self._resolve_inlines(source.children))
+                finally:
+                    self.used_anchors = anchors
+            if len(text) > _MAX_TERM_TEXT:
+                self._warn(
+                    "render-term-too-long",
+                    f"The term of '{printable(definition_id)}' is longer than {_MAX_TERM_TEXT} characters once its "
+                    f"references are resolved; '{{{{term: {printable(definition_id)}}}}}' shows the definition id.",
+                )
+                return definition_id
+            return text
 
         return self._while_open(self.term_texts if known else self.term_texts_early, definition_id, work)
 

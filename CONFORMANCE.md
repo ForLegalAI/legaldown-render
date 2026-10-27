@@ -100,7 +100,11 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   rendered without looping: the inner reference shows its `label=`, else the definition id. A term text
   worked out inside a cycle depends on which terms are open, so a text with
   a cut at a term open outside it is reused only where the same of its terms are open; every other text
-  is worked out once per term, also in a heading read before the targets are known (§13.3). The
+  is worked out once per term, also in a heading read before the targets are known (§13.3). A term text is capped at 1,000 characters
+  of plain text, checked as it is built (no real defined term comes near it; a chain of terms that each
+  read the next twice would otherwise ask for a text of 2^n words): a longer one is shown by its
+  definition id in `{{term:}}` (a `label=` still wins), and the Warning `render-term-too-long` names the
+  id, once. The
   validator (0.4.0) does not report these cycles; the specification's `definition-circular`
   Warning (§16) is not emitted yet.
 - **Ambiguous references.** Each list starts again at its first number, as contracts are usually

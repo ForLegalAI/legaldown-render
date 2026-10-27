@@ -195,3 +195,56 @@ def test_a_chain_without_a_cycle_reads_as_each_term_does() -> None:
     # t1 as used inside t0 is the same text as at t1's own definition.
     site = next(line for line in lines if line.startswith("T1 "))
     assert used == f"Used: T0 {site} {site}"
+
+
+# -- 4b: a term text is capped ----------------------------------------------------
+
+
+def _warnings(body: str, **settings: object) -> list[str]:
+    return [d.message for d in render(FRONT + body, format="text", **settings).diagnostics
+            if d.rule == "render-term-too-long"]
+
+
+@pytest.mark.parametrize(("n", "cycle"), [(40, False), (14, True)])
+@pytest.mark.parametrize("scheme", ["decimal", "none"])
+def test_a_branching_chain_of_terms_is_capped_and_reported(n: int, cycle: bool, scheme: str) -> None:
+    started = time.perf_counter()
+    result = render(FRONT + _chain(n, cycle=cycle, heading=True), format="text",
+                    overrides={"numbering.scheme": scheme})
+    assert time.perf_counter() - started < 2
+    assert len(result.output) < 100_000
+    messages = [d.message for d in result.diagnostics if d.rule == "render-term-too-long"]
+    assert messages
+    assert len(messages) == len(set(messages))  # one per id
+    assert all("longer than 1000 characters" in message and "shows the definition id" in message
+               for message in messages)
+    assert "{{" not in result.output
+
+
+def test_a_term_over_the_cap_shows_its_id_and_one_warning_names_it() -> None:
+    long_term = "word " * 250
+    body = f'# A\n\n"{long_term}" {{{{def: big}}}}\n\nSee {{{{term: big}}}} and {{{{term: big}}}}.\n'
+    out = text(body)
+    assert "See big and big." in out
+    assert _warnings(body) == [
+        "The term of 'big' is longer than 1000 characters once its references are resolved; "
+        "'{{term: big}}' shows the definition id."]
+
+
+def test_a_label_still_wins_over_the_cap() -> None:
+    body = '# A\n\n"' + "word " * 250 + '" {{def: big}}\n\nSee {{term: big, label=Big}}.\n'
+    assert "See Big." in text(body)
+
+
+def test_a_term_at_the_cap_is_shown_whole() -> None:
+    term = "x" * 1000
+    body = f'# A\n\n"{term}" {{{{def: edge}}}}\n\nSee {{{{term: edge}}}}.\n'
+    assert f"See {term}." in text(body)
+    assert _warnings(body) == []
+
+
+def test_a_normal_nested_term_is_unaffected() -> None:
+    body = ('# A\n\n"Company" {{def: company}}\n\n"Affiliate of the {{term: company}}" {{def: affiliate}}\n\n'
+            'See {{term: affiliate}}.\n')
+    assert "See Affiliate of the Company." in text(body)
+    assert _warnings(body) == []

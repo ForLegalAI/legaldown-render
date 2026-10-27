@@ -239,7 +239,7 @@ turns into an error.
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
 `ref-not-enumerated` and `path-not-relative` (an Error for an image path that is not relative, §2.3,
 reported here because validator 0.4 does not check image paths), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), and `render-ref-ambiguous`. The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
 diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
 have none yet: they are about a directive within a block, and the validator makes only a block's
 line public (`Document.line_of`, U2).
