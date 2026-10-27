@@ -156,7 +156,7 @@ preamble, which has no section, `{section}` is empty and it is removed together 
 it, so `label: "{section}.{n}"` shows "1", not ".1". For example, decimal headings use
 `label: "{path}"` and `ref: ".{n}"`. Legal enumeration uses `label: "({n})"` and `ref: "({n})"`, so the
 second item of Section 2.3 is shown as "(b)" and
-referenced as "2.3(b)". Under the `none` scheme, designations are heading text, and item pieces
+referenced as "2.3(b)". Under the `none` scheme, designations are heading text as rendered (references and terms in it resolved), and item pieces
 are set off by a space ("Termination (a)", §13.3).
 
 ### Text templates and their fields
