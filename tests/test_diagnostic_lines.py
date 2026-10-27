@@ -247,14 +247,93 @@ def test_a_finding_in_a_party_or_a_side_is_at_its_key() -> None:
     result = render(SIDES)
     found = {d.message.split("{{include: ")[1][:5]: d.line for d in result.diagnostics
              if d.rule == "render-not-processed"}
-    # A party's detail is at the party; a side's label, at its label key.
-    assert found == {"l.lgd": at(SIDES, 'label: "Seller'), "a.lgd": at(SIDES, "name: acme"),
-                     "b.lgd": at(SIDES, "name: bob")}
+    # A party's address is at its own key; a side's label, at its label key.
+    assert found == {"l.lgd": at(SIDES, 'label: "Seller'), "a.lgd": at(SIDES, 'address: "Street'),
+                     "b.lgd": at(SIDES, 'address: "Road')}
 
 
 def test_signature_blocks_are_not_a_second_report() -> None:
     result = render(SIDES, overrides={"signatures.enabled": True})
     assert len(lines_of(result, "render-not-processed")) == 3
+
+
+# Each field of a party, with its own include: the field's key is its line, and a
+# custom field is at its key (keyed in the party) or at its ``value`` (listed).
+PARTY_FIELDS = """---
+title: T
+document_type: contract
+sides:
+  - name: seller
+    label: Seller
+    parties:
+      - name: acme
+        legal_name: "Acme {{include: legal.lgd}}"
+        type: legal_entity
+        identification_number: "ID {{include: ident.lgd}}"
+        address: "Street {{include: addr.lgd}}"
+        Passport: "Pass {{include: keyed.lgd}}"
+        custom_fields:
+          - label: Extra
+            value: "Extra {{include: listed.lgd}}"
+        representatives:
+          - name: "Rep {{include: repname.lgd}}"
+            title: "Title {{include: reptitle.lgd}}"
+  - name: buyer
+    label: Buyer
+    parties:
+      - name: bob
+        label: "Bob {{include: label.lgd}}"
+        type: natural_person
+        date_of_birth: "{{include: dob.lgd}}"
+---
+
+# A
+"""
+
+
+def test_a_finding_in_a_party_field_is_at_that_field() -> None:
+    result = render(PARTY_FIELDS, overrides={"signatures.enabled": True})
+    found = {_included(d): d.line for d in result.diagnostics if d.rule == "render-not-processed"}
+    assert found == {
+        "legal.lgd": at(PARTY_FIELDS, "legal_name:"),
+        "ident.lgd": at(PARTY_FIELDS, "identification_number:"),
+        "addr.lgd": at(PARTY_FIELDS, "address:"),
+        "keyed.lgd": at(PARTY_FIELDS, "Passport:"),
+        "listed.lgd": at(PARTY_FIELDS, "value: \"Extra"),
+        "repname.lgd": at(PARTY_FIELDS, 'name: "Rep'),
+        "reptitle.lgd": at(PARTY_FIELDS, 'title: "Title'),
+        "label.lgd": at(PARTY_FIELDS, "label: \"Bob"),
+        "dob.lgd": at(PARTY_FIELDS, "date_of_birth:"),
+    }
+
+
+MERGED = """---
+title: T
+document_type: contract
+defaults: &d
+  address: "Street {{include: addr.lgd}}"
+sides:
+  - name: seller
+    label: Seller
+    parties:
+      - name: acme
+        <<: *d
+        legal_name: Acme
+        type: legal_entity
+---
+
+# A
+"""
+
+
+def test_a_party_field_merged_in_is_where_the_source_writes_it() -> None:
+    # The address is merged in (``<<``): it is written where it is defined.
+    [found] = [d for d in render(MERGED).diagnostics if d.rule == "render-not-processed"]
+    assert found.line == at(MERGED, "address:")
+
+
+def _included(found) -> str:  # type: ignore[no-untyped-def]
+    return found.message.split("{{include: ")[1].split("}}")[0]
 
 
 def test_key_line_is_general_and_none_without_a_source() -> None:

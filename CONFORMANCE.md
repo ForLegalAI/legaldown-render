@@ -66,8 +66,10 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   the renderer's do, until [validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93).
   Findings about frontmatter are at the line of their key: the `language` key for
   `render-locale-fallback` of the document's language, and the `title`, `subtitle`, `version`,
-  `effective_date`, `sides[].label` and `sides[].parties[]` key (a party's details, name and
-  signatories are all at the party's key) or `attachments[].title` for a directive in that value
+  `effective_date`, `sides[].label`, a field of a party (`legal_name`, `label`, `address`,
+  `identification_number`, `date_of_birth`, a custom field, a representative's `name` or `title`:
+  each at its own key, or where the source writes the value, as with a `<<` merge; the party's key
+  where it writes none) or `attachments[].title` for a directive in that value
   (also where the body shows it, as `{{attach:}}` or `{{party:}}` do). A finding in a term's text
   is at the term's definition, whichever reference asks for it first; `render-term-limit` is at the
   definition being worked out when the limit was reached. The same finding (rule, level and

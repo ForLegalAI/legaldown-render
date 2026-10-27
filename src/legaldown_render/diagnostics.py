@@ -37,6 +37,13 @@ class KeyLines:
         line = self._map.key(*path) if self._map is not None else None
         return line if isinstance(line, int) else None
 
+    def has(self, *path: Any) -> bool:
+        """True if the document's source writes the frontmatter node at *path*,
+        as a key or a value (a value merged in with ``<<`` is written where it
+        is defined). A node that is not written has the line of the key above
+        it when asked for (``__call__``)."""
+        return self._map is not None and path in self._map.keys
+
 
 def key_line(document: Document, *path: Any) -> int | None:
     """``KeyLines(document)(*path)``, for a single lookup."""
