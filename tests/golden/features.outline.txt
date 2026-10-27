@@ -47,7 +47,7 @@ III. Fees
 The Client shall pay $10,000.00 per month, and €1,234.50 for setup, within 30 days of July 1, 2026. The Provider's VAT number is DE123456789.
 
 | Service | Fee | Notes |
-|---|---|---|
+|:---|---:|:---:|
 | Hosting | $500.00 | per month |
 | Support | $250.75 | see III |
 
@@ -71,6 +71,8 @@ Attachments
 
 Schedule A: Service Description
 File: attachments/service-description.lgd
+
+---
 
 Exhibit 1: Price List
 File: attachments/price-list.pdf

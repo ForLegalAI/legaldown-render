@@ -766,7 +766,8 @@ def test_the_first_definition_in_document_order_keeps_the_anchor() -> None:
 
 def test_nested_lists_line_up_with_their_item_s_text() -> None:
     output = text("# A\n\n1. one\n\n   more\n\n   - child\n")
-    assert "1. one\n   more\n   (i) child" in output
+    # Blocks of an item are set apart (W5); a nested list stays tight under its paragraph.
+    assert "1. one\n\n   more\n   (i) child" in output
 
 
 def _nested_list(levels: int) -> str:
@@ -978,7 +979,7 @@ def test_a_later_paragraph_in_a_list_item_is_the_item_s() -> None:
     # its marker is misplaced (§5.7) and a reference to it is broken, as the
     # validator reports.
     result = render(FRONT + "# A\n\n- item one\n\n  second {#sec}\n\nSee {{ref: sec}}.\n", format="text")
-    assert "(a) item one\n    second" in result.output
+    assert "(a) item one\n\n    second" in result.output
     assert "[BROKEN REF: sec]" in result.output
     assert {"anchor-misplaced", "ref-broken"} <= {d.rule for d in result.diagnostics}
 
@@ -1080,7 +1081,8 @@ def test_template_decision_is_the_validators() -> None:
 def test_a_heading_in_a_quote_or_item_is_a_bold_line_not_a_section() -> None:
     result = render(FRONT + "# A\n\n> # Inner\n> text\n\n- ## Item heading\n\n> title: x\n> ---\n> after\n",
                     format="text")
-    assert "\n\n> Inner\n\n> text\n\n(a) Item heading\n\n> title: x\n\n> after\n" in result.output
+    # One quote stays one quote: its blank line keeps the `>` (W5).
+    assert "\n\n> Inner\n>\n> text\n\n(a) Item heading\n\n> title: x\n>\n> after\n" in result.output
     assert [s.designation for s in result.tree.sections] == ["1"]
     html = render(FRONT + "# A\n\n> # Inner\n", standalone=False).output
     assert "<strong>Inner</strong>" in html
