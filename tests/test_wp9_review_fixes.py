@@ -96,3 +96,24 @@ def test_cycles_through_refs_still_terminate(output_format: str) -> None:
     assert "{{" not in out
     # Which term shows what inside a cycle follows the order they are first needed in.
     assert "A b 1" in out and "C c" in out
+
+
+# -- 2: a fraction beyond Python's int/str digit limit ---------------------------
+
+LONG = "2" * 4400
+
+
+def test_a_duration_with_a_4400_digit_fraction_renders() -> None:
+    output = render(FRONT + f"# A\n\n{{{{duration: 1.{LONG}, unit=D}}}}", format="text").output
+    assert f"1.{LONG} days" in output
+
+
+def test_a_money_amount_in_name_mode_with_a_4400_digit_fraction_renders() -> None:
+    output = render(FRONT + f"# A\n\n{{{{money: 1.{LONG}, currency=EUR}}}}", format="text",
+                    overrides={"values.money": "name"}).output
+    assert f"1.{LONG} euros" in output
+
+
+def test_a_4400_digit_fraction_uses_the_other_category_in_czech() -> None:
+    output = render(FRONT + f"# A\n\n{{{{duration: 1.{LONG}, unit=Y}}}}", format="text", locale="cs-CZ").output
+    assert output.rstrip().endswith(" let")  # "other", not the "many" of "2,5 roku"

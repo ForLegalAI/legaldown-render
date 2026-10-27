@@ -20,7 +20,14 @@ from decimal import Decimal
 
 from babel import Locale, UnknownLocaleError
 from babel.dates import format_date
-from babel.numbers import format_currency, get_currency_precision, parse_pattern
+from babel.numbers import (
+    NumberPattern,
+    format_currency,
+    get_currency_name,
+    get_currency_precision,
+    get_currency_unit_pattern,
+    parse_pattern,
+)
 
 from ..errors import InternalError
 from ..style.model import Values
@@ -100,6 +107,22 @@ def _unit_patterns(locale: Locale, unit_id: str, length: str) -> dict[str, str]:
     return {category: pattern for category, pattern in patterns.items() if category != "per"}
 
 
+def _plural_category(locale: Locale, value: Decimal) -> str:
+    """The CLDR plural category of *value* in *locale*.
+
+    CLDR's plural operands of a value are its integer and fraction digits read
+    as integers, and Python refuses to convert a string of more than 4300 digits
+    to an int (``ValueError``). Such a value is a non-integer or a very long
+    integer whose category cannot be computed under that limit, and ``other`` is
+    the category CLDR gives non-integers in nearly every locale, so ``other`` it
+    is. The limit is not raised: ``sys.set_int_max_str_digits`` is process-wide.
+    """
+    try:
+        return locale.plural_form(value)
+    except ValueError:
+        return "other"
+
+
 def _duration_pattern(locale: Locale, unit_id: str, length: str, value: Decimal) -> tuple[str, bool]:
     """The CLDR pattern for a duration of *value*, and whether it is English
     for a locale that is not.
@@ -117,14 +140,14 @@ def _duration_pattern(locale: Locale, unit_id: str, length: str, value: Decimal)
     if language is not None and str(language) != str(locale):
         candidates.append(language)
     for candidate in candidates:
-        category = candidate.plural_form(value)
+        category = _plural_category(candidate, value)
         for each in lengths:
             patterns = _unit_patterns(candidate, unit_id, each)
             pattern = patterns.get(category) or patterns.get("other")
             if pattern:
                 return pattern, False
     english = Locale("en")
-    category = english.plural_form(value)
+    category = _plural_category(english, value)
     for each in lengths:
         patterns = _unit_patterns(english, unit_id, each)
         pattern = patterns.get(category) or patterns.get("other")
@@ -183,14 +206,29 @@ class Formatter:
         pattern = parse_pattern(source)
         digits = max(get_currency_precision(currency), len(amount.partition(".")[2]))
         pattern.frac_prec = (digits, digits)
-        text = format_currency(value, currency, format=pattern, locale=self.locale, currency_digits=False,
-                               format_type="name" if mode == "name" else "standard",
-                               decimal_quantization=False)
         if mode == "name":
-            return text
+            return self._money_name(value, currency, pattern)
+        text = format_currency(value, currency, format=pattern, locale=self.locale, currency_digits=False,
+                               format_type="standard", decimal_quantization=False)
         # CLDR spaces an alphabetic symbol or code from the digits, on
         # whichever side it stands ("USD 10,000.00", "10 000,00 CZK").
         return _LETTER_DIGIT.sub("\u00a0", text)
+
+    def _money_name(self, value: Decimal, currency: str, pattern: NumberPattern) -> str:
+        """*value* with the currency's name ("1,234.50 euros"), through Babel
+        unless the plural category of *value* cannot be computed (see
+        :func:`_plural_category`): Babel's own lookup of the unit pattern would
+        then fail, so the ``other`` pattern and name are put together here, the
+        way Babel does it (``_format_currency_long_name``)."""
+        try:
+            self.locale.plural_form(value)
+        except ValueError:
+            number = pattern.apply(value, self.locale, currency=currency, currency_digits=False,
+                                   decimal_quantization=False)
+            unit_pattern = get_currency_unit_pattern(currency, locale=self.locale)
+            return unit_pattern.format(number, get_currency_name(currency, count=value, locale=self.locale))
+        return format_currency(value, currency, format=pattern, locale=self.locale, currency_digits=False,
+                               format_type="name", decimal_quantization=False)
 
     def duration(self, value: str, unit: str) -> str:
         """A duration (already validated) such as "12 months" or "12 měsíců"."""
