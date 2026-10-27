@@ -19,7 +19,9 @@ style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
 and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
 ``render-link-refused`` for a link whose URL scheme is not one links may use
 (§8.7), ``render-term-too-long`` for a term whose text is longer than a
-``{{term:}}`` may show, ``render-term-limit`` for terms that refer to each other too deeply or too often,
+``{{term:}}`` may show, ``render-term-limit`` for terms that refer to each other too deeply or too often
+(or are nested too deeply inside one another's formatting), ``render-designation-cycle`` and
+``render-designation-limit`` for headings that cannot be designated in full under the ``none`` scheme (§13.3),
 and the two file-reference rules of §2.3, which the validator does not check yet:
 ``path-not-relative`` for a path with a URI scheme or an absolute one, and
 ``path-outside-root`` for one that leaves the document root, when a root is
@@ -163,6 +165,42 @@ _MAX_TERM_DEPTH = 32
 #: one term, so that a pathological tangle of cycles cannot fill memory.
 _TERM_TEXTS_PER_TERM = 32
 
+#: The most inline levels (emphasis, links, a term's text, a heading read for a
+#: reference) resolved inside one another where one unit is read inside another,
+#: which is where the Python stack can run out: the builder allows 100 levels in
+#: one block (``build.MAX_NESTING``), but terms read inside terms, and headings
+#: read through the references in other headings, stack one block's levels on
+#: another's. A ``{{term:}}`` met inside an open term, or while designations are
+#: worked out, that is nested this deep shows its label or id
+#: (``render-term-limit``); a heading this deep stops reading others
+#: (``render-designation-limit``). A single block's nesting, up to the
+#: builder's limit, never reaches it.
+_MAX_NEST = 60
+
+#: Under the ``none`` scheme (§13.3) a section is designated by its heading with
+#: the references in it resolved. The most headings read inside one another (a
+#: heading that refers to a heading that refers to...), so that a long chain
+#: does not exhaust the stack; and the longest designation: a heading that
+#: reads longer once its references are resolved (``# H1 {{ref: h2}} {{ref:
+#: h2}}`` down a chain would otherwise grow as 2**n) is designated by its text
+#: without them, and a reference never shows more than this many characters.
+_MAX_DESIGNATION_DEPTH = 32
+_MAX_DESIGNATION_TEXT = 1000
+
+_DESIGNATION_LIMIT = (
+    f"Headings and the terms in them refer to each other too deeply or too often (more than "
+    f"{_MAX_DESIGNATION_DEPTH} headings, or terms or formatting nested too far), or a heading reads longer than "
+    f"{_MAX_DESIGNATION_TEXT} characters once its references are resolved; under the none scheme such a heading is "
+    f"designated by its text as written, without the references in it, and a reference shows at most its first "
+    f"{_MAX_DESIGNATION_TEXT} characters."
+)
+
+#: What a reference can be resolved from: before the targets are known, only the
+#: headings' own text; then, under the ``none`` scheme, the designations of the
+#: headings that refer to each other being worked out; then everything (see
+#: ``Resolver.run``).
+_EARLY, _DESIGNATING, _FINAL = range(3)
+
 
 class _TermText(NamedTuple):
     """A term's text, the terms it named, and those it was cut short at
@@ -184,6 +222,12 @@ class _Target:
     enumerated: bool = True
     #: The numbered unit the anchor is on, for render-ref-ambiguous.
     slot: _Slot | None = None
+    #: The section the anchor is in (a section's own index), None in the preamble.
+    section_index: int | None = None
+    #: For an item or paragraph: the (``ref`` template, counter text) of each
+    #: level below the section, so that its designation can be put together
+    #: again on another section designation (see ``_compose``).
+    parts: tuple[tuple[str, str], ...] = ()
 
 
 class Resolver:
@@ -232,6 +276,8 @@ class Resolver:
         # The same for the text-only pass before the targets are known, and
         # for the validator's term text where a definition is not in the body.
         self.term_texts_early: dict[str, list[_TermText]] = {}
+        # And for the text-only pass that works out designations (see _designate).
+        self.term_texts_designating: dict[str, list[_TermText]] = {}
         self.term_texts_plain: dict[str, list[_TermText]] = {}
         # The definitions whose term text is being worked out, so that a
         # {{term:}} inside a term, directly or through other terms, cannot
@@ -245,9 +291,24 @@ class Resolver:
         # Inline nodes resolved inside repeat computations (see _while_open).
         self._term_work = 0
         self._repeating = 0
-        # False until every target is registered and the placeholder types are
-        # known (run() sets it just before the inlines are resolved).
-        self._targets_known = False
+        # What a reference can be resolved from (see run()).
+        self._stage = _EARLY
+        # Inline levels being resolved inside one another (see _MAX_NEST).
+        self._nest = 0
+        # Under the none scheme, while designations are worked out (see
+        # _designate): each section's designation (None until known), its
+        # text-only reading, its title, the sections open inside one another,
+        # the sections a reference came back to, and whether a limit was hit
+        # (and in which section first).
+        self._memo: list[str | None] = []
+        self._provisional: list[str] = []
+        self._titles: list[tuple[Inline, ...]] = []
+        self._stack: list[int] = []
+        self._cycles: list[int] = []
+        self._limited = False
+        self._limited_at: int | None = None
+        # The section being structured, for the targets it holds.
+        self._section_index: int | None = None
         self.attachment_anchors: dict[str, str | None] = {}
         self.section_presences: list[Presence] = []
 
@@ -257,13 +318,21 @@ class Resolver:
         self._references()
         self._survey()
         attachments = self._attachments()
-        sections = self._number_sections()
-        preamble = tuple(self._structure(block, section=None, depth=0, presence=ALWAYS) for block in self.tree.preamble)
-        sections = tuple(
-            replace(section, blocks=self._structure_section(section, presence))
-            for section, presence in zip(sections, self.section_presences, strict=True)
-        )
-        self._targets_known = True
+        anchors = set(self.used_anchors)
+        sections, preamble = self._structure_all(None)
+        if self.textual and self._reads_references(sections):
+            # §13.3: a section is designated by its heading as rendered, which
+            # may hold references to sections, items and paragraphs, all
+            # numbered by now under their provisional (text-only)
+            # designations. Work the final ones out, and where any differs
+            # number everything again on them: the anchors come out the same,
+            # since which unit gets which depends on identifiers and order alone.
+            designations = self._designate(sections)
+            if designations != [section.designation for section in sections]:
+                self.used_anchors = anchors
+                self.targets, self.designation_slots, self.section_presences = {}, {}, []
+                sections, preamble = self._structure_all(designations)
+        self._stage = _FINAL
         resolve = self._resolve_inlines
         # In document order, so that the first of several definitions of a
         # term is the one that keeps its anchor.
@@ -302,6 +371,133 @@ class Resolver:
         # given an anchor: definitions in titles or alt text are not, and a
         # definition may live in an attachment or an amended original.
         return map_tree_inlines(resolved, self._settle_term_target)
+
+    def _structure_all(self, designations: list[str] | None) -> tuple[tuple[Section, ...], tuple[Block, ...]]:
+        """The preamble and the sections, numbered and labelled; under the
+        ``none`` scheme with the section *designations* worked out by
+        :meth:`_designate`, or else the headings' text alone."""
+        sections = self._number_sections(designations)
+        self._section_index = None
+        preamble = tuple(self._structure(block, section=None, depth=0, presence=ALWAYS) for block in self.tree.preamble)
+        out: list[Section] = []
+        for index, (section, presence) in enumerate(zip(sections, self.section_presences, strict=True)):
+            self._section_index = index
+            out.append(replace(section, blocks=self._structure_section(section, presence)))
+        self._section_index = None
+        return tuple(out), preamble
+
+    # -- designations under the none scheme (§13.3) ------------------------------
+
+    def _reads_references(self, sections: tuple[Section, ...]) -> bool:
+        """True if a section's designation may depend on a ``{{ref:}}``: one
+        stands in a heading or in the text of a term the headings use,
+        directly or through other terms, or in the validator's own text of
+        such a term (read where the definition is not in the body). Without
+        one, the text-only reading of a heading is its designation."""
+        lookup = self.result.index.definition_lookup
+        seen: set[str] = set()
+        pending = [section.title for section in sections]
+        while pending:
+            for inline in _walk(pending.pop()):
+                if not isinstance(inline, DirectiveSource):
+                    continue
+                directive = inline.directive
+                if directive.name == "ref":
+                    return True
+                if directive.name == "term" and directive.positional and directive.positional not in seen:
+                    seen.add(directive.positional)
+                    source = self.term_sources.get(directive.positional)
+                    if source is not None:
+                        pending.append(source.children)
+                    if "{{" in (lookup.get(directive.positional) or ""):
+                        return True
+        return False
+
+    def _designate(self, sections: tuple[Section, ...]) -> list[str]:
+        """The designation of every section under the ``none`` scheme: its
+        heading as rendered, plain, with the references and terms in it
+        resolved (§13.3). Each is worked out once, by a depth-first walk in
+        document order that reads the designation of a referenced heading
+        where the reference stands (:meth:`_designation`).
+
+        The walk reports nothing and gives out no anchor itself: the heading
+        is read again in its place, once every designation is known, and a
+        diagnostic about it is made there, once. The terms it works out are
+        kept apart from those of that later pass, which the designations
+        decide. What the walk could not do in full is reported here, at the
+        heading it concerns."""
+        self._provisional = [section.designation or "" for section in sections]
+        self._titles = [section.title for section in sections]
+        self._memo = [None] * len(sections)
+        self._stack, self._cycles = [], []
+        self._limited, self._limited_at = False, None
+        kept, work = list(self.diagnostics), self._term_work
+        self._stage = _DESIGNATING
+        try:
+            for index in range(len(sections)):
+                self._designation(index)
+        finally:
+            self._stage = _EARLY
+            self.diagnostics[:] = kept  # a repeat may also have lowered the line of one
+            self._term_work = work
+            self.term_texts_designating = {}
+        for index in sorted(set(self._cycles)):
+            with self._at(sections[index].line):
+                self._warn(
+                    "render-designation-cycle",
+                    f"The heading '{printable(sections[index].identifier or self._provisional[index])}' refers to "
+                    f"itself, directly or through other headings or terms; under the none scheme the reference "
+                    f"that closes the circle shows the heading without its references.",
+                )
+        if self._limited:
+            with self._at(sections[self._limited_at].line if self._limited_at is not None else self.line):
+                self._warn("render-designation-limit", _DESIGNATION_LIMIT)
+        return [memo or "" for memo in self._memo]
+
+    def _designation(self, index: int) -> str:
+        """The designation of section *index*, worked out the first time it is
+        asked for. A section that is open already (a reference that comes back
+        to a heading it is read from) reads as its text-only reading, and is
+        reported by ``render-designation-cycle``; so does one asked for past
+        :data:`_MAX_DESIGNATION_DEPTH` open sections or :data:`_MAX_NEST` levels
+        (``render-designation-limit``), which is worked out when it is next
+        reached by a shorter way, or in its turn. Neither is kept. A designation
+        that reads longer than :data:`_MAX_DESIGNATION_TEXT` characters once its
+        references are resolved is its text-only reading too, which is kept."""
+        memo = self._memo[index]
+        if memo is not None:
+            return memo
+        provisional = self._provisional[index]
+        if index in self._stack:
+            self._cycles.append(index)
+            return provisional
+        if len(self._stack) >= _MAX_DESIGNATION_DEPTH or self._nest >= _MAX_NEST:
+            self._limit_hit()
+            return provisional
+        self._stack.append(index)
+        try:
+            text = self._title_text(self._titles[index])
+        finally:
+            self._stack.pop()
+        if len(text) > _MAX_DESIGNATION_TEXT and text != provisional:
+            self._limit_hit(index)
+            text = provisional
+        self._memo[index] = text
+        return text
+
+    def _limit_hit(self, index: int | None = None) -> None:
+        """Note, while designations are worked out, that a limit was reached
+        in section *index*, else in the one being read."""
+        self._limited = True
+        if self._limited_at is None:
+            self._limited_at = index if index is not None else self._stack[-1] if self._stack else None
+
+    def _designation_of(self, target: _Target) -> str:
+        """What a reference to *target* reads as while designations are worked
+        out: the designation of its section, with its item or paragraph pieces."""
+        if target.section_index is None:
+            return target.designation
+        return _compose(target.parts, self._designation(target.section_index))
 
     def _resolve_section(self, section: Section) -> Section:
         with self._at(section.line):
@@ -402,7 +598,7 @@ class Resolver:
 
     # -- structure: numbering, labels, anchors ---------------------------------
 
-    def _number_sections(self) -> list[Section]:
+    def _number_sections(self, designations: list[str] | None = None) -> list[Section]:
         """Number the sections, and record each one's presence (§15.3).
 
         The numbers are the validator's own (``result.index.sections``),
@@ -412,11 +608,15 @@ class Resolver:
         part of a number ("2.1" has two) with the n-th level format. A
         section's rendered level is how many parts its number has, so its
         number format, heading, and heading style always go together.
+
+        Under the ``none`` scheme a section's designation is given in
+        *designations* once they are worked out (:meth:`_designate`); until
+        then it is the heading's text-only reading.
         """
         levels = heading_levels(self.style.numbering)
         presences: dict[int, Presence] = {}  # level -> presence of the open section
         out: list[Section] = []
-        for section, indexed in zip(self.tree.sections, self.result.index.sections, strict=True):
+        for index, (section, indexed) in enumerate(zip(self.tree.sections, self.result.index.sections, strict=True)):
             # The heading's own level, clamped to 1-5 (§4.1), decides which
             # sections enclose it, and so its presence (§15.3).
             level = min(max(section.level, 1), 5)
@@ -426,8 +626,12 @@ class Resolver:
             self.section_presences.append(presences[level])
             parts = [int(part) for part in indexed.number.split(".")]
             if self.textual:
-                with self._at(section.line):
-                    label, designation = None, self._title_text(section.title)
+                label = None
+                if designations is not None:
+                    designation = designations[index]
+                else:
+                    with self._at(section.line):
+                        designation = self._title_text(section.title)
             else:
                 designation = ""
                 for position, counter in enumerate(parts):
@@ -440,7 +644,7 @@ class Resolver:
             # Sections with one number are alternatives (the validator's).
             slot = _Slot(_SECTIONS, indexed.number, presences[level], "section", section.identifier)
             self._record(designation, slot)
-            self._register(section.identifier, _Target(designation, anchor, slot=slot))
+            self._register(section.identifier, _Target(designation, anchor, slot=slot, section_index=index))
             out.append(replace(section, level=min(len(parts), 5), label=label, designation=designation,
                                anchor=anchor))
         return out
@@ -461,25 +665,32 @@ class Resolver:
     def _title_text(self, title: tuple[Inline, ...]) -> str:
         """A heading's text, as the ``none`` scheme designates it (§13.3).
 
-        A text-only pass: it gives out no anchors, and it leaves references
-        out wherever they are, since their targets are not all known yet.
-        Other directives show their display text; a defined term its term.
+        A text-only pass: it gives out no anchors. Before the designations
+        are known it leaves references out wherever they are, since their
+        targets are not all known yet, which makes it the provisional
+        designation; while they are worked out (:meth:`_designate`) a reference
+        shows the designation of its target. Other directives show their
+        display text; a defined term its term.
         """
         def text(inlines: tuple[Inline, ...]) -> str:
             parts: list[str] = []
-            for inline in inlines:
-                if self._repeating:
-                    self._term_work += 1
-                match inline:
-                    case DirectiveSource(directive=directive):
-                        if directive.name != "ref":
-                            resolved = self._directive(directive)
-                            parts.append(plain_text((resolved,)) if resolved is not None else "")
-                    case DefinitionSource(children=children) | Emphasis(children=children) \
-                            | Strong(children=children) | Link(children=children) | Image(children=children):
-                        parts.append(text(children))
-                    case _:
-                        parts.append(plain_text((inline,)))
+            self._nest += 1
+            try:
+                for inline in inlines:
+                    if self._repeating:
+                        self._term_work += 1
+                    match inline:
+                        case DirectiveSource(directive=directive):
+                            if directive.name != "ref" or self._stage == _DESIGNATING:
+                                resolved = self._directive(directive)
+                                parts.append(plain_text((resolved,)) if resolved is not None else "")
+                        case DefinitionSource(children=children) | Emphasis(children=children) \
+                                | Strong(children=children) | Link(children=children) | Image(children=children):
+                            parts.append(text(children))
+                        case _:
+                            parts.append(plain_text((inline,)))
+            finally:
+                self._nest -= 1
             return "".join(parts)
 
         return " ".join(text(title).split())
@@ -513,10 +724,11 @@ class Resolver:
             designation = extend(base, fill(fmt.ref, n=n, section=base), textual=self.textual)
             label = fill(fmt.label, n=n, section=base, path=designation)
             slot = _Slot(counter, number, presence, "paragraph", block.anchor_id)
-            target = _Target(designation, None, slot=slot)
+            target = _Target(designation, None, slot=slot, section_index=self._section_index,
+                             parts=((fmt.ref, n),))
             self._record(designation, slot)
         else:
-            label, target = None, _Target(base, None, enumerated=False)
+            label, target = None, _Target(base, None, enumerated=False, section_index=self._section_index)
         anchor = self._anchor(block.anchor_id)
         if block.anchor_id:
             self._register(block.anchor_id, replace(target, anchor=anchor))
@@ -545,7 +757,7 @@ class Resolver:
 
     def _structure_list(self, block: List, *, section: Section | None, depth: int, parent: str,
                         presence: Presence, counters: dict[tuple[str, str] | None, _Counter] | None = None,
-                        quoted: bool = False) -> List:
+                        quoted: bool = False, parts: tuple[tuple[str, str], ...] = ()) -> List:
         """*block* numbered under *parent*. Sibling lists nested in the same
         item share *counters*, one per way of writing a designation (counter
         style and reference form): a second list whose designations would
@@ -574,20 +786,22 @@ class Resolver:
                 n = format_counter(index, fmt.counter)
                 designation = extend(parent, fill(fmt.ref, n=n, section=base), textual=self.textual)
                 label = fill(fmt.label, n=n, section=base, path=designation)
-                target = _Target(designation, None)
+                item_parts = (*parts, (fmt.ref, n))
+                target = _Target(designation, None, section_index=self._section_index, parts=item_parts)
                 if not quoted:
                     slot = _Slot(counter, index, inner, "item", item.anchor_id)
                     target = replace(target, slot=slot)
                     self._record(designation, slot)
             else:
-                designation, label, target = parent, None, _Target(base, None, enumerated=False)
+                designation, label, item_parts = parent, None, parts
+                target = _Target(base, None, enumerated=False, section_index=self._section_index)
             anchor = self._anchor(item.anchor_id)
             if item.anchor_id and section is not None:
                 self._register(item.anchor_id, replace(target, anchor=anchor))
             siblings: dict[tuple[str, str] | None, _Counter] = {}
             children = tuple(
                 self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner,
-                                     counters=siblings, quoted=quoted)
+                                     counters=siblings, quoted=quoted, parts=item_parts)
                 if isinstance(child, List)
                 else self._structure(child, section=section, depth=depth + 1, presence=inner, quoted=quoted)
                 for child in item.blocks
@@ -634,12 +848,16 @@ class Resolver:
 
     def _resolve_inlines(self, inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
         out: list[Inline] = []
-        for inline in inlines:
-            resolved = self._resolve_inline(inline)
-            if isinstance(resolved, tuple):
-                out.extend(resolved)
-            elif resolved is not None:
-                out.append(resolved)
+        self._nest += 1
+        try:
+            for inline in inlines:
+                resolved = self._resolve_inline(inline)
+                if isinstance(resolved, tuple):
+                    out.extend(resolved)
+                elif resolved is not None:
+                    out.append(resolved)
+        finally:
+            self._nest -= 1
         return tuple(out)
 
     def _resolve_inline(self, inline: Inline) -> Inline | tuple[Inline, ...] | None:
@@ -697,6 +915,11 @@ class Resolver:
         target = self.targets.get(target_id)
         if target is None:
             return FailureMarker(f"[BROKEN REF: {target_id}]")
+        if self._stage == _DESIGNATING:
+            # Only the text matters: what is wrong with the reference is
+            # reported where the heading is read again, not for a designation
+            # that is still being worked out.
+            return CrossRef(self._reference_text(self._designation_of(target)), "")
         if not target.enumerated:
             self._warn(
                 "ref-not-enumerated",
@@ -705,8 +928,16 @@ class Resolver:
             )
         elif target.slot is not None and (clashes := self._clashes(target.slot, target.designation)):
             self._warn("render-ref-ambiguous", self._ambiguity_message(target_id, target, clashes))
-        text = self.style.references.format.replace("{designation}", target.designation)
-        return CrossRef(text, target.anchor or "")
+        return CrossRef(self._reference_text(target.designation), target.anchor or "")
+
+    def _reference_text(self, designation: str) -> str:
+        """What a reference shows for *designation*: at most its first
+        :data:`_MAX_DESIGNATION_TEXT` characters, so that a heading that is long
+        as written cannot be pasted unbounded by thousands of references."""
+        if len(designation) > _MAX_DESIGNATION_TEXT:
+            self._warn("render-designation-limit", _DESIGNATION_LIMIT)
+            designation = designation[:_MAX_DESIGNATION_TEXT].rstrip() + "\u2026"
+        return self.style.references.format.replace("{designation}", designation)
 
     def _record(self, designation: str, slot: _Slot) -> None:
         """Note that a numbered unit reads as *designation* (render-ref-ambiguous)."""
@@ -777,8 +1008,9 @@ class Resolver:
         Worked out the first time it is needed and kept, which is once every
         target is registered and the placeholder types are known. Before that
         (a heading read as text by the ``none`` scheme, §13.3) a text-only pass
-        stands in, which leaves references out; it is kept apart from the
-        text of the later pass. Resolving the term gives out no anchor: a
+        stands in, which leaves references out, and while designations are
+        worked out one that reads them (:meth:`_designate`); each is kept apart
+        from the text of the later pass. Resolving the term gives out no anchor: a
         definition inside a term keeps its place in document order. The
         definition is open meanwhile, so a ``{{term:}}`` inside it, directly or
         through others, shows its label or id and goes no further (see
@@ -789,13 +1021,13 @@ class Resolver:
         source = self.term_sources.get(definition_id)
         if source is None:
             return ""
-        known = self._targets_known
+        stage = self._stage
 
         def work() -> str:
             # Worked out where the term is defined, whichever reference asks
             # first, so what it reports is at the definition.
             with self._here(self.term_lines.get(definition_id)):
-                if not known:
+                if stage != _FINAL:
                     text = self._title_text(source.children)
                 else:
                     anchors = set(self.used_anchors)
@@ -813,12 +1045,13 @@ class Resolver:
                     return definition_id
                 return text
 
-        return self._while_open(self.term_texts if known else self.term_texts_early, definition_id, work)
+        cache = (self.term_texts_early, self.term_texts_designating, self.term_texts)[stage]
+        return self._while_open(cache, definition_id, work)
 
     def _plain_open(self, definition_id: str, term: str) -> str | None:
         """The validator's *term* text of a definition as plain text, with
         the definition marked open while its directives resolve."""
-        key = f"{definition_id}\0{int(self._targets_known)}"
+        key = f"{definition_id}\0{self._stage}"
         return self._while_open(self.term_texts_plain, definition_id, lambda: self._plain_value(term), key=key)
 
     def _while_open(self, cache: dict[str, list[_TermText]], definition_id: str, work: Callable[[], str],
@@ -842,10 +1075,13 @@ class Resolver:
         is limited. A text worked out when the cache already holds one for
         this term (for other open terms) is a repeat, and the inline nodes
         resolved inside a repeat, nested ones included, are counted; first
-        texts are free. Past :data:`_MAX_TERM_WORK` such nodes, or with
-        :data:`_MAX_TERM_DEPTH` terms open at once, the result is ``None`` (the
-        reference shows its label or id), and the Warning ``render-term-limit``
-        says so, once.
+        texts are free. Past :data:`_MAX_TERM_WORK` such nodes, with
+        :data:`_MAX_TERM_DEPTH` terms open at once, or inside an open term (or
+        while designations are worked out) at :data:`_MAX_NEST` levels, the
+        result is ``None`` (the reference shows its label or id), and the
+        Warning ``render-term-limit`` says so, once. While designations are
+        worked out nothing is reported there: the walk notes it
+        (:meth:`_limit_hit`), and ``render-designation-limit`` says so.
         """
         key = definition_id if key is None else key
         around = set(self._terms_open)
@@ -855,15 +1091,19 @@ class Resolver:
                 self._cut |= kept.cut
                 return kept.text
         repeat = bool(cache.get(key))
-        if len(self._terms_open) >= _MAX_TERM_DEPTH or (repeat and self._term_work >= _MAX_TERM_WORK):
+        too_nested = self._nest >= _MAX_NEST and (self._terms_open or self._stage == _DESIGNATING)
+        if len(self._terms_open) >= _MAX_TERM_DEPTH or too_nested or (repeat and self._term_work >= _MAX_TERM_WORK):
             # Terms that refer to each other this deeply or this often are
             # not resolved further: like a cut, the reference shows its label
             # or id, and nothing is kept.
-            self._warn(
-                "render-term-limit",
-                "Defined terms refer to each other too deeply or too often to resolve fully; "
-                "some {{term:}} references show their definition id.",
-            )
+            if self._stage == _DESIGNATING:
+                self._limit_hit()
+            else:
+                self._warn(
+                    "render-term-limit",
+                    "Defined terms refer to each other too deeply or too often to resolve fully; "
+                    "some {{term:}} references show their definition id.",
+                )
             return None
         self._repeating += repeat
         self._terms_open.append(definition_id)
@@ -1322,6 +1562,26 @@ class _Slot(NamedTuple):
     def key(self) -> tuple[object, object]:
         """The unit and its alternatives: its source and number."""
         return (self.source, self.number)
+
+
+def _compose(parts: tuple[tuple[str, str], ...], base: str) -> str:
+    """The designation of an item or paragraph whose pieces are *parts* in a
+    section designated *base*, under the ``none`` scheme: what
+    ``_structure_list`` and ``_number_paragraph`` write for it, for a *base*
+    that is not the one they were given."""
+    designation = base
+    for template, n in parts:
+        designation = extend(designation, fill(template, n=n, section=base), textual=True)
+    return designation
+
+
+def _walk(inlines: tuple[Inline, ...]) -> Iterator[Inline]:
+    """Every inline in *inlines*, and in the children of each."""
+    for inline in inlines:
+        yield inline
+        children = getattr(inline, "children", None)
+        if isinstance(children, tuple):
+            yield from _walk(children)
 
 
 def fill_condition(template: str, value: str, *, key: str = "condition") -> str:

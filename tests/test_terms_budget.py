@@ -203,6 +203,7 @@ def _oracle(self: Resolver, cache: object, definition_id: str, work, *, key: str
 
 def _graph(rng: random.Random) -> str:
     ids = [f"t{i}" for i in range(rng.randint(2, 6))]
+    headings = [f"h{i}" for i in range(3)]
     defs = []
     for identifier in ids:
         parts = [identifier.upper()]
@@ -210,11 +211,24 @@ def _graph(rng: random.Random) -> str:
             target = rng.choice(ids)
             parts.append(f"{{{{term: {target}, label=L{target}}}}}" if rng.random() < 0.15
                          else f"{{{{term: {target}}}}}")
+        if rng.random() < 0.3:
+            # Terms may refer to a heading, and headings to later headings and to terms, but
+            # never back: the designations of the none scheme are then the same however they
+            # are worked out (a circle through headings is read in the order it is met).
+            parts.append(f"{{{{ref: {headings[-1]}}}}}")
         defs.append(f'"{" ".join(parts)}" {{{{def: {identifier}}}}}')
     rng.shuffle(defs)
-    heading = rng.choice(["A", f"About {{{{term: {rng.choice(ids)}}}}}"])
     use = " ".join(f"{{{{term: {rng.choice(ids)}}}}}" for _ in range(rng.randint(1, 4)))
-    return f"# {heading}\n\nUsed: {use}\n\n" + "\n\n".join(defs) + "\n"
+    sections = []
+    for i, identifier in enumerate(headings):
+        title = [f"H{i}"]
+        if i < len(headings) - 1:
+            if rng.random() < 0.6:
+                title.append(f"{{{{term: {rng.choice(ids)}}}}}")
+            if rng.random() < 0.5:
+                title.append(f"{{{{ref: {rng.choice(headings[i + 1:])}}}}}")
+        sections.append(f"# {' '.join(title)} {{#{identifier}}}\n")
+    return "\n".join(sections) + f"\nUsed: {use}\n\n" + "\n\n".join(defs) + "\n"
 
 
 def test_cached_term_texts_equal_the_texts_worked_out_afresh(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,3 +297,27 @@ def test_a_chain_inside_the_depth_limit_is_resolved_in_full() -> None:
     result = render(FRONT + _line(n, heading=False), format="text")
     assert f"Used: {' '.join(f'T{i}' for i in range(n))} End" in result.output
     assert messages(result, "render-term-limit") == []
+
+
+# -- Terms inside formatting inside terms: the nesting limit ----------------------------------------
+
+
+def _nested(depth: int, inner: str) -> str:
+    out = inner
+    for i in range(depth):
+        mark = ("*", "_", "**", "__")[i % 4]
+        out = f"{mark}x {out} x{mark}"
+    return out
+
+
+@pytest.mark.parametrize("scheme", ["decimal", "none"])
+@pytest.mark.parametrize("heading", [False, True])
+def test_a_chain_of_terms_in_deep_formatting_does_not_exhaust_the_stack(scheme: str, heading: bool) -> None:
+    # The builder allows 100 levels in a block, and terms read inside terms stack them (§7.3).
+    n = 40
+    defs = "".join(f'"T{i} {_nested(60, "{{term: t" + str(i + 1) + "}}")}" {{{{def: t{i}}}}}\n\n' for i in range(n))
+    title = "A {{term: t0}}" if heading else "A"
+    body = f"# {title}\n\nUsed: {{{{term: t0}}}}\n\n{defs}" + f'"End" {{{{def: t{n}}}}}\n'
+    result = render(FRONT + body, format="text", overrides={"numbering.scheme": scheme})
+    assert "{{" not in result.output
+    assert messages(result, "render-term-limit") == [LIMIT]

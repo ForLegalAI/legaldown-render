@@ -430,6 +430,13 @@ def test_a_finding_seen_again_at_a_lower_line_is_reported_at_the_lower() -> None
     assert lines_of(render(source), "render-not-processed") == [at(source, "title:")]
 
 
+def test_a_repeat_under_the_none_scheme_is_at_the_lowest_line() -> None:
+    # The heading is read for its designation and again in its place: still one finding.
+    source = '---\ntitle: "T {{include: x.lgd}}"\n---\n\n# A {{include: x.lgd}}\n\nBody {{include: x.lgd}}\n'
+    result = render(source, overrides={"numbering.scheme": "none"})
+    assert lines_of(result, "render-not-processed") == [at(source, "title:")]
+
+
 def test_the_renderers_diagnostics_are_in_the_order_of_their_lines() -> None:
     source = ('---\ntitle: "T {{include: t.lgd}}"\nsubtitle: "S {{include: s.lgd}}"\n---\n\n# A\n\n'
               "![a](/x.png)\n\nBody {{include: b.lgd}}\n")

@@ -55,7 +55,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 - **Line numbers (§16.9).** Every diagnostic names its line, the validator's and the renderer's
   own (`render-ref-ambiguous`, `ref-not-enumerated`, `render-not-processed`,
   `render-link-refused`, `path-not-relative`, `path-outside-root`, `render-term-limit`, `render-term-too-long`,
-  `render-locale-fallback`), and the CLI prints it as `file:line:`. The renderer's line is the
+  `render-designation-cycle`, `render-designation-limit`, `render-locale-fallback`), and the CLI prints it as `file:line:`. The renderer's line is the
   **first line of the block it is in**, as `Document.line_of` gives it, whatever line the
   directive itself is on: a paragraph's, a table's header row, a quote's first `>`, a code
   block's opening fence, a heading's (a section title); for a list item, the line of **its marker**
@@ -72,7 +72,9 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   where it writes none) or `attachments[].title` for a directive in that value
   (also where the body shows it, as `{{attach:}}` or `{{party:}}` do). A finding in a term's text
   is at the term's definition, whichever reference asks for it first; `render-term-limit` is at the
-  definition being worked out when the limit was reached. The same finding (rule, level and
+  definition being worked out when the limit was reached; `render-designation-cycle` is at the
+  heading it closes on, and `render-designation-limit` at the first heading that reached a limit
+  (or, for a reference longer than the cap, at the reference). The same finding (rule, level and
   message) is reported once, at the lowest line it is seen at: the same refused link, or the same
   non-relative image path, on two lines is one diagnostic, at the earlier of them, whichever the
   renderer reached first (it works out the body before the title block). The renderer's own
@@ -155,8 +157,11 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   also in a heading read before the targets are known (§13.3). Terms that name each other can still
   ask for more different texts than any cache holds, so the extra work is bounded: a term's first text
   is free, and past 200,000 inline nodes resolved inside later texts of the same term (nested ones
-  included), or 32 terms open inside one another, a `{{term:}}` shows its `label=` or definition id
-  and the Warning `render-term-limit` is reported, once. Any number of terms that do not name each
+  included), 32 terms open inside one another, or 60 inline levels (emphasis, links, terms) nested
+  inside an open term, a `{{term:}}` shows its `label=` or definition id and the Warning
+  `render-term-limit` is reported, once. The nesting limit only applies where one unit is read
+  inside another (inside an open term, or while designations are worked out, below): a term in a
+  single block, however deeply formatted (the builder allows 100 levels), is never cut by it. Any number of terms that do not name each
   other resolve in full and never reach the limit. A term text is capped at 1,000 characters
   of plain text, checked as it is built (no real defined term comes near it; a chain of terms that each
   read the next twice would otherwise ask for a text of 2^n words): a longer one is shown by its
@@ -172,9 +177,23 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   exclusive conditions), but the condition the reference itself stands under is not considered.
   Lists in quotes and drafting notes are not counted, and a second use of an identifier is left
   to the validator's `anchor-duplicate`.
+- **Designations under the `none` scheme (§13.3).** A `{{ref:}}` shows the target's heading as
+  rendered: the references and terms in the heading resolved, as plain text with white space
+  collapsed (`# About {{ref: ov}}` is "About Overview"), then the item path or paragraph number for
+  an item or paragraph ("Termination (a)"). A heading that refers back to itself, directly or
+  through other headings or terms, reads as its text without references where the circle closes
+  (`render-designation-cycle`). Headings read through more than 32 headings, nested more than 60
+  inline levels while headings and terms are read through each other, or longer than 1,000
+  characters once resolved are designated by their text as written, without the references in them
+  (`render-designation-limit`), and a reference shows at most the first 1,000 characters of a
+  designation. A heading in a cycle or past a cap, or one whose terms reach into one, may read
+  differently from the designation references show; the Warning says so. Alternative sections
+  sharing an identifier (§15.4) keep their own heading text, and a reference to the identifier
+  shows the first alternative's.
 - **Labels under the `none` scheme.** A style label that shows `{section}` (such as the default
-  paragraph label `{section}.{n}`) shows the section's heading text there, while `{{ref:}}`
-  writes the §13.3 designation ("Termination 1"), so the two can differ.
+  paragraph label `{section}.{n}`) shows the section's designation there (its heading text, as
+  above), while `{{ref:}}` to an item writes the §13.3 path after it ("Termination 1"), so the two
+  can differ.
 - **Malformed directives** (a §11.2 grammar violation) render their type's marker without a value,
   for example `[INVALID AMOUNT]`. The specification defines no marker for this case.
 - **One parser.** The renderer builds from the validator's document model only
