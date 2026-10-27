@@ -14,7 +14,10 @@ are protected first by **sentinels**: every directive (and every
 ``\\ue000<nonce>:<n>\\ue001``, so Markdown can never reinterpret directive
 syntax, and put back as tree nodes afterwards. The nonce is random for every
 build, so no text in a document — written out, as an entity, or
-percent-encoded — can pass for a sentinel.
+percent-encoded — can pass for a sentinel. Each sentinel is wrapped in
+Unicode punctuation on both sides, as the ``{{`` and ``}}`` it replaces are
+punctuation, so that Markdown's emphasis rules (CommonMark's left- and
+right-flanking delimiter runs) see the same neighbours as in the source.
 
 Lists and quotes are built as the validator's model holds them: list items
 hold blocks, nested lists included, and a quote's content is the blocks the
@@ -74,10 +77,17 @@ from .tree import (
 )
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
-# Leads the sentinel of source that renders nothing (a {{def:}}). It is
-# Unicode punctuation, so an emphasis closer just before it still counts as
-# right-flanking and closes (CommonMark); a bare sentinel reads like a letter.
-_HIDDEN_LEAD = "\u2e31"
+# Wraps every sentinel, before and after. A directive's braces are Unicode
+# punctuation, and CommonMark decides whether an emphasis delimiter run opens
+# or closes from the punctuation and whitespace next to it; a bare sentinel
+# (private use, category Co) reads like a letter and would change that:
+# ``_text_{{ref: a}}`` would not close its emphasis. U+2E31 is category Po —
+# markdown-it-py's ``isPunctChar`` accepts only categories P* — and too rare
+# in a document to matter, and the pairs the builder adds are the only ones
+# the sentinel patterns consume.
+_WRAP = "\u2e31"
+_WRAPPERS = (_WRAP,)
+_ENCODED_WRAP = "".join(f"%{byte:02X}" for byte in _WRAP.encode())
 # Stand where inline HTML or a comment was dropped, until _merge_text joins
 # the text around them. A dropped line break (<br>) still parts two words.
 _DROPPED = Text("")
@@ -181,12 +191,12 @@ class _Builder:
         self.lex = cache(lex)
         self.depth = 0  # quotes and list items the builder is inside
         nonce = secrets.token_hex(8)
-        # A hidden sentinel has its own form ("h"), so the lead character is
-        # taken only with one, never from the source before another sentinel.
-        self.sentinel_re = re.compile(f"(?:{_HIDDEN_LEAD}{_OPEN}{nonce}h|{_OPEN}{nonce}):(\\d+){_CLOSE}")
+        # A sentinel with its wrappers; only a complete one matches, so a
+        # wrapper character in the source is never taken.
+        self.sentinel_re = re.compile(f"{_WRAP}{_OPEN}{nonce}:(\\d+){_CLOSE}{_WRAP}")
         # How markdown-it percent-encodes a sentinel inside a URL.
         self.encoded_sentinel_re = re.compile(
-            f"(?:%E2%B8%B1%EE%80%80{nonce}h|%EE%80%80{nonce}):(\\d+)%EE%80%81", re.IGNORECASE)
+            f"{_ENCODED_WRAP}%EE%80%80{nonce}:(\\d+)%EE%80%81{_ENCODED_WRAP}", re.IGNORECASE)
         self.nonce = nonce
 
     # -- sentinels ------------------------------------------------------------
@@ -194,9 +204,7 @@ class _Builder:
     def _sentinel(self, payload: _Payload) -> str:
         self.payloads.append(payload)
         index = len(self.payloads) - 1
-        if isinstance(payload, _Hidden):
-            return f"{_HIDDEN_LEAD}{_OPEN}{self.nonce}h:{index}{_CLOSE}"
-        return f"{_OPEN}{self.nonce}:{index}{_CLOSE}"
+        return f"{_WRAP}{_OPEN}{self.nonce}:{index}{_CLOSE}{_WRAP}"
 
     def _protect(self, body: str) -> str:
         """*body* — one block's text — with every directive replaced by a
@@ -392,16 +400,24 @@ class _Builder:
                 return Paragraph((Strong(inlines),)) if inlines else None
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def list(self, block: ModelBlock, placed: list[PlacedMarker]) -> List:
+    def list(self, block: ModelBlock, placed: list[PlacedMarker]) -> List | None:
         """A list, nested as the validator's model holds it: items that hold
         blocks. A placed marker names the item it marks by its pre-order
-        number among all the list's items, as the validator numbers them."""
+        number among all the list's items, as the validator numbers them.
+        None for a list whose every item is only a comment."""
         markers = {marker.item: marker for marker in placed}
         return self._list(block, markers, count())
 
-    def _list(self, block: ModelBlock, markers: dict[int | None, PlacedMarker], numbers: Iterator[int]) -> List:
+    def _list(self, block: ModelBlock, markers: dict[int | None, PlacedMarker], numbers: Iterator[int]) -> List | None:
         """*block*'s items, numbered from *numbers* in pre-order, to find the
-        items *markers* belong to."""
+        items *markers* belong to.
+
+        An item whose blocks are all comments or raw HTML is the author
+        removing it (§8.6), and is left out — after the whole list is
+        traversed, so the numbers (and with them the markers) stay those of
+        the validator's list. An item with no blocks at all is an empty item
+        (CommonMark) and keeps its place, so later items keep their numbers.
+        A list left with no items is left out."""
         self._check_depth(1)
         self.depth += 1
         try:
@@ -416,15 +432,22 @@ class _Builder:
                 blocks: list[Block] = []
                 for child in children:
                     if child.kind in ("ordered_list", "unordered_list"):
-                        blocks.append(self._list(child, markers, numbers))
+                        nested = self._list(child, markers, numbers)
+                        if nested is not None:
+                            blocks.append(nested)
                     elif child.kind == "html":
                         continue  # never emitted (§8.6, §8.7)
                     elif (built := self.block(child, [], top_level=False)) is not None:
                         blocks.append(built)
+                # Only a comment: the item is removed. Defensive: an item a
+                # marker belongs to (an anchor or a condition) never vanishes.
+                if item.blocks and all(child.kind == "html" for child in item.blocks) \
+                        and not identifier and not condition:
+                    continue
                 items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition))
         finally:
             self.depth -= 1
-        return List(ordered=block.kind == "ordered_list", items=tuple(items))
+        return List(ordered=block.kind == "ordered_list", items=tuple(items)) if items else None
 
     def _check_depth(self, more: int) -> None:
         """Refuse a document that nests lists, quotes, and inline formatting
@@ -433,13 +456,15 @@ class _Builder:
             raise DocumentError(f"The document nests lists, quotes, and inline formatting more than "
                                 f"{MAX_NESTING} levels deep, which is not rendered.")
 
-    def quote(self, block: ModelBlock) -> Block:
+    def quote(self, block: ModelBlock) -> Block | None:
         """A block quote, its content the blocks the validator reads in it
         (``quote_blocks``). Past the validator's quote depth, it reads the
         quote's text as one paragraph, and so does the builder. A drafting
         note is decided by the validator's own test (§15.6), and its content
         is the validator's reading without the ``[!DRAFTING]`` marker
-        (``drafting_note_blocks``)."""
+        (``drafting_note_blocks``). A quote that holds nothing but comments
+        is left out (None); an empty drafting note stays, since its label is
+        the template construct the reader sees (§15.6)."""
         drafting = is_drafting_note(block)
         self._check_depth(1)
         # The quotes and list items the quote is in, before entering it.
@@ -450,7 +475,9 @@ class _Builder:
             blocks = self.blocks(children, None, markers=False)
         finally:
             self.depth -= 1
-        return DraftingNote(blocks) if drafting else Quote(blocks)
+        if drafting:
+            return DraftingNote(blocks)
+        return Quote(blocks) if blocks else None
 
     # -- document -------------------------------------------------------------
 
@@ -520,7 +547,8 @@ def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
 def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
     """*inlines* with adjacent text joined. Where HTML or a comment was
     dropped between two spaces, one of them goes: ``a <!-- x --> b`` reads
-    "a b". A dropped ``<br>`` between two words leaves one space."""
+    "a b". A dropped ``<br>`` between two words leaves one space. Before a
+    line break, the spaces before a dropped inline all go."""
     merged: list[Inline] = []
     dropped = parted = False
     for inline in inlines:
@@ -529,7 +557,15 @@ def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
             parted = parted or inline is _DROPPED_BREAK
             continue
         before = merged[-1] if merged else None
-        if dropped and isinstance(inline, Text) and isinstance(before, Text) and before.text.endswith(" "):
+        if dropped and isinstance(inline, SoftBreak | HardBreak) and isinstance(before, Text):
+            # The comment ended its line: the space before it goes, or the
+            # line would end in one (and "a <!-- x -->\nb" read "a  b").
+            stripped = before.text.rstrip(" ")
+            merged.pop()
+            if stripped:
+                merged.append(Text(stripped))
+            before = merged[-1] if merged else None
+        elif dropped and isinstance(inline, Text) and isinstance(before, Text) and before.text.endswith(" "):
             inline = Text(inline.text.lstrip(" "))
         elif parted and before is not None and not isinstance(inline, SoftBreak | HardBreak):
             if isinstance(before, Text):

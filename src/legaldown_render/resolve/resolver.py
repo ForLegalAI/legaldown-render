@@ -147,6 +147,13 @@ class Resolver:
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
         self.inconsistent_placeholders: set[str] = set()
+        # A definition id -> the plain text of its term as rendered (Markdown
+        # resolved), from the first definition in the body (see _survey).
+        self.term_texts: dict[str, str] = {}
+        # The definitions whose term text is being worked out, so that a
+        # {{term:}} inside a term, directly or through other terms, cannot
+        # send the computation round in a circle.
+        self._terms_open: list[str] = []
         self.attachment_anchors: dict[str, str | None] = {}
         self.section_presences: list[Presence] = []
 
@@ -238,10 +245,23 @@ class Resolver:
 
     def _survey(self) -> None:
         """One pass over the tree before resolving: which placeholder ids
-        are used with conflicting types (§10.7)."""
+        are used with conflicting types (§10.7), and what each defined term
+        reads as, for ``{{term:}}`` (§7.3)."""
         types: dict[str, set[str]] = {}
         for inline in iter_tree_inlines(self.tree):
-            if isinstance(inline, DirectiveSource):
+            if isinstance(inline, DefinitionSource):
+                # The first definition of an id is the one the validator's
+                # lookup and the anchor keep. The term is the text the reader
+                # sees at the definition: its Markdown is resolved, not the
+                # validator's raw ``anchor.term``.
+                identifier = self._definition_id(inline)
+                if identifier not in self.term_texts:
+                    self._terms_open.append(identifier)
+                    try:
+                        self.term_texts[identifier] = self._title_text(inline.children)
+                    finally:
+                        self._terms_open.pop()
+            elif isinstance(inline, DirectiveSource):
                 directive = inline.directive
                 if directive.name == "placeholder" and directive.positional and not directive.malformed:
                     types.setdefault(directive.positional, set()).add(self._placeholder_type(directive))
@@ -580,10 +600,28 @@ class Resolver:
         term = self.result.index.definition_lookup.get(definition_id)
         if term is None:
             return FailureMarker(f"[UNDEFINED: {definition_id}]")
-        text = directive.params.get("label") or self._plain_value(term)
+        label = directive.params.get("label")
+        if definition_id in self._terms_open:
+            # A term that refers to itself, directly or through others: the
+            # reference shows its label, else the id, and goes no further.
+            text = label or definition_id
+        else:
+            # The term as rendered at its definition; the validator's own
+            # text (an empty term reads as its id, a definition not in the
+            # body) is the fallback.
+            text = label or self.term_texts.get(definition_id) or self._plain_open(definition_id, term)
         # Settled once everything is resolved (see _settle_term_target).
         target = DEFINITION_ANCHOR_PREFIX + definition_id
         return TermRef(text, target, self.style.definitions.term_style)
+
+    def _plain_open(self, definition_id: str, term: str) -> str:
+        """The validator's *term* text of a definition as plain text, with
+        the definition marked open while its directives resolve."""
+        self._terms_open.append(definition_id)
+        try:
+            return self._plain_value(term)
+        finally:
+            self._terms_open.pop()
 
     def _date(self, directive: Directive, value: str) -> Inline:
         if not is_valid_iso_date(value):

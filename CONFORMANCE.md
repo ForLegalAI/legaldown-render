@@ -54,6 +54,19 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   quote's content is its text. The renderer follows it, and refuses (`DocumentError`) a document
   whose lists, quotes, and inline formatting (emphasis, links) together nest more than 100 levels,
   while building it and before resolving or writing it, so no document can exhaust the stack.
+- **Comment-only items and quotes.** A list item whose blocks are all comments or raw HTML is
+  left out (§8.6: the author removed it), and so is a list left with no items and a quote that
+  holds only comments. Numbers and designations are those of the items that remain. An item with
+  no content at all keeps its place (CommonMark), and so does an empty drafting note, whose label
+  is the template construct (§15.6).
+- **`{{term:}}` text.** A `{{term:}}` shows the term as rendered at its first definition in the
+  body, with its Markdown resolved (`"A *b* c" {{def: abc}}` is "A b c"), not the term's raw
+  source; `label=` overrides it. A definition not in the body (a template's other alternative)
+  falls back to the validator's term text.
+  A term that refers to itself, directly or through other terms (`"A {{term: a}}" {{def: a}}`), is
+  rendered without looping: the inner reference shows its `label=`, else the definition id. The
+  validator (0.4.0) does not report these cycles; the specification's `definition-circular`
+  Warning (§16) is not emitted yet.
 - **Ambiguous references.** Each list starts again at its first number, as contracts are usually
   drafted, so two lists in one section can both have an item "(a)", and a style can number a
   paragraph or an item like a subsection ("1.1"). A `{{ref:}}` to a section, paragraph, or list
