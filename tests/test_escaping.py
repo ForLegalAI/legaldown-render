@@ -5,6 +5,7 @@ overrides, zero-width) and line separators are written out as ``\\xNN`` or
 line of its own."""
 from __future__ import annotations
 
+import locale
 from pathlib import Path
 
 from conftest import FRONT, run_cli
@@ -44,8 +45,15 @@ def test_a_control_character_in_a_link_is_escaped_in_the_message() -> None:
 
 # -- Standard error of the command -----------------------------------------------
 
+def _stderr(raw: bytes) -> str:
+    """Standard error as text. Only standard output is forced to UTF-8 with LF; standard
+    error keeps the console's encoding (backslash-escaping what it cannot show) and the
+    platform's line ending, so it is read the same way here and a CRLF is one line end."""
+    return raw.decode(locale.getpreferredencoding(False), errors="replace").replace("\r\n", "\n")
+
+
 def _clean(errors: bytes) -> str:
-    text = errors.decode("utf-8")
+    text = _stderr(errors)
     assert not any((ord(c) < 0x20 and c != "\n") or 0x7F <= ord(c) < 0xA0 for c in text), text
     return text
 
@@ -54,7 +62,7 @@ def test_the_cli_writes_no_control_character_from_a_document_to_standard_error(t
     source = tmp_path / "evil.lgd"
     source.write_text(FRONT + f"# A\n\n![x](<{EVIL}>) [y](<ms-msdt:{EVIL[8:]}>)\n", encoding="utf-8")
     done = run_cli(str(source), "-f", "text")
-    err = done.stderr.decode("utf-8")
+    err = _stderr(done.stderr)
     assert "path-not-relative" in err and "render-link-refused" in err
     assert "\x1b" not in err and "\x07" not in err and "\u202e" not in err
     assert "\r" not in err
