@@ -34,6 +34,8 @@ _SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
 # newlines anywhere, and C0 controls and spaces at either end. Checking the
 # URL as a browser will read it means "java\tscript:" cannot slip through.
 _URL_IGNORED_RE = re.compile(r"[\t\n\r]")
+# A segment Windows reads as ``..``: it drops trailing dots and spaces (``.. ``, ``...``).
+_PARENT_RE = re.compile(r"^\.\.[. ]*$")
 _URL_TRIMMED = "".join(chr(code) for code in range(0x21))
 
 
@@ -99,7 +101,8 @@ def file_reference_problem(path: str, *, base: str | None = None, url: bool = Fa
     * ``"not-relative"`` (``path-not-relative``): it has a URI scheme
       (``https://``, ``file://``, ``data:``), which includes a Windows drive
       path (``C:\\x``, ``C:/x``, a scheme as far as a parser can tell), or
-      starts with ``/`` or ``\\`` (so also ``//host``);
+      starts with ``/`` or ``\\`` (so also ``//host``), or has a control
+      character (NUL, a newline, ...);
     * ``"outside-root"`` (``path-outside-root``): there is a document root
       (*base* is not None) and the path leaves it.
 
@@ -112,29 +115,31 @@ def file_reference_problem(path: str, *, base: str | None = None, url: bool = Fa
 
     How the path is read: a backslash is a separator (the renderer's reading,
     so that a path that goes up on Windows is not missed; it matters only with a
-    root, a leading one is already not relative), and so are ``.. `` and ``. ``
-    with trailing spaces, which Windows reads as ``..`` and ``.``. What a
-    browser ignores before the scheme (tabs, newlines, control characters and
-    spaces at either end) is ignored. *url* says the path is consumed as a URL
+    root, a leading one is already not relative), and so are ``.. ``, ``...``
+    and ``. `` with trailing dots and spaces, which Windows reads as ``..`` and
+    ``.``. A path with a control character (NUL, a newline, ...) is not a file
+    name a renderer can name safely, and is ``not-relative``. What a
+    browser ignores before it reads the scheme (tabs and newlines, control
+    characters and spaces at either end) is ignored in finding one. *url* says the path is consumed as a URL
     (an image's source, a link's target), where percent-encoding counts as the
     character it encodes (``%2e%2e`` is ``..``, ``%2f`` a separator), once; a
     path from frontmatter or an ``{{include:}}`` is a file name and is read as
     written, in which ``%2e%2e`` is a directory with that name."""
-    read = _as_read(unquote(path) if url else path)
+    decoded = unquote(path) if url else path
+    read = _as_read(decoded)
     if not read:
         return None
-    if _SCHEME_RE.match(read) or read[0] in "/\\":
+    if _SCHEME_RE.match(read) or read[0] in "/\\" or any(unicodedata.category(c) == "Cc" for c in decoded):
         return "not-relative"
     if base is None:
         return None
     depth = 0 if base == "." else len([part for part in base.split("/") if part])
     for part in read.replace("\\", "/").split("/"):
-        part = part.rstrip(" ")
-        if part == "..":
+        if _PARENT_RE.match(part):
             depth -= 1
             if depth < 0:
                 return "outside-root"
-        elif part not in ("", "."):
+        elif part.rstrip(" ") not in ("", "."):
             depth += 1
     return None
 

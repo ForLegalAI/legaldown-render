@@ -321,7 +321,7 @@ out when the validator reported the same path at the same line, or at none (`dia
   root when it has no path, as text given to `render()` and standard input are); a document
   outside the root, or on another Windows drive, is an `OptionsError`, since the boundary would
   mean nothing. A backslash is read as a separator (the renderer's reading, so a path that goes up
-  on Windows is not missed), `..`/`.` with trailing spaces are `..`/`.`, and percent-encoding is
+  on Windows is not missed), `..` with trailing dots and spaces is `..` and `.` with trailing spaces is `.`, a control character (NUL included) makes the path `not-relative`, and percent-encoding is
   decoded once, only for what is used as a URL (an image's `src`, the link an `{{attach:}}`
   makes): `%2e%2e` is `..` there, and a directory name in a frontmatter or include path. The
   writers' image check is a second line. Markdown links are not file references (§8.7): they stay

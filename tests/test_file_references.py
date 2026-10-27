@@ -71,6 +71,22 @@ RULES = (NOT_RELATIVE, OUTSIDE)
     ("%252e%252e/x", ".", True, None),
     # Spaces after the name are the Windows reading of the same segment.
     (".. /x", ".", False, "outside-root"),
+    # Windows drops trailing dots and spaces too.
+    ("... /x", ".", False, "outside-root"),
+    ("..../x", ".", False, "outside-root"),
+    ("... /x", "sub", False, None),
+    ("a/.. ./../x", ".", False, "outside-root"),
+    # Names that only look like it.
+    ("a..b.png", ".", False, None),
+    ("...hidden/x", ".", False, None),
+    ("..a/x", ".", False, None),
+    # A control character is not a file name: NUL, after the decoding a URL gets.
+    ("a\x00b", None, False, "not-relative"),
+    ("..%00/x.png", ".", True, "not-relative"),
+    ("..%00/x.png", ".", False, None),
+    ("a\x1fb/x", ".", False, "not-relative"),
+    ("a\x7fb/x", ".", False, "not-relative"),
+    ("a\x85b/x", ".", False, "not-relative"),
 ])
 def test_the_check(path: str, base: str | None, url: bool, expected: str | None) -> None:
     assert file_reference_problem(path, base=base, url=url) == expected
@@ -182,6 +198,19 @@ def test_encoded_traversal_is_read_as_a_url_only_where_it_is_one(kind: str, tmp_
 def test_a_disguised_scheme_is_a_scheme(kind: str, tmp_path: Path) -> None:
     for path in ("ht\ttps://x.example/a", "%68ttps://x.example/a" if kind in URL_KINDS else "https:%2f%2fx.example"):
         assert [rule for rule, _ in reported(kind, path, tmp_path, None)] == [NOT_RELATIVE], path
+
+
+@pytest.mark.parametrize("kind", ["include", "image"])
+def test_a_path_with_a_control_character_is_not_relative(kind: str) -> None:
+    path = {"include": "a\x00b.lgd", "image": "..%00/x.png"}[kind]
+    source = _frontmatter("").replace("Body.", {"include": f"{{{{include: {path}}}}}", "image": f"![x]({path})"}[kind])
+    assert [rule for rule, _ in findings(render(source))] == [NOT_RELATIVE]
+
+
+@pytest.mark.parametrize("path", [".. ./x.png", "... /x.png", "..../x.png"])
+def test_a_parent_directory_as_windows_reads_it_leaves_the_root(path: str, tmp_path: Path) -> None:
+    source = _frontmatter("").replace("Body.", f"![x](<{path}>)")
+    assert [rule for rule, _ in findings(render(source, document_root=tmp_path, document_path=tmp_path / "d.lgd"))] == [OUTSIDE]
 
 
 # -- What happens to the path ------------------------------------------------------------
