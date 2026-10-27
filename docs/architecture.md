@@ -300,11 +300,26 @@ line public (`Document.line_of`, U2).
 
 ## Testing
 
+Each module is named for its topic. Shared helpers (the minimal document header, the `text` and
+`html` renderers, and running the command as a program) are in `tests/conftest.py`.
+
 | Suite | What it checks |
 |---|---|
 | `tests/test_golden.py` | The test documents under each built-in style, compared byte for byte with `tests/golden/`. Regenerate with `pytest --update-golden` and review the diff |
-| `tests/test_render.py` | Numbering schemes, designations, fallbacks, every failure marker, template view, labels by language, HTML safety, unique anchors, determinism, strict mode, locales |
-| `tests/test_wp3_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme allow-list, empty URLs and empty link text |
-| `tests/test_style.py`, `tests/test_values.py` | Style layering and validation; counters and locale formatting |
-| `tests/test_cli.py` | The command |
+| `tests/test_render.py` | Numbering schemes, designations, fallbacks, every failure marker, template view, labels by language, HTML safety, unique anchors, determinism, strict mode, locales; the renderer's reading of the validator's structure (lists, quotes, comments, markers) |
+| `tests/test_values.py` | Money, dates and durations in a locale: exact digits, plural of the value shown, currency display, CLDR fallback to English |
+| `tests/test_numbering.py` | Counter formats, label templates and the preamble's `{section}` |
+| `tests/test_build.py` | Building the tree: comment-only items and quotes, emphasis next to a directive, spacing where an inline comment was dropped |
+| `tests/test_terms.py` | What `{{term:}}` shows, references inside terms, terms that name themselves or each other, the cap on a term text |
+| `tests/test_terms_budget.py` | Reuse of worked-out term texts, the work budget and depth limit for terms that name each other. Bounds the work by counting resolved directives, never by timing |
+| `tests/test_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme allow-list, empty URLs and empty link text, and how a refusal is reported |
+| `tests/test_text_writer.py` | The plain-text layout: attachment separators, tables, quotes, list items and indent, blanked labels |
+| `tests/test_html.py` | The HTML writer's print stylesheet for attachments |
+| `tests/test_labels.py` | The built-in labels of parties, per language |
+| `tests/test_style.py` | Built-in styles, `extends`, dotted overrides, problem reporting, dumping a style, typing of command-line values |
+| `tests/test_style_validation.py` | Template field validation, `extends` cycles, self-contained dumps, `version` and `extends` not overridable, YAML errors in `--set`, the empty-blank fallback |
+| `tests/test_cli.py` | The command's options, exit codes and diagnostics |
+| `tests/test_cli_io.py` | Encodings of the streams, input that is not UTF-8, unwritable output, LF line endings, the extension rule of `-o` |
+| `tests/test_errors.py` | The exception hierarchy and pickling of errors |
+| `tests/test_escaping.py` | Control characters from a document or the command line never reach a diagnostic or standard error unescaped |
 | `tests/conformance/` | Every example and fixture in the specification repository renders, every internal link has a target, and each invalid fixture renders its rule's failure marker. Needs `$LEGALDOWN_SPEC_DIR` or a sibling `../LegalDown` checkout |
