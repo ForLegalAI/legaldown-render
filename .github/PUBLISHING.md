@@ -54,9 +54,10 @@ version number can never be reused once published.
 3. Commit, then publish a GitHub Release with the tag `vX.Y.Z`. Its notes are where this
    project records what changed in a release.
 
-The workflow builds the sdist and wheel, runs `twine check --strict`, **verifies the tag matches
-`__version__`** (a mismatch fails the run rather than publishing the wrong version), smoke-tests the
-built wheel by installing it and invoking the CLI, and uploads to PyPI.
+The workflow first runs the CI workflow on the tagged commit. Only if that passes does it build the
+sdist and wheel, run `twine check --strict`, **verify the tag matches `__version__`** (a mismatch
+fails the run rather than publishing the wrong version), smoke-test the built wheel by installing it
+and invoking the CLI, and upload to PyPI.
 
 ## Dry run
 
@@ -89,11 +90,17 @@ markdown-it-py) come from PyPI.
   overrides the installed validator with `main`, so it tests main regardless of the range). The
   tests fail on any `legaldown.LegaldownDeprecationWarning`, so a release never calls what the
   validator's next minor version removes.
-- **Recommendation: gate the upload on the tests.** The `publish` workflow builds and uploads
-  without running the test suite, and `ci.yml` runs separately, so a release can reach PyPI from
-  a commit whose tests fail. Add the lint, test, and conformance jobs (or one called workflow)
-  as `needs:` of the `build` job in `publish.yml`, or require a passing CI run on the tagged
-  commit before the Release is published. This repository's workflows are not changed here.
+- **The upload is gated on the tests.** `publish.yml` first calls [`ci.yml`](workflows/ci.yml)
+  (`on: workflow_call`) as the job `ci`, and `build` needs it, so the lint, test (Linux on Python
+  3.11-3.13 and Windows on 3.12) and conformance jobs must pass on the commit being published
+  before anything is built, and `testpypi` and `pypi` need `build`. The `validator-main` job is
+  informational (`continue-on-error`) and never blocks a release. The caller grants the called
+  workflow `contents: read`; a called workflow cannot hold more permissions than its caller gives.
+  In the called workflow `github.workflow` is the caller's name, so its concurrency group
+  (`ci-${{ github.workflow }}-${{ github.ref }}`) is distinct from the push and pull-request runs
+  and from `publish.yml`'s own group.
+- The conformance job checks out the specification release named once, in `LEGALDOWN_SPEC_REF` at the
+  top of `ci.yml`. Change it there when the renderer moves to a later specification.
 - The license is declared once, as the SPDX expression `license = "MIT"` in `pyproject.toml`
   (PEP 639), so the deprecated `License :: OSI Approved :: MIT License` classifier is not listed.
 - The package ships a `py.typed` marker, so type checkers use its annotations directly.

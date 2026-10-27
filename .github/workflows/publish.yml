@@ -5,8 +5,11 @@ name: Publish
 # setup that must exist before the first run.
 #
 # Triggers:
-#   - publishing a GitHub Release  → build, verify, upload to PyPI
-#   - manual dispatch              → build, verify, upload to TestPyPI
+#   - publishing a GitHub Release  → CI, build, verify, upload to PyPI
+#   - manual dispatch              → CI, build, verify, upload to TestPyPI
+#
+# The CI workflow (ci.yml) runs first on the commit being published, and nothing
+# is built or uploaded unless it passes.
 
 on:
   release:
@@ -28,8 +31,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
     name: Build and verify distribution
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
