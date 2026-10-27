@@ -709,10 +709,12 @@ def test_level_six_headings_are_numbered_as_the_validator_numbers_them() -> None
     assert [section.designation for section in result.tree.sections] == expected
 
 
-def test_none_scheme_designation_skips_nested_references() -> None:
+def test_none_scheme_designation_includes_nested_references() -> None:
+    # §13.3: a reference shows the target's heading text as rendered, its own references resolved.
     body = "# Later *see {{ref: b}}* {#c}\n\nSee {{ref: c}}.\n\n# B {#b}\n"
     output = text(body, overrides={"numbering.scheme": "none"})
-    assert "See Later see." in output
+    assert "\nLater see B\n" in output
+    assert "See Later see B." in output
     assert "BROKEN" not in output
 
 
