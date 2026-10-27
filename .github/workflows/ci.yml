@@ -4,13 +4,25 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Called by publish.yml, so a release is only built once these jobs pass.
+  workflow_call:
 
 permissions:
   contents: read
 
+env:
+  # The LegalDown specification release the conformance job renders; the one
+  # place to change it when the renderer moves to a later specification.
+  LEGALDOWN_SPEC_REF: v0.2
+
+# In a called workflow, github.workflow is the *caller's* name ("Publish"), not
+# "CI". That keeps this group apart from the push/pull-request CI runs on the
+# same ref, so a dispatched or release publish neither cancels nor is cancelled
+# by them, and it never collides with publish.yml's own group (two workflows in
+# one group would wait for each other forever).
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -26,12 +38,17 @@ jobs:
       - run: ruff check .
 
   test:
-    name: Tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13"]
+        include:
+          # Windows: path handling, console encodings and line endings differ.
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,7 +67,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ForLegalAI/LegalDown
-          ref: v0.2
+          ref: ${{ env.LEGALDOWN_SPEC_REF }}
           path: .legaldown-spec
       - uses: actions/setup-python@v5
         with:

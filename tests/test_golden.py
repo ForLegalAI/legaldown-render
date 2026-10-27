@@ -25,7 +25,9 @@ def test_golden(document: str, style: str, output_format: str, update_golden: bo
     extension = "txt" if output_format == "text" else output_format
     golden = GOLDEN / f"{document}.{style}.{extension}"
     if update_golden or not golden.exists():
-        golden.write_text(output, encoding="utf-8")
+        # LF on every platform: the CLI writes LF, and .gitattributes checks the goldens out as LF.
+        golden.write_text(output, encoding="utf-8", newline="\n")
         if not update_golden:
             pytest.fail(f"{golden.name} did not exist and was written; review it and run again")
-    assert output == golden.read_text(encoding="utf-8")
+    # Bytes, not read_text: universal newlines would hide a golden checked out with CRLF.
+    assert output == golden.read_bytes().decode("utf-8")

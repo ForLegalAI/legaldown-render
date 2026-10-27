@@ -235,7 +235,13 @@ def test_unknown_output_extension_without_format_is_a_usage_error(
     assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.parametrize("name", ["x.docx", "x.pdf.", ".md", "x.docx "])
+# Win32 drops trailing dots and spaces from a file name, so "x.pdf." names the file x.pdf there
+# and the test would not exercise the name it says it does.
+_TRAILING = pytest.mark.skipif(sys.platform == "win32", reason="Windows strips trailing dots and spaces from names")
+
+
+@pytest.mark.parametrize("name", ["x.docx", pytest.param("x.pdf.", marks=_TRAILING), ".md",
+                                  pytest.param("x.docx ", marks=_TRAILING)])
 def test_explicit_format_is_honoured_whatever_the_extension(tmp_path: Path, name: str) -> None:
     target = tmp_path / name
     assert main([FEATURES, "-q", "-f", "text", "-o", str(target)]) == 0
@@ -249,8 +255,9 @@ def test_output_without_an_extension_keeps_the_html_default(tmp_path: Path) -> N
         assert target.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
 
 
-@pytest.mark.parametrize("name", ["contract", "contract.v2", "report.2025-10-27", ".out", "out.", "notes.final",
-                                  "x.json", "x.."])
+@pytest.mark.parametrize("name", ["contract", "contract.v2", "report.2025-10-27", ".out",
+                                  pytest.param("out.", marks=_TRAILING), "notes.final", "x.json",
+                                  pytest.param("x..", marks=_TRAILING)])
 def test_any_other_name_keeps_the_html_default(tmp_path: Path, name: str) -> None:
     target = tmp_path / name
     assert main([FEATURES, "-q", "-o", str(target)]) == 0

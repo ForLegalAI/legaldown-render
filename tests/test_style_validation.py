@@ -53,21 +53,21 @@ def test_a_blank_with_a_visible_character_is_kept() -> None:
 
 def test_a_cycle_through_a_parent_directory_is_found(tmp_path: Path) -> None:
     (tmp_path / "dir").mkdir()
-    (tmp_path / "dir" / "a.yaml").write_text("version: 1\nextends: ../dir/a.yaml\n")
+    (tmp_path / "dir" / "a.yaml").write_text("version: 1\nextends: ../dir/a.yaml\n", encoding="utf-8")
     with pytest.raises(StyleError, match="circular"):
         load_style(tmp_path / "dir" / "a.yaml")
 
 
 def test_a_cycle_through_two_spellings_of_one_file_is_found(tmp_path: Path) -> None:
     (tmp_path / "x").mkdir()
-    (tmp_path / "x" / "a.yaml").write_text("version: 1\nextends: ../x/b.yaml\n")
-    (tmp_path / "x" / "b.yaml").write_text("version: 1\nextends: ./a.yaml\n")
+    (tmp_path / "x" / "a.yaml").write_text("version: 1\nextends: ../x/b.yaml\n", encoding="utf-8")
+    (tmp_path / "x" / "b.yaml").write_text("version: 1\nextends: ./a.yaml\n", encoding="utf-8")
     with pytest.raises(StyleError, match="circular"):
         load_style(tmp_path / "x" / "../x/a.yaml")
 
 
 def test_a_cycle_through_a_symlink_is_found(tmp_path: Path) -> None:
-    (tmp_path / "a.yaml").write_text("version: 1\nextends: link.yaml\n")
+    (tmp_path / "a.yaml").write_text("version: 1\nextends: link.yaml\n", encoding="utf-8")
     try:
         (tmp_path / "link.yaml").symlink_to(tmp_path / "a.yaml")
     except OSError:
@@ -77,24 +77,24 @@ def test_a_cycle_through_a_symlink_is_found(tmp_path: Path) -> None:
 
 
 def test_the_same_base_used_twice_is_not_a_cycle(tmp_path: Path) -> None:
-    (tmp_path / "base.yaml").write_text("version: 1\nnumbering: {scheme: none}\n")
-    (tmp_path / "mid.yaml").write_text("version: 1\nextends: base.yaml\n")
-    (tmp_path / "top.yaml").write_text("version: 1\nextends: mid.yaml\n")
+    (tmp_path / "base.yaml").write_text("version: 1\nnumbering: {scheme: none}\n", encoding="utf-8")
+    (tmp_path / "mid.yaml").write_text("version: 1\nextends: base.yaml\n", encoding="utf-8")
+    (tmp_path / "top.yaml").write_text("version: 1\nextends: mid.yaml\n", encoding="utf-8")
     assert load_style(tmp_path / "top.yaml").numbering.scheme == "none"
 
 
 # -- A dump is self-contained ----------------------------------------------------
 
 def test_a_dump_does_not_extend_anything(tmp_path: Path) -> None:
-    (tmp_path / "base.yaml").write_text("version: 1\nnumbering: {scheme: none}\n")
-    (tmp_path / "child.yaml").write_text("version: 1\nextends: base.yaml\nlocale: cs-CZ\n")
+    (tmp_path / "base.yaml").write_text("version: 1\nnumbering: {scheme: none}\n", encoding="utf-8")
+    (tmp_path / "child.yaml").write_text("version: 1\nextends: base.yaml\nlocale: cs-CZ\n", encoding="utf-8")
     style = load_style(tmp_path / "child.yaml")
     text = dump_style(style)
     assert "extends" not in text
     elsewhere = tmp_path / "elsewhere" / "deep"
     elsewhere.mkdir(parents=True)
     dumped = elsewhere / "dumped.yaml"
-    dumped.write_text(text)
+    dumped.write_text(text, encoding="utf-8")
     reloaded = load_style(dumped)
     assert reloaded.numbering.scheme == "none"
     assert reloaded.locale == "cs-CZ"
@@ -105,21 +105,21 @@ def test_a_dump_does_not_extend_anything(tmp_path: Path) -> None:
 def test_a_dumped_builtin_reloads_equal(name: str, tmp_path: Path) -> None:
     style = load_style(name)
     path = tmp_path / "dump.yaml"
-    path.write_text(dump_style(style))
-    assert "extends" not in path.read_text()
+    path.write_text(dump_style(style), encoding="utf-8")
+    assert "extends" not in path.read_text(encoding="utf-8")
     # The dump is flattened: it is the same style, minus the record of what it extended.
     assert load_style(path) == replace(style, extends=None)
 
 
 def test_print_style_of_a_relative_extends_reloads_from_anywhere(tmp_path: Path) -> None:
-    (tmp_path / "base.yaml").write_text("version: 1\nplaceholders: {blank: '[__]'}\n")
-    (tmp_path / "child.yaml").write_text("version: 1\nextends: base.yaml\n")
+    (tmp_path / "base.yaml").write_text("version: 1\nplaceholders: {blank: '[__]'}\n", encoding="utf-8")
+    (tmp_path / "child.yaml").write_text("version: 1\nextends: base.yaml\n", encoding="utf-8")
     done = run_cli_text("--print-style", "--style", str(tmp_path / "child.yaml"))
     assert done.returncode == 0, done.stderr
     assert "extends" not in done.stdout
     elsewhere = tmp_path / "other"
     elsewhere.mkdir()
-    (elsewhere / "dump.yaml").write_text(done.stdout)
+    (elsewhere / "dump.yaml").write_text(done.stdout, encoding="utf-8")
     assert load_style(elsewhere / "dump.yaml").placeholders.blank == "[__]"
 
 

@@ -30,11 +30,12 @@ def html(body: str, **settings: object) -> str:
 
 
 def run_cli(*args: str, stdin: bytes | str | None = None, cwd: Path | None = None,
-            narrow: bool = False) -> subprocess.CompletedProcess[bytes]:
+            narrow: bool = False, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
     """Run ``legaldown-render`` as a program on this checkout's sources.
 
-    *narrow* gives it a Windows-like console, where neither stream is UTF-8."""
-    env = dict(os.environ, PYTHONPATH=str(SRC))
+    *narrow* gives it a Windows-like console, where neither stream is UTF-8; *env* is
+    the environment it starts from (default: this process's)."""
+    env = dict(os.environ if env is None else env, PYTHONPATH=str(SRC))
     if narrow:
         env.update(PYTHONIOENCODING="cp1252", PYTHONUTF8="0")
     data = stdin.encode("utf-8") if isinstance(stdin, str) else stdin
@@ -43,10 +44,16 @@ def run_cli(*args: str, stdin: bytes | str | None = None, cwd: Path | None = Non
 
 
 def run_cli_text(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-    """Like :func:`run_cli`, with UTF-8 text for the streams."""
-    env = dict(os.environ, PYTHONPATH=str(SRC), PYTHONUTF8="1")
-    return subprocess.run([sys.executable, "-m", "legaldown_render.cli", *args], input=stdin,
-                          capture_output=True, text=True, env=env, check=False)
+    """Like :func:`run_cli`, with UTF-8 text for the streams.
+
+    The streams are encoded and decoded here rather than by ``subprocess``'s text
+    mode, which would use the locale's encoding (cp1252 on Windows) and turn the
+    ``\\n`` of *stdin* into CRLF there."""
+    env = dict(os.environ, PYTHONUTF8="1")
+    done = run_cli(*args, stdin=stdin, env=env)
+    return subprocess.CompletedProcess(
+        done.args, done.returncode,
+        done.stdout.decode("utf-8").replace("\r\n", "\n"), done.stderr.decode("utf-8").replace("\r\n", "\n"))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
