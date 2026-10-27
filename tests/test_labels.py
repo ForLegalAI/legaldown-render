@@ -1,5 +1,6 @@
-"""WP8 (S13): the party identifier label is neutral, since §3.4's
-``identification_number`` also covers a natural person's national ID."""
+"""Built-in labels: the party identifier label is neutral, since §3.4's
+``identification_number`` also covers a natural person's national ID, and each
+language words the party labels in its own way."""
 from __future__ import annotations
 
 import pytest

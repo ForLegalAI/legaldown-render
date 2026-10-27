@@ -1,3 +1,7 @@
+"""Styles: the built-in ones, layering with ``extends``, dotted overrides merged
+field by field, how every problem is reported with its path, dumping a style to
+YAML, and the typing of command-line values. Validation of templates and the
+loader's edge cases are in test_style_validation.py."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -69,7 +73,7 @@ def test_dump_round_trips(tmp_path: Path) -> None:
     style = load_style("continental", overrides={"locale": "de-DE"})
     path = tmp_path / "dumped.yaml"
     path.write_text(dump_style(style))
-    # The dump is flattened (S8): the same style, without the record of what it extended.
+    # The dump is flattened: the same style, without the record of what it extended.
     assert load_style(path) == replace(style, extends=None)
 
 

@@ -1,33 +1,26 @@
-"""Style validation: an empty blank falls back to ``[TBD: id]`` (R6), ``extends``
-cycles are found on resolved paths (S7), ``--print-style`` is self-contained
-(S8), ``version`` and ``extends`` cannot be overridden (S9), a YAML error in a
-``--set`` value is reported (S10, loader side), and the ``{field}``
-placeholders of every text template are validated (S11)."""
+"""Style validation and the style loader's edge cases: an empty placeholder
+blank falls back to ``[TBD: id]`` (§13.5 rule 6), ``extends`` cycles are found
+on resolved paths, ``--print-style`` is self-contained, ``version`` and
+``extends`` cannot be overridden, a YAML error in a ``--set`` value is
+reported, and the ``{field}`` placeholders of every text template are checked
+where the setting is used (and for typos everywhere). Loading, layering and
+dotted overrides are in test_style.py."""
 from __future__ import annotations
 
 import dataclasses
-import os
-import subprocess
-import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from conftest import FRONT, run_cli_text
 
 from legaldown_render import RenderOptions, StyleError, builtin_styles, dump_style, load_style, render
 from legaldown_render.style import parse_override
 
-SRC = Path(__file__).resolve().parents[1] / "src"
 DOC = "---\nlegaldown: '0.2'\ntitle: T\n---\n\n# One {#one}\n\nAmount {{placeholder: fee}} and {{ref: one}}.\n"
 
 
-def _cli(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ, PYTHONPATH=str(SRC), PYTHONUTF8="1")
-    return subprocess.run([sys.executable, "-m", "legaldown_render.cli", *args], input=stdin,
-                          capture_output=True, text=True, env=env, check=False)
-
-
-# --- R6: an empty blank --------------------------------------------------------------------------
+# -- An empty or invisible blank (§13.5) -----------------------------------------
 
 @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
 @pytest.mark.parametrize("fmt", ["html", "text"])
@@ -43,7 +36,20 @@ def test_a_visible_blank_is_kept() -> None:
     assert "TBD" not in result.output
 
 
-# --- S7: extends cycles ----------------------------------------------------------------------------
+@pytest.mark.parametrize("blank", ["​", "﻿", " ​‍﻿ ", " ", "‮⁠"])
+@pytest.mark.parametrize("fmt", ["html", "text"])
+def test_a_blank_of_invisible_characters_falls_back_to_tbd(blank: str, fmt: str) -> None:
+    source = FRONT.replace("title: T", "title: T\nplaceholders:\n  - id: fee\n    type: text") + "# A\n\nFee {{placeholder: fee}}.\n"
+    result = render(source, format=fmt, overrides={"placeholders.blank": blank})
+    assert "[TBD: fee]" in result.output
+
+
+def test_a_blank_with_a_visible_character_is_kept() -> None:
+    source = FRONT.replace("title: T", "title: T\nplaceholders:\n  - id: fee\n    type: text") + "# A\n\nFee {{placeholder: fee}}.\n"
+    assert "Fee ​__​." in render(source, format="text", overrides={"placeholders.blank": "​__​"}).output
+
+
+# -- extends cycles --------------------------------------------------------------
 
 def test_a_cycle_through_a_parent_directory_is_found(tmp_path: Path) -> None:
     (tmp_path / "dir").mkdir()
@@ -77,7 +83,7 @@ def test_the_same_base_used_twice_is_not_a_cycle(tmp_path: Path) -> None:
     assert load_style(tmp_path / "top.yaml").numbering.scheme == "none"
 
 
-# --- S8: a dump is self-contained ----------------------------------------------------------------------
+# -- A dump is self-contained ----------------------------------------------------
 
 def test_a_dump_does_not_extend_anything(tmp_path: Path) -> None:
     (tmp_path / "base.yaml").write_text("version: 1\nnumbering: {scheme: none}\n")
@@ -108,7 +114,7 @@ def test_a_dumped_builtin_reloads_equal(name: str, tmp_path: Path) -> None:
 def test_print_style_of_a_relative_extends_reloads_from_anywhere(tmp_path: Path) -> None:
     (tmp_path / "base.yaml").write_text("version: 1\nplaceholders: {blank: '[__]'}\n")
     (tmp_path / "child.yaml").write_text("version: 1\nextends: base.yaml\n")
-    done = _cli("--print-style", "--style", str(tmp_path / "child.yaml"))
+    done = run_cli_text("--print-style", "--style", str(tmp_path / "child.yaml"))
     assert done.returncode == 0, done.stderr
     assert "extends" not in done.stdout
     elsewhere = tmp_path / "other"
@@ -117,7 +123,7 @@ def test_print_style_of_a_relative_extends_reloads_from_anywhere(tmp_path: Path)
     assert load_style(elsewhere / "dump.yaml").placeholders.blank == "[__]"
 
 
-# --- S9: version and extends are not overridable ------------------------------------------------------------
+# -- version and extends are not overridable -------------------------------------
 
 @pytest.mark.parametrize("key", ["version", "extends"])
 def test_version_and_extends_cannot_be_overridden(key: str) -> None:
@@ -134,14 +140,14 @@ def test_a_nested_override_of_version_is_refused_too() -> None:
 @pytest.mark.parametrize("print_style", [True, False])
 def test_the_cli_refuses_them(setting: str, print_style: bool) -> None:
     args = ["--print-style"] if print_style else ["-", "-q"]
-    done = _cli(*args, "--set", setting, stdin=DOC)
+    done = run_cli_text(*args, "--set", setting, stdin=DOC)
     assert done.returncode == 2, done.stdout
     assert setting.split("=")[0] in done.stderr
     assert "cannot be overridden" in done.stderr
     assert "Traceback" not in done.stderr
 
 
-# --- S10: a YAML error in a --set value -------------------------------------------------------------------
+# -- A YAML error in a --set value -----------------------------------------------
 
 def test_a_yaml_error_in_an_override_names_the_key() -> None:
     with pytest.raises(StyleError) as caught:
@@ -153,7 +159,7 @@ def test_a_yaml_error_in_an_override_names_the_key() -> None:
 
 
 def test_a_yaml_error_in_an_override_reaches_stderr() -> None:
-    done = _cli("--print-style", "--set", "numbering.levels=[{counter: decimal")
+    done = run_cli_text("--print-style", "--set", "numbering.levels=[{counter: decimal")
     assert done.returncode == 2
     assert "numbering.levels" in done.stderr
     assert "YAML" in done.stderr
@@ -162,7 +168,7 @@ def test_a_yaml_error_in_an_override_reaches_stderr() -> None:
 
 
 def test_a_yaml_error_in_a_render_run_reaches_stderr() -> None:
-    done = _cli("-", "-q", "--set", "enumeration.levels=[{a", stdin=DOC)
+    done = run_cli_text("-", "-q", "--set", "enumeration.levels=[{a", stdin=DOC)
     assert done.returncode != 0
     assert "enumeration.levels" in done.stderr
     assert "YAML" in done.stderr
@@ -172,15 +178,9 @@ def test_a_yaml_error_in_a_render_run_reaches_stderr() -> None:
 def test_valid_yaml_overrides_still_parse() -> None:
     assert parse_override("title_block.version", "true") is True
     assert parse_override("contents.depth", "3") == 3
-    assert parse_override("numbering.levels", "[{counter: decimal}]") == [{"counter": "decimal"}]
 
 
-# --- S11: template fields ------------------------------------------------------------------------------------
-
-@pytest.mark.parametrize("name", builtin_styles())
-def test_every_builtin_style_passes(name: str) -> None:
-    load_style(name)
-
+# -- Template fields -------------------------------------------------------------
 
 @pytest.mark.parametrize("language", ["en", "cs", "de", "fr", "pl", "sk"])
 def test_every_builtin_label_passes(language: str) -> None:
@@ -295,3 +295,45 @@ def test_all_template_problems_are_reported_together() -> None:
     assert any(p.startswith("references.format") for p in problems)
     assert any(p.startswith("labels.condition") for p in problems)
     assert any(p.startswith("placeholders.blank") for p in problems)
+
+
+# -- Templates are validated where their setting is used -------------------------
+
+NO_N = [{"label": "x", "ref": "x"}]
+
+
+@pytest.mark.parametrize(("overrides", "key"), [
+    ({"enumeration.levels": NO_N}, "enumeration.levels[0].ref"),
+    ({"enumeration.levels": NO_N, "enumeration.enabled": False, "enumeration.ordered": "enumerate"},
+     "enumeration.levels[0].ref"),
+    ({"numbering.levels": NO_N}, "numbering.levels[0].ref"),
+    ({"paragraphs.numbered": True, "paragraphs.format": {"label": "x", "ref": "x"}}, "paragraphs.format.ref"),
+])
+def test_a_ref_that_is_in_use_must_have_its_counter(overrides: dict[str, object], key: str) -> None:
+    assert any(p.startswith(key) and "{n}" in p for p in _problems(overrides))
+
+
+@pytest.mark.parametrize("overrides", [
+    {"enumeration.levels": NO_N, "enumeration.enabled": False},
+    {"numbering.levels": NO_N, "numbering.scheme": "none"},
+    {"paragraphs.format": {"label": "x", "ref": "x"}},
+    {"paragraphs.format": {"label": "x", "ref": ""}},
+])
+def test_a_ref_that_is_not_in_use_may_leave_out_its_counter(overrides: dict[str, object]) -> None:
+    load_style("default", overrides=overrides)
+
+
+def test_a_typo_is_flagged_even_where_the_setting_is_not_used() -> None:
+    problems = _problems({"numbering.scheme": "none", "numbering.levels": [{"label": "{n}", "ref": "{m}"}]})
+    assert any(p.startswith("numbering.levels[0].ref") and "{m}" in p and "unknown field" in p for p in problems)
+
+
+def test_a_plain_label_may_contain_braced_words() -> None:
+    style = load_style("default", overrides={"labels.drafting_note": "Note {see below}", "labels.colon": "{x}:"})
+    assert style.labels.drafting_note == "Note {see below}"
+    assert style.labels.colon == "{x}:"
+
+
+def test_the_labels_that_substitute_still_check_their_fields() -> None:
+    assert _problems({"labels.condition": "{condtion}"})
+    assert _problems({"labels.attachment_file": "{fil}"})
