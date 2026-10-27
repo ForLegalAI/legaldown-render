@@ -244,3 +244,40 @@ def test_an_empty_term_falls_back_to_the_validator() -> None:
 
 def test_an_undefined_term_is_still_reported() -> None:
     assert "[UNDEFINED: nope]" in text("# A\n\nSee {{term: nope}}.\n")
+
+
+# -- B8: a term that refers to itself ----------------------------------------
+
+SELF = '# A\n\n"Self {{term: s}}" {{def: s}} means it.\n\nSee {{term: s}} and {{term: s, label=the label}}.\n'
+INDIRECT = ('# A\n\n"A {{term: b}}" {{def: a}} x.\n\n"B {{term: a}}" {{def: b}} y.\n\n'
+            "See {{term: a}}, {{term: b}} and {{term: a, label=the label}}.\n")
+
+
+@pytest.mark.parametrize("output_format", ["text", "html"])
+@pytest.mark.parametrize("body", [SELF, INDIRECT], ids=["direct", "indirect"])
+def test_a_cyclic_term_renders_in_both_writers(body: str, output_format: str) -> None:
+    result = render(FRONT + body, format=output_format)
+    assert "the label" in result.output
+    assert "[UNDEFINED" not in result.output
+
+
+def test_a_term_inside_its_own_definition_shows_its_id() -> None:
+    output = text(SELF)
+    # At the definition and at a reference alike: the inner reference shows
+    # the id (its label when it has one), and goes no further.
+    assert "Self Self s means it." in output
+    assert "See Self s and the label." in output
+
+
+def test_a_term_reference_in_a_cycle_shows_its_label_else_its_id() -> None:
+    output = text(INDIRECT)
+    assert output.rstrip().endswith("and the label.")
+    # No term shows its own reference as raw directive source.
+    assert "{{" not in output
+
+
+def test_a_cycle_through_a_reference_site_inside_another_terms_definition() -> None:
+    body = ('# A\n\n"A" {{def: a}} x.\n\n"B {{term: a}} and {{term: c}}" {{def: b}} y.\n\n'
+            '"C {{term: b}}" {{def: c}} z.\n\nSee {{term: b}}.\n')
+    assert "See B A and" in text(body)
+    assert "B A and" in html(body)

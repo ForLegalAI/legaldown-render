@@ -63,6 +63,10 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   body, with its Markdown resolved (`"A *b* c" {{def: abc}}` is "A b c"), not the term's raw
   source; `label=` overrides it. A definition not in the body (a template's other alternative)
   falls back to the validator's term text.
+  A term that refers to itself, directly or through other terms (`"A {{term: a}}" {{def: a}}`), is
+  rendered without looping: the inner reference shows its `label=`, else the definition id. The
+  validator (0.4.0) does not report these cycles; the specification's `definition-circular`
+  Warning (§16) is not emitted yet.
 - **Ambiguous references.** Each list starts again at its first number, as contracts are usually
   drafted, so two lists in one section can both have an item "(a)", and a style can number a
   paragraph or an item like a subsection ("1.1"). A `{{ref:}}` to a section, paragraph, or list
