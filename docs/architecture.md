@@ -102,7 +102,9 @@ replaces are punctuation, so that CommonMark's emphasis flanking rules see the s
 in the source: `_text_{{ref: a}}` closes its emphasis. A defined term in a link title or alt text shows its term but is not the
 definition's anchor.
 
-An HTML block in the model (`kind="html"`), a comment block included, renders nothing (§8.6).
+An HTML block in the model (`kind="html"`), a comment block included, renders nothing (§8.6). A
+comment that starts a line is such a block, and it ends at the line holding `-->`, so text after
+the `-->` on that line is dropped with it (CONFORMANCE.md, "Text after a comment").
 Within a block's text, inline comments and tags are dropped; where one stood between two spaces,
 one space stays, and before a line break none does. A list item whose blocks are all comments,
 and a quote that holds only comments, are dropped (with a list left empty), after the whole list
@@ -154,7 +156,9 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 A `label` never hides a failure marker (§11.5). Frontmatter strings go through the same resolver,
 so placeholders in frontmatter render as blanks (§3.10).
 
-The resolver also builds the **title block** (effective date, sides and parties), **attachment
+The resolver also builds the **title block** (effective date, sides and parties; a party is named
+there by `legal_name`, as an identification block, where `{{party:}}` in the text shows its
+`label`, §3.6), **attachment
 placeholders** (§13.8; files are not read at this level), and **signature blocks** (§2.2, always
 with `legal_name`, per §3.6).
 
@@ -248,11 +252,10 @@ line public (`Document.line_of`, U2).
   `file`, or `data` (a deny-list, `urls.DENIED_SCHEMES`, judged as a browser reads the URL: tabs,
   newlines, controls, and case are ignored). Every other scheme (`ftp:`, `sip:`, `urn:`, ...) is
   linked. A link that is not made renders as its text alone, in HTML and in text alike. The
-  builder keeps such links as nodes (it turns off markdown-it-py's own `validateLink`, which
-  would leave them as literal Markdown), so the writers' check is the one that applies;
-  that deny-list is the gate for every `href` and `src` the HTML writer emits (links, images,
-  value links), and markdown-it-py's check is off so that the resolver can report §2.3 paths.
-  A link with no text shows its URL; the text writer leaves out ` <url>` when the URL, less a
+  builder turns off markdown-it-py's own `validateLink` (which would leave such links as literal
+  Markdown) and keeps them as nodes, so that the resolver can report §2.3 paths and the writers'
+  deny-list is the one gate for every `href` and `src` the HTML writer emits (links, images,
+  value links). A link with no text shows its URL; the text writer leaves out ` <url>` when the URL, less a
   `mailto:` or `tel:` prefix, is the text.
 - An image path must be relative with no URI scheme (§2.3), so a remote resource is never fetched
   or embedded. Resolution, not a writer, enforces it: an image whose path has a scheme (`https:`,
@@ -264,8 +267,19 @@ line public (`Document.line_of`, U2).
 - At Rendering level, the only files read are the document, the style template, and the answers
   file the CLI reads with `--answers` (the Python API takes answers as a mapping). Attachment
   files and includes are never opened.
-- Style values that are placed into CSS are stripped of `;{}<>`. `html.extra_css` is trusted
-  configuration, so a hosted service must not accept styles from untrusted users.
+- **A style template is trusted input.** Nothing in it is a security boundary:
+  - A value placed into the stylesheet (fonts, sizes, colours, margins, `page.size`) is stripped
+    of `;{}<>` only (`writers/html.py:_css`). That keeps it from ending its declaration or the
+    `<style>` element, but not from breaking the CSS after it: `typography.font_size: "12pt ("`
+    is emitted as written and leaves the rest of the stylesheet unparsable. It is not validated
+    as CSS.
+  - `html.extra_css` is appended to the stylesheet as it is, so it can contain anything,
+    `</style>` included.
+  - `extends` names any path the process can read, absolute or with `../`; only cycles are
+    rejected. (A style file is read with `yaml.safe_load`, and as UTF-8.)
+  A service that renders for several parties must choose the style itself, and never accept a
+  style file, `--set` values, or `extends` paths from a user it does not trust. Document source
+  has no such power: it is never emitted as HTML or CSS (§8.7).
 
 ## Testing
 

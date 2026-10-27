@@ -19,7 +19,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Legal Industry",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -59,7 +58,7 @@ path = "src/legaldown_render/__init__.py"
 packages = ["src/legaldown_render"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/legaldown_render", "tests", "docs", "README.md", "LICENSE", "pyproject.toml"]
+include = ["src/legaldown_render", "tests", "docs", "README.md", "CONFORMANCE.md", "LICENSE", "pyproject.toml"]
 
 [tool.ruff]
 line-length = 120

@@ -57,7 +57,7 @@ Python 3.11 or newer. The dependencies are all pure Python: `legaldown-validator
 ```bash
 legaldown-render contract.lgd -o contract.html                  # HTML page
 legaldown-render contract.lgd -o contract.txt                   # plain text (format from extension)
-legaldown-render contract.lgd --style continental --locale cs-CZ -o smlouva.html
+legaldown-render contract.lgd --style continental --locale cs-CZ -o smlouva.html   # Czech dates, money, durations
 legaldown-render contract.lgd --set numbering.scheme=legal-outline --set enumeration.enabled=false
 legaldown-render contract.lgd --set contents.enabled=true --set contents.depth=3   # table of contents
 legaldown-render contract.lgd --strict                          # refuse if the document has errors
@@ -65,6 +65,9 @@ legaldown-render contract.lgd --final --strict                  # refuse if blan
 legaldown-render template.lgd --answers answers.yaml -o nda.html # fill in a template, then render it
 legaldown-render --print-style --style continental              # every setting, as YAML
 ```
+
+`--locale` sets how dates, money, and durations are formatted. The words the renderer generates
+(such as "Represented by" or "Signatures") follow the document's `language` (§13.7), whatever the locale.
 
 Diagnostics go to stderr, one per line with its rule id. The exit code is 0 when the document
 rendered, even if it has errors (they show as markers), 1 when rendering was refused (strict mode,
@@ -87,10 +90,12 @@ none (`contract`, `contract.v2`, `report.2025-10-27`, `.out`), is just a name an
 ```python
 from legaldown_render import render
 
-result = render(open("contract.lgd").read(), format="html", style="continental", locale="cs-CZ")
+with open("contract.lgd", encoding="utf-8") as source:
+    result = render(source.read(), format="html", style="continental", locale="cs-CZ")
 for diagnostic in result.diagnostics:
     print(diagnostic.level, diagnostic.rule, diagnostic.message)
-open("contract.html", "w").write(result.output)
+with open("contract.html", "w", encoding="utf-8", newline="\n") as output:
+    output.write(result.output)
 ```
 
 `render()` also accepts a `RenderOptions`. Pass `answers={...}` to render a template filled in.
@@ -117,9 +122,9 @@ typography: { font_family: "Georgia, serif", justify: true }
 ```
 
 **Render options** say what one job does: the output format, strict mode, the final check, the
-answers to a template, a full page or an HTML fragment. Values layer in this order: built-in defaults, then the `extends` chain, then your
-style, then per-job `--set` overrides. Every value is validated before rendering starts. See
-[Styles and preferences](docs/style-templates.md).
+answers to a template, a full page or an HTML fragment. Values layer in this order: built-in
+defaults, then the `extends` chain, then your style, then per-job `--set` overrides. Every value is validated before rendering starts. See
+[Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md).
 
 Built-in styles are `default` (1. / 1.1, with (a) / (i) list items), `continental` (numbered
 articles, 2.1-style items, numbered paragraphs), and `outline` (I. / A. / 1. / a.).
@@ -128,12 +133,12 @@ articles, 2.1-style items, numbered paragraphs), and `outline` (I. / A. / 1. / a
 
 | Document | What it covers |
 |---|---|
-| [Concepts](docs/concepts.md) | What a renderer is responsible for, principles, and vocabulary |
-| [Architecture](docs/architecture.md) | The pipeline, the render tree, the package layout, and testing |
-| [Styles and preferences](docs/style-templates.md) | The style format, layering, and every setting |
-| [Conformance](CONFORMANCE.md) | What the Rendering level requires, and what is covered |
-| [Roadmap](docs/roadmap.md) | Milestones, and the changes needed upstream |
-| [Decision records](docs/decisions/) | Why the main choices were made |
+| [Concepts](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/concepts.md) | What a renderer is responsible for, principles, and vocabulary |
+| [Architecture](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/architecture.md) | The pipeline, the render tree, the package layout, and testing |
+| [Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md) | The style format, layering, and every setting |
+| [Conformance](https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md) | What the Rendering level requires, and what is covered |
+| [Roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md) | Milestones, and the changes needed upstream |
+| [Decision records](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/decisions/) | Why the main choices were made |
 
 ## Development
 
@@ -145,8 +150,8 @@ LEGALDOWN_SPEC_DIR=../LegalDown pytest -m conformance   # the specification's ex
 ruff check .
 ```
 
-Releases go to PyPI from a GitHub Release; see [PUBLISHING.md](.github/PUBLISHING.md).
+Releases go to PyPI from a GitHub Release; see [PUBLISHING.md](https://github.com/ForLegalAI/legaldown-render/blob/main/.github/PUBLISHING.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/ForLegalAI/legaldown-render/blob/main/LICENSE)

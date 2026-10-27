@@ -25,8 +25,9 @@ Values are layered. Each layer overrides the one before it, **field by field**:
 1. **Built-in defaults.** Every setting has one, defined in `legaldown_render/style/model.py`.
    The `default` style is exactly these defaults.
 2. **The `extends` chain.** A style names the style it builds on, which can be a built-in name or
-   a path relative to the file. Chains are resolved base first, and cycles are rejected, however
-   the files are spelled (`../dir/a.yaml`, a symbolic link).
+   a path relative to the file (any path the process can read, `../` and absolute paths
+   included). Chains are resolved base first, and cycles are rejected, however the files are
+   spelled (`../dir/a.yaml`, a symbolic link).
 3. **The chosen style**: `--style NAME|PATH`, or `RenderOptions(style=...)`.
 4. **Per-job overrides**: `--set numbering.scheme=mixed` or `overrides={"numbering.scheme": "mixed"}`,
    plus `--locale`. On the command line, text settings take the value as written
@@ -136,7 +137,7 @@ headings:                    # per level 1–5
 page: { size: A4, margin: 25mm }      # print stylesheet now; the PDF writer later
 html:
   max_width: 46rem
-  extra_css: ""              # appended to the stylesheet; trusted configuration only
+  extra_css: ""              # raw CSS, appended to the stylesheet as written (see "Trusted input")
 ```
 
 ### Level formats
@@ -185,9 +186,19 @@ legaldown-render: Invalid style 'default':
 A `ref` is one piece of a designation, so it cannot show the whole `{path}`. A label left unset
 takes the built-in one for the document language, which always passes.
 
+### Trusted input
+
+A style template, a `--set` value, and an `extends` path are the operator's, not the document
+author's. Values placed into the stylesheet (`typography`, `headings`, `page`, `html.max_width`)
+are stripped of `;{}<>` and are otherwise not checked as CSS, so a value such as `12pt (` is
+emitted as written and breaks the rest of the stylesheet. `html.extra_css` is raw CSS. Do not
+render with styles from users you do not trust
+([Security](architecture.md#security)).
+
 ### Built-in labels
 
-Labels follow the document's `language`. English (`en`), Czech (`cs`), German (`de`), French
+Labels follow the document's `language`, not `locale` (which formats dates, money, and durations).
+English (`en`), Czech (`cs`), German (`de`), French
 (`fr`), Polish (`pl`), and Slovak (`sk`) are built in, and other languages fall back to English. A style sets any label explicitly to override it, which is also
 how a firm adds a language.
 
