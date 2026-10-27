@@ -161,21 +161,27 @@ are set off by a space ("Termination (a)", §13.3).
 
 ### Text templates and their fields
 
-A text setting that holds `{field}` names is checked when the style is loaded. A field is a name
-in braces that is an identifier (`{n}`, `{designation}`); any other braces (`{}`, `{1}`, `{a b}`)
-are literal text. An identifier the setting does not accept is an error naming the setting (a
-typo would otherwise be shown literally), and so is a missing required field.
+A text setting that substitutes `{field}` names is checked when the style is loaded. A field is a
+name in braces that is an identifier (`{n}`, `{designation}`); any other braces (`{}`, `{1}`,
+`{a b}`) are literal text. An identifier the setting does not accept is an error naming the
+setting (a typo would otherwise be shown literally), and so is a missing required field, but only
+where the setting is in use: the `ref` of `numbering.levels` is required to hold `{n}` unless
+`numbering.scheme` is `none` (a reference then shows the heading text); the `ref` of
+`enumeration.levels` only when lists are enumerated (`enumeration.enabled: true`, or `ordered:
+enumerate`); `paragraphs.format.ref` only when `paragraphs.numbered` is true. A typo in a field is
+flagged either way. Plain labels substitute nothing, so they are not checked: `{word}` in one is
+just text.
 
 | Setting | Accepted fields | Required |
 |---|---|---|
 | `numbering.levels[].label` | `{n}`, `{path}` | none |
-| `numbering.levels[].ref` | `{n}` | `{n}` |
+| `numbering.levels[].ref` | `{n}` | `{n}`, unless `numbering.scheme: none` |
 | `enumeration.levels[].label`, `paragraphs.format.label` | `{n}`, `{path}`, `{section}` | none |
-| `enumeration.levels[].ref`, `paragraphs.format.ref` | `{n}`, `{section}` | `{n}` |
+| `enumeration.levels[].ref`, `paragraphs.format.ref` | `{n}`, `{section}` | `{n}`, when lists are enumerated / paragraphs are numbered |
 | `references.format` | `{designation}` | `{designation}`, or every reference reads the same |
 | `labels.condition` | `{condition}` | `{condition}`, as §15.8 requires the condition to be shown; an empty value is allowed and shows the bare condition |
 | `labels.attachment_file` | `{file}` | none |
-| every other label | none | none |
+| every other label | not checked: braces are text | none |
 
 ```
 $ legaldown-render contract.lgd --set references.format=nope
