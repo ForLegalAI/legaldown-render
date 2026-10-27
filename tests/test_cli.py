@@ -17,7 +17,7 @@ from legaldown_render.cli import main
 def test_render_to_file_infers_the_format(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     out = tmp_path / "out.txt"
     assert main([FEATURES, "-o", str(out)]) == 0
-    assert out.read_text().startswith("Services Agreement")
+    assert out.read_text(encoding="utf-8").startswith("Services Agreement")
     err = capsys.readouterr().err
     assert "[ref-broken]" in err
     # A validator finding names its line, as the validator's CLI prints it.
