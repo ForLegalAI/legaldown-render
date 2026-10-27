@@ -32,3 +32,46 @@ def test_without_a_page_break_separator_the_container_is_not_broken() -> None:
     # The rules are scoped by the separator class, which no element carries here.
     assert 'class="ld-attachments ld-separator-none"' in done.stdout
     assert 'ld-separator-page-break"' not in done.stdout
+
+
+# -- The stylesheet of a Style built by hand -------------------------------------
+
+def test_the_stylesheet_strips_what_could_leave_its_declaration() -> None:
+    """The loader refuses such values; ``stylesheet`` is the last line for a Style
+    built by hand, which it never validated."""
+    from legaldown_render.style import HeadingStyle, Html, Page, Style, Typography
+    from legaldown_render.writers.html import stylesheet
+
+    hostile = "red;}</style><script>x</script>@import 'x'; /* c */ \\ \x07\n\u2028}"
+    style = Style(
+        typography=Typography(font_family=hostile, font_size=hostile, line_height=hostile, color=hostile,
+                              link_color=hostile),
+        headings={1: HeadingStyle(size=hostile, weight=hostile)},
+        page=Page(size=hostile, margin=hostile),
+        html=Html(max_width=hostile),
+    )
+    css = stylesheet(style)
+    generated = css.split(":root {", 1)[1]
+    assert "<" not in generated
+    assert "/*" not in generated and "*/" not in generated
+    declarations = [line for line in css.split("\n") if line.startswith(("body {", ".ld-document {", "@page {"))]
+    assert declarations
+    for line in declarations:
+        assert line.count("{") == 1
+        assert line.count("}") == 1
+        assert "\\" not in line
+        assert "@" not in line.removeprefix("@page")
+
+
+def test_comment_delimiters_removed_from_a_value_cannot_join_into_another() -> None:
+    from legaldown_render.writers.html import _css
+
+    assert "/*" not in _css("a//**/*b*/*/c") and "*/" not in _css("a//**/*b*/*/c")
+    assert _css("a/*b*/c") == "abc"
+
+
+def test_the_stylesheet_keeps_a_division_sign() -> None:
+    from legaldown_render.style import Html, Style
+    from legaldown_render.writers.html import stylesheet
+
+    assert "max-width: calc(100% / 3);" in stylesheet(Style(html=Html(max_width="calc(100% / 3)")))

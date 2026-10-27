@@ -337,3 +337,86 @@ def test_a_plain_label_may_contain_braced_words() -> None:
 def test_the_labels_that_substitute_still_check_their_fields() -> None:
     assert _problems({"labels.condition": "{condtion}"})
     assert _problems({"labels.attachment_file": "{fil}"})
+
+
+# -- Values that reach the stylesheet --------------------------------------------
+
+#: Every setting written into the stylesheet, as a dotted key.
+CSS_SETTINGS = ["typography.font_family", "typography.font_size", "typography.line_height", "typography.color",
+                "typography.link_color", "headings.1.size", "headings.1.weight", "page.size", "page.margin",
+                "html.max_width"]
+CSS_TOKENS = ["/*", "*/", "</", "\\", "\n", "\r", "\t", "\x07", "\x7f", " "]
+
+
+def test_the_css_settings_listed_here_are_every_one_the_model_declares() -> None:
+    """A setting added to the model with a CSS kind must join the tables here."""
+    from legaldown_render.style import model
+
+    declared = [f"{section}.{item.name}"
+                for section, cls in (("typography", model.Typography), ("headings.1", model.HeadingStyle),
+                                     ("page", model.Page), ("html", model.Html))
+                for item in dataclasses.fields(cls) if "css" in item.metadata]
+    assert sorted(declared) == sorted([*CSS_SETTINGS, "html.extra_css"])
+
+
+@pytest.mark.parametrize("trusted", [True, False])
+@pytest.mark.parametrize("token", CSS_TOKENS)
+@pytest.mark.parametrize("key", CSS_SETTINGS)
+def test_a_css_value_with_a_forbidden_token_is_refused_and_named(key: str, token: str, trusted: bool) -> None:
+    """Rejected, not stripped: removing a token can form another (``/*`` out of ``//**``)."""
+    with pytest.raises(StyleError) as caught:
+        load_style("default", overrides={key: f"1em{token}x"}, trusted=trusted)
+    assert any(problem.startswith(f"{key}:") for problem in caught.value.problems)
+
+
+@pytest.mark.parametrize("trusted", [True, False])
+@pytest.mark.parametrize("extra", ["</style><script>alert(1)</script><style>", "a { } </STYLE >", "</sTyLe"])
+def test_extra_css_cannot_close_the_style_element(extra: str, trusted: bool) -> None:
+    with pytest.raises(StyleError, match=r"html\.extra_css: .*</style"):
+        load_style("default", overrides={"html.extra_css": extra}, trusted=trusted)
+    with pytest.raises(StyleError, match="extra_css"):
+        render(DOC, overrides={"html.extra_css": extra}, untrusted=not trusted, document_root=".")
+
+
+def test_extra_css_is_raw_css_otherwise() -> None:
+    css = "a > b { color: red } /* a comment */ p::before { content: '\\201c'; }\n.x { margin: 0 }"
+    result = render(DOC, overrides={"html.extra_css": css})
+    assert css in result.output
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("html.max_width", "calc(100% - 2rem)"),
+    ("html.max_width", "min(46rem, 100vw)"),
+    ("typography.color", "var(--ink)"),
+    ("typography.font_size", "clamp(10pt, 2vw, 14pt)"),
+    ("typography.line_height", "calc(1em + 4px)"),
+    ("page.margin", "max(20mm, 5%)"),
+])
+def test_a_trusted_style_may_use_css_functions_the_strict_grammar_refuses(key: str, value: str) -> None:
+    style = load_style("default", overrides={key: value})
+    assert value in render(DOC, style=style).output
+    with pytest.raises(StyleError, match=key):
+        load_style("default", overrides={key: value}, trusted=False)
+
+
+def test_a_style_object_is_checked_for_css() -> None:
+    from legaldown_render.style import Typography
+
+    style = replace(load_style("default"), typography=Typography(font_size="12pt /* "))
+    with pytest.raises(StyleError, match="typography.font_size"):
+        load_style(style)
+    with pytest.raises(StyleError, match="typography.font_size"):
+        render(DOC, style=style)
+
+
+def test_a_settings_object_handed_in_as_an_override_is_checked_too() -> None:
+    from legaldown_render.style import Typography
+
+    with pytest.raises(StyleError, match="typography.font_size"):
+        load_style("default", overrides={"typography": Typography(font_size="1em\n}")})
+
+
+def test_builtin_styles_and_documented_values_still_load() -> None:
+    for name in builtin_styles():
+        load_style(name)
+    load_style("default", overrides={"typography": {"font_family": "Georgia, serif", "justify": True}})

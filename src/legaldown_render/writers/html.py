@@ -467,6 +467,16 @@ def stylesheet(style: Style) -> str:
 
 
 def _css(value: str) -> str:
-    """A style value placed in CSS, stripped of characters that could end
-    the declaration or the stylesheet."""
-    return re.sub(r"[;{}<>]", "", value)
+    """A style value placed in CSS, stripped of what could end the declaration,
+    open a comment, or end the ``<style>`` element: ``;{}<>\\@``, control
+    characters and line breaks, and the comment delimiters ``/*`` and ``*/``
+    (removed until none is left, since removing one can join its neighbours
+    into another). A single ``/`` stays, as ``calc(100% / 3)`` needs it.
+
+    The style loader already refuses such values (:func:`~..style.model.css_problem`);
+    this is the last line for :func:`stylesheet` given a :class:`Style` built by
+    hand."""
+    value = re.sub(r"[;{}<>\\@\x00-\x1f\x7f-\x9f\u2028\u2029]", "", value)
+    while "/*" in value or "*/" in value:
+        value = value.replace("/*", "").replace("*/", "")
+    return value

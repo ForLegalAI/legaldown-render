@@ -62,6 +62,7 @@ legaldown-render contract.lgd --set numbering.scheme=legal-outline --set enumera
 legaldown-render contract.lgd --set contents.enabled=true --set contents.depth=3   # table of contents
 legaldown-render contract.lgd --strict                          # refuse if the document has errors
 legaldown-render contract.lgd --root . --strict                 # file references may not leave this directory
+legaldown-render upload.lgd --untrusted --root uploads/ --style continental   # a document you did not write
 legaldown-render contract.lgd --final --strict                  # refuse if blanks or template constructs remain
 legaldown-render template.lgd --answers answers.yaml -o nda.html # fill in a template, then render it
 legaldown-render --print-style --style continental              # every setting, as YAML
@@ -125,6 +126,34 @@ cannot be assembled with its answers (`RenderRefused`) do. All of them are `Rend
 `StyleError` and `OptionsError` are also `ValueError`s. They can be pickled, so they cross process
 boundaries (`multiprocessing`, `concurrent.futures`) intact. `overrides=` takes dotted settings and
 may not contain `version` or `extends`, so `overrides=legaldown_render.style.style_to_dict(style)` must drop those two keys.
+
+## Rendering documents you did not write
+
+Document source never becomes HTML or CSS: raw HTML is not emitted, every text and attribute is
+escaped, and a link is made only for an allow-listed scheme. What a service that renders its users'
+uploads must add is a boundary for files and a style it does not take on trust:
+
+```python
+from legaldown_render import render, RenderOptions
+
+result = render(source, RenderOptions(untrusted=True, document_root="/srv/uploads/acme", style="continental"))
+```
+
+`untrusted=True` (`--untrusted` on the command line) does two things:
+
+- It requires a `document_root` (`--root DIR`), so that no file reference can leave the tree the
+  document belongs to (§2.3); without one `render` raises `OptionsError` and the command exits 2.
+- It loads the style untrusted (`load_style(..., trusted=False)`): a built-in name, a mapping or YAML
+  text, never a file; `extends` only a built-in; only plain CSS values (no `calc()`, no `var()`);
+  no `html.extra_css`; YAML text of at most 64 KiB with no aliases. Errors name the setting and
+  never quote the style or a path. See [Untrusted mode](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#untrusted-mode).
+
+Without the option a style is the operator's own: it may be a file and may carry raw CSS, though a
+value that could leave its place in the stylesheet (`/*`, `</`, a backslash, a control character) or
+`</style` in `html.extra_css` is refused in every mode. Even so, choose the style yourself
+rather than passing on what a user sends. `--untrusted` does not limit what the document can ask of
+the machine beyond file references (nothing is read at Rendering level) or how large it may be:
+set your own limits on size and time.
 
 ## Styles and preferences
 

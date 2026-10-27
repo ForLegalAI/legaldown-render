@@ -26,7 +26,7 @@ Values are layered. Each layer overrides the one before it, **field by field**:
    The `default` style is exactly these defaults.
 2. **The `extends` chain.** A style names the style it builds on, which can be a built-in name or
    a path relative to the file (any path the process can read, `../` and absolute paths
-   included). Chains are resolved base first, and cycles are rejected, however the files are
+   included; an untrusted style names a built-in only, see "Untrusted mode"). Chains are resolved base first, and cycles are rejected, however the files are
    spelled (`../dir/a.yaml`, a symbolic link).
 3. **The chosen style**: `--style NAME|PATH`, or `RenderOptions(style=...)`.
 4. **Per-job overrides**: `--set numbering.scheme=mixed` or `overrides={"numbering.scheme": "mixed"}`,
@@ -195,11 +195,41 @@ takes the built-in one for the document language, which always passes.
 ### Trusted input
 
 A style template, a `--set` value, and an `extends` path are the operator's, not the document
-author's. Values placed into the stylesheet (`typography`, `headings`, `page`, `html.max_width`)
-are stripped of `;{}<>` and are otherwise not checked as CSS, so a value such as `12pt (` is
-emitted as written and breaks the rest of the stylesheet. `html.extra_css` is raw CSS. Do not
-render with styles from users you do not trust
-([Security](architecture.md#security)).
+author's. A value placed into the stylesheet (`typography`, `headings`, `page`, `html.max_width`)
+must not contain `/*`, `*/`, `</`, a backslash, a control character or a line break: the style is
+refused, naming the setting (nothing is stripped). Other CSS is accepted as written, `calc()` and
+`var()` included, and is not checked as CSS, so a value such as `12pt (` breaks the rest of the
+stylesheet. `html.extra_css` is raw CSS and may not contain `</style` (in any case). `extends` and
+`--style` read any file the process can read. Do not render with styles from users you do not
+trust in this mode ([Security](architecture.md#security)).
+
+### Untrusted mode
+
+For a style that comes from somebody else, load it with `load_style(style, trusted=False)`, or render
+with `RenderOptions(untrusted=True, document_root=...)` (`legaldown-render --untrusted --root DIR`):
+
+- The style is a built-in name, a `Style`, a mapping, or YAML text (a string with a line break), never
+  a path; `extends` may name only a built-in style (`default`, `continental`, `outline`).
+- Each value that reaches the stylesheet must be a plain value of its kind:
+
+  | Setting | Accepted |
+  |---|---|
+  | `typography.font_size`, `headings.N.size` | a length: `11pt`, `1.2em`, `0` (units `em rem ex ch pt pc px mm cm in %`) |
+  | `typography.line_height` | `normal`, a number (`1.5`), or a length |
+  | `typography.color`, `typography.link_color` | `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, a colour name, `rgb()`/`rgba()`/`hsl()`/`hsla()` of plain numbers |
+  | `headings.N.weight` | `normal`, `bold`, `bolder`, `lighter`, or 1 to 1000 |
+  | `typography.font_family` | up to ten font names separated by commas; names of more than one word quoted |
+  | `page.size` | `auto`, `portrait`, `landscape`, a paper size (`A3` to `A5`, `B4`, `B5`, `letter`, `legal`, `ledger`) with an optional orientation, or one or two lengths |
+  | `page.margin` | one to four lengths |
+  | `html.max_width` | `none` or a length |
+
+  Functions (`calc()`, `var()`, `min()`), `!important` and anything else are refused. The same grammar
+  holds for a `Style` object and for overrides.
+- `html.extra_css` must be empty.
+- YAML text is at most 64 KiB and may not use aliases. (A style, trusted or not, nests 32 levels at most.)
+- An error names the setting and the problem and never quotes the style, a key or a path, so it can
+  be shown to whoever sent the style.
+- The built-in styles and the examples in this document all pass.
 
 ### Built-in labels
 

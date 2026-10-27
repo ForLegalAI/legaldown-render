@@ -94,6 +94,10 @@ def _parser() -> argparse.ArgumentParser:
                              "supersedes, a translation, an image) that leaves DIR is an error "
                              "(path-outside-root), and the file is not used. The document must be inside DIR "
                              "(standard input counts as at DIR itself). Without it, ../ is allowed")
+    parser.add_argument("--untrusted", action="store_true",
+                        help="the document and the style are somebody else's (for a service rendering what its "
+                             "users send): requires --root (exit 2 without), and the style must be a built-in "
+                             "name, with no file, no raw CSS (html.extra_css) and only plain CSS values")
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
     parser.add_argument("--answers", metavar="FILE",
@@ -199,7 +203,8 @@ def main(argv: list[str] | None = None) -> int:
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,
                             strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment,
                             filename="" if args.input == "-" else Path(args.input).name,
-                            document_root=args.root, document_path=None if args.input == "-" else args.input)
+                            document_root=args.root, document_path=None if args.input == "-" else args.input,
+                            untrusted=args.untrusted)
     try:
         result = render(source, options)
     except (StyleError, OptionsError) as error:
