@@ -25,7 +25,7 @@ import pytest
 from conftest import FRONT, text
 
 from legaldown_render import RenderResult, render
-from legaldown_render.resolve.resolver import Resolver
+from legaldown_render.resolve.resolver import _MAX_TERM_WORK, Resolver
 
 WorkCounter = Callable[..., tuple[RenderResult, int]]
 
@@ -173,6 +173,22 @@ def test_3000_independent_terms_show_their_text_and_no_warning(
     _, half = resolver_work(_independent(1500, heading=heading), 4 * 1500 + 100,
                             overrides={"numbering.scheme": scheme})
     assert directives <= 2.2 * half
+
+def test_first_computations_of_acyclic_terms_are_free_of_the_budget() -> None:
+    # Together the term texts hold more inline nodes than the work budget allows for repeat
+    # computations, but each term is worked out only once, so none of that work is charged.
+    terms, runs = 800, 120
+    nodes_per_text = 1 + 2 * runs + (runs - 1)  # the text, each emphasis with its words, the spaces
+    assert terms * nodes_per_text > _MAX_TERM_WORK
+    defs = [f'"T{i} {" ".join(f"*e{j}*" for j in range(runs))}" {{{{def: t{i}}}}}\n\nUsed {{{{term: t{i}}}}}\n\n'
+            for i in range(terms)]
+    result = render(FRONT + "# A\n\n" + "".join(defs), format="text")
+    assert messages(result, "render-term-limit") == []
+    lines = set(result.output.splitlines())
+    assert {f"Used T{i} " + " ".join(f"e{j}" for j in range(runs)) for i in (0, terms // 2, terms - 1)} <= lines
+    assert sum(line.startswith("Used T") for line in result.output.splitlines()) == terms
+    assert not any(line.startswith("Used t") for line in lines)
+
 
 # -- A cached text is reused only where it would read the same -----------------
 
