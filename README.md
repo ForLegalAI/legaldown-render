@@ -82,8 +82,10 @@ from Python leaves `sys.stdout` and `sys.stderr` as they are.
 Without `--format`, `-o` takes the format from the file extension: `.html` and `.htm` write HTML,
 `.txt` and `.text` plain text. The extension of a document format this renderer does not write
 (`.docx`, `.doc`, `.odt`, `.rtf`, `.pdf`, `.md`, `.markdown`, `.epub`, `.tex`, in any case) is a usage
-error (exit 2) unless `--format` says what to write. Any other name, with any other extension or
-none (`contract`, `contract.v2`, `report.2025-10-27`, `.out`), is just a name and writes HTML.
+error (exit 2) unless `--format` says what to write. The extension is the text after the last dot,
+also in a name that starts with one (`.pdf`), and trailing dots and spaces are ignored (`x.pdf.`,
+`"x.docx "`). Any other name, with any other extension or none (`contract`, `contract.v2`,
+`report.2025-10-27`, `.out`), is just a name and writes HTML.
 
 ## Python
 

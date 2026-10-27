@@ -41,7 +41,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
 | Links (§8.7) | ✅ A link is a hyperlink in HTML and shows `text <url>` in plain text when its URL is relative, a fragment, or has one of the schemes `http`, `https`, `mailto`, `tel`, `ftp`, `ftps`, `sftp`, `sip`, `sips`, `sms`, `urn`, `geo`, `news` (an allow-list, judged as a browser reads the URL). Any other scheme (`javascript:`, `file:`, `data:`, protocol handlers such as `ms-msdt:`, `vscode:`, `search-ms:`, and pseudo-schemes such as `C:\x` or `localhost:8080`), or an empty URL, is not a link: its text is shown alone, and the Warning `render-link-refused` is reported for a non-empty URL. A link with no text shows its URL as written; the text writer omits `<url>` for an autolink |
 | Images and file-reference paths (§8.7, §2.3) | ✅ A relative path (`../` included, as §2.3 defines no default document root) renders `<img>` in HTML and its alt text in plain text. A path with a URI scheme (`data:` too), an absolute one (`/`, `\`, `//host`), or a Windows drive path is never fetched or embedded: the alt text is shown and the Error `path-not-relative` is reported, which `--strict` refuses. An empty path shows the alt text with no diagnostic |
-| Plain-text layout (§13.6, optional) | ✅ `attachments.separator` (§13.8): `none` prints no `---`; `rule` and `page-break` both print one before the attachments heading and between consecutive attachments, so the heading stays with the first (text has no pages). One quote stays one quote (blank lines keep the `>`), and the blocks of a list item are set apart by blank lines and indented under the item's label, whatever its condition label. A pipe in a table cell is backslash-escaped, and the separator row marks column alignment (`:---`, `:---:`, `---:`). A label a style blanks drops its `label: ` prefix in the title block, party details and signature blocks (a signature row with neither label nor value is omitted); HTML keeps an empty `<dt>` so its grid layout and the `<dl>` stay valid |
+| Plain-text layout (§13.6, optional) | ✅ `attachments.separator` (§13.8): `none` prints no `---`; `rule` and `page-break` both print one before the attachments heading and between consecutive attachments, so the heading stays with the first (text has no pages). One quote stays one quote (blank lines keep the `>`), and the blocks of a list item are set apart by blank lines and indented under the item's label, whatever its condition label; an item that opens with a nested list, table, code block or quote has its label on a line of its own, so that block stays valid. A pipe in a table cell is backslash-escaped, and the separator row marks column alignment (`:---`, `:---:`, `---:`). A label a style blanks drops its `label: ` prefix in the title block, party details and signature blocks (a signature row with neither label nor value is omitted); HTML keeps an empty `<dt>` so its grid layout and the `<dl>` stay valid |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML table is dropped with the Warning |
 | Visual blank for a placeholder (§13.5 rule 6) | ✅ `placeholders.blank`; a blank that is empty, or only whitespace or invisible format characters (U+200B, U+FEFF), renders `[TBD: id]` |
 | Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
@@ -97,7 +97,14 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   source; `label=` overrides it. A definition not in the body (a template's other alternative)
   falls back to the validator's term text.
   A term that refers to itself, directly or through other terms (`"A {{term: a}}" {{def: a}}`), is
-  rendered without looping: the inner reference shows its `label=`, else the definition id. The
+  rendered without looping: the inner reference shows its `label=`, else the definition id. A term text
+  worked out inside a cycle depends on which terms are open, so a text with
+  a cut at a term open outside it is reused only where the same of its terms are open; every other text
+  is worked out once per term, also in a heading read before the targets are known (§13.3). A term text is capped at 1,000 characters
+  of plain text, checked as it is built (no real defined term comes near it; a chain of terms that each
+  read the next twice would otherwise ask for a text of 2^n words): a longer one is shown by its
+  definition id in `{{term:}}` (a `label=` still wins), and the Warning `render-term-too-long` names the
+  id, once. The
   validator (0.4.0) does not report these cycles; the specification's `definition-circular`
   Warning (§16) is not emitted yet.
 - **Ambiguous references.** Each list starts again at its first number, as contracts are usually

@@ -18,7 +18,8 @@ failures shown here, so the resolver only adds the diagnostics that need a
 style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
 and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
 ``render-link-refused`` for a link whose URL scheme is not one links may use
-(§8.7), and ``path-not-relative`` for an image whose path is not relative (§2.3), which
+(§8.7), ``render-term-too-long`` for a term whose text is longer than a
+``{{term:}}`` may show, and ``path-not-relative`` for an image whose path is not relative (§2.3), which
 the validator does not check yet.
 """
 from __future__ import annotations
@@ -114,6 +115,29 @@ _MALFORMED = {
 }
 
 
+#: The longest plain text a ``{{term:}}`` may show, in characters. No real
+#: defined term comes near it; one longer is a term that reads other terms
+#: that read other terms (each reference repeating the text of the next, so a
+#: short document can ask for a text of 2**n words), and its reference shows
+#: the definition id instead (``render-term-too-long``). Checked as each term
+#: text is built, so no text grows past the source plus the nested references
+#: times this.
+_MAX_TERM_TEXT = 1000
+
+#: How many texts (one per different set of open terms around it) are kept for
+#: one term, so that a pathological tangle of cycles cannot fill memory.
+_TERM_TEXTS_PER_TERM = 32
+
+
+class _TermText(NamedTuple):
+    """A term's text, the terms it named, and those it was cut short at
+    because an enclosing term had them open (see ``Resolver._while_open``)."""
+
+    text: str
+    seen: frozenset[str]
+    cut: frozenset[str]
+
+
 @dataclass(frozen=True, slots=True)
 class _Target:
     """What a ``{{ref:}}`` to an anchor resolves to."""
@@ -157,11 +181,20 @@ class Resolver:
         # and -> the plain text of its term as rendered there, worked out the
         # first time a {{term:}} needs it (see _term_text).
         self.term_sources: dict[str, DefinitionSource] = {}
-        self.term_texts: dict[str, str] = {}
+        self.term_texts: dict[str, list[_TermText]] = {}
+        # The same for the text-only pass before the targets are known, and
+        # for the validator's term text where a definition is not in the body.
+        self.term_texts_early: dict[str, list[_TermText]] = {}
+        self.term_texts_plain: dict[str, list[_TermText]] = {}
         # The definitions whose term text is being worked out, so that a
         # {{term:}} inside a term, directly or through other terms, cannot
         # send the computation round in a circle.
         self._terms_open: list[str] = []
+        # Since the text now being worked out began (see _while_open): every
+        # term a {{term:}} named, and those of them it was cut short at
+        # because they were open.
+        self._seen: set[str] = set()
+        self._cut: set[str] = set()
         # False until every target is registered and the placeholder types are
         # known (run() sets it just before the inlines are resolved).
         self._targets_known = False
@@ -625,7 +658,10 @@ class Resolver:
             # A term that refers to itself, directly or through others: the
             # reference shows its label, else the id, and goes no further.
             text = label or definition_id
+            self._seen.add(definition_id)
+            self._cut.add(definition_id)
         else:
+            self._seen.add(definition_id)
             # The term as rendered at its definition; the validator's own
             # text (an empty term reads as its id, a definition not in the
             # body) is the fallback.
@@ -644,38 +680,83 @@ class Resolver:
         Worked out the first time it is needed and kept, which is once every
         target is registered and the placeholder types are known. Before that
         (a heading read as text by the ``none`` scheme, §13.3) a text-only pass
-        stands in, which leaves references out and is not kept. Resolving the
-        term gives out no anchor: a definition inside a term keeps its place in
-        document order. The definition is open meanwhile, so a ``{{term:}}``
-        inside it, directly or through others, shows its label or id and goes
-        no further."""
+        stands in, which leaves references out; it is kept apart from the
+        text of the later pass. Resolving the term gives out no anchor: a
+        definition inside a term keeps its place in document order. The
+        definition is open meanwhile, so a ``{{term:}}`` inside it, directly or
+        through others, shows its label or id and goes no further (see
+        :meth:`_while_open`). A text longer than :data:`_MAX_TERM_TEXT` is the
+        definition id instead, and the Warning ``render-term-too-long`` says
+        so, once per id."""
         source = self.term_sources.get(definition_id)
         if source is None:
             return ""
-        if definition_id in self.term_texts:
-            return self.term_texts[definition_id]
-        self._terms_open.append(definition_id)
-        try:
-            if not self._targets_known:
-                return self._title_text(source.children)
-            anchors = set(self.used_anchors)
-            try:
-                text = plain_text(self._resolve_inlines(source.children))
-            finally:
-                self.used_anchors = anchors
-        finally:
-            self._terms_open.pop()
-        self.term_texts[definition_id] = text
-        return text
+        known = self._targets_known
+
+        def work() -> str:
+            if not known:
+                text = self._title_text(source.children)
+            else:
+                anchors = set(self.used_anchors)
+                try:
+                    text = plain_text(self._resolve_inlines(source.children))
+                finally:
+                    self.used_anchors = anchors
+            if len(text) > _MAX_TERM_TEXT:
+                self._warn(
+                    "render-term-too-long",
+                    f"The term of '{printable(definition_id)}' is longer than {_MAX_TERM_TEXT} characters once its "
+                    f"references are resolved; '{{{{term: {printable(definition_id)}}}}}' shows the definition id.",
+                )
+                return definition_id
+            return text
+
+        return self._while_open(self.term_texts if known else self.term_texts_early, definition_id, work)
 
     def _plain_open(self, definition_id: str, term: str) -> str:
         """The validator's *term* text of a definition as plain text, with
         the definition marked open while its directives resolve."""
+        key = f"{definition_id}\0{int(self._targets_known)}"
+        return self._while_open(self.term_texts_plain, definition_id, lambda: self._plain_value(term), key=key)
+
+    def _while_open(self, cache: dict[str, list[_TermText]], definition_id: str, work: Callable[[], str],
+                    *, key: str | None = None) -> str:
+        """The text *work* gives with *definition_id* open, kept in *cache*
+        (under *key*, default the id), so a chain of terms that each use the
+        next one twice is worked out once per term, not once per use.
+
+        What a text reads depends on which terms are open around it only
+        where a reference was cut short at an open term (it shows that term's
+        label or id). A text with no cut at a term opened *before* this one is
+        the term's own text, as the reader sees it at its definition, and is
+        reused wherever the term is needed. A text with such a cut (a cycle
+        back through an enclosing term) records the terms it named and the
+        ones it was cut short at, and is reused only where exactly those of
+        the terms it named are open. A cut at this term itself, or at one
+        opened inside it, is its own business and does not count. Without a
+        cycle every term is worked out once; with one, once for each way round
+        it is reached.
+        """
+        key = definition_id if key is None else key
+        around = set(self._terms_open)
+        for kept in cache.get(key, ()):
+            if not kept.cut or kept.seen & around == kept.cut:
+                self._seen |= kept.seen
+                self._cut |= kept.cut
+                return kept.text
         self._terms_open.append(definition_id)
+        outer = self._seen, self._cut
+        self._seen, self._cut = set(), set()
         try:
-            return self._plain_value(term)
+            text = work()
+            seen, cut = frozenset(self._seen), frozenset(self._cut & around)
+            if len(cache.setdefault(key, [])) < _TERM_TEXTS_PER_TERM:
+                cache[key].append(_TermText(text, seen, cut))
         finally:
             self._terms_open.pop()
+            self._seen = outer[0] | self._seen
+            self._cut = outer[1] | (self._cut & around)
+        return text
 
     def _date(self, directive: Directive, value: str) -> Inline:
         if not is_valid_iso_date(value):

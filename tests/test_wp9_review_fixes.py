@@ -114,9 +114,11 @@ def test_a_money_amount_in_name_mode_with_a_4400_digit_fraction_renders() -> Non
     assert f"1.{LONG} euros" in output
 
 
-def test_a_4400_digit_fraction_uses_the_other_category_in_czech() -> None:
+def test_a_4400_digit_fraction_uses_the_many_category_in_czech() -> None:
+    # Wave 3 (WP11): the category comes from the first 30 fraction digits, so it is the
+    # "many" of "2,5 roku", not "other" (" let").
     output = render(FRONT + f"# A\n\n{{{{duration: 1.{LONG}, unit=Y}}}}", format="text", locale="cs-CZ").output
-    assert output.rstrip().endswith(" let")  # "other", not the "many" of "2,5 roku"
+    assert output.rstrip().endswith(" roku")
 
 
 # -- 4: only the program reconfigures the streams -------------------------------

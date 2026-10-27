@@ -1113,8 +1113,10 @@ def test_a_marker_copy_inside_a_comment_is_not_the_marker() -> None:
 
 def test_an_item_opening_with_a_drafting_note_or_code() -> None:
     output = text("# A\n\n- > [!DRAFTING]\n  > note here\n- ```\n  code\n  ```\n")
-    assert "(a) > [Drafting note]\n    > note here" in output
-    assert "(b)     code" in output
+    # The label stands alone and the block is indented under the item text (WP11): flattened
+    # onto the label line, a quote is no quote and code is mis-indented.
+    assert "(a)\n    > [Drafting note]\n    > note here" in output
+    assert "(b)\n        code" in output
     assert "```" not in output
 
 

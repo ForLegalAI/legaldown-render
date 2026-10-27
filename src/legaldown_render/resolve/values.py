@@ -107,20 +107,44 @@ def _unit_patterns(locale: Locale, unit_id: str, length: str) -> dict[str, str]:
     return {category: pattern for category, pattern in patterns.items() if category != "per"}
 
 
+_PLURAL_FRACTION_DIGITS = 30
+"""Fraction digits kept when the plural category of a value with a huge
+fraction is computed from a shortened copy (see :func:`_plural_category`)."""
+
+
+def _truncated_fraction(value: Decimal) -> Decimal:
+    """*value* with its fraction cut to its first :data:`_PLURAL_FRACTION_DIGITS`
+    digits (cut, not rounded), so the integer part stays exact and a value that
+    had a fraction still has one (CLDR's operand ``v`` stays non-zero). The
+    digits are rearranged, not computed with, so no precision limit applies."""
+    sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int) or exponent >= -_PLURAL_FRACTION_DIGITS:
+        return value
+    keep = len(digits) + exponent + _PLURAL_FRACTION_DIGITS
+    digits = digits[:keep] if keep > 0 else (0,)
+    return Decimal((sign, digits, -_PLURAL_FRACTION_DIGITS))
+
+
 def _plural_category(locale: Locale, value: Decimal) -> str:
     """The CLDR plural category of *value* in *locale*.
 
     CLDR's plural operands of a value are its integer and fraction digits read
     as integers, and Python refuses to convert a string of more than 4300 digits
-    to an int (``ValueError``). Such a value is a non-integer or a very long
-    integer whose category cannot be computed under that limit, and ``other`` is
-    the category CLDR gives non-integers in nearly every locale, so ``other`` it
-    is. The limit is not raised: ``sys.set_int_max_str_digits`` is process-wide.
+    to an int (``ValueError``). For a value whose fraction is that long the
+    category is computed from the same value with its fraction cut to its first
+    30 digits: that keeps the integer part and the fact that there is a
+    fraction, which is what the category depends on in practice ("1,333..." is
+    ``many`` in Czech, Slovak and Lithuanian, not ``other``). A value whose
+    integer part is itself too long has no category that can be computed, and
+    ``other`` it is. The limit is not raised: ``sys.set_int_max_str_digits`` is
+    process-wide.
     """
-    try:
-        return locale.plural_form(value)
-    except ValueError:
-        return "other"
+    for candidate in (value, _truncated_fraction(value)):
+        try:
+            return locale.plural_form(candidate)
+        except ValueError:
+            continue
+    return "other"
 
 
 def _duration_pattern(locale: Locale, unit_id: str, length: str, value: Decimal) -> tuple[str, bool]:
@@ -216,17 +240,23 @@ class Formatter:
 
     def _money_name(self, value: Decimal, currency: str, pattern: NumberPattern) -> str:
         """*value* with the currency's name ("1,234.50 euros"), through Babel
-        unless the plural category of *value* cannot be computed (see
-        :func:`_plural_category`): Babel's own lookup of the unit pattern would
-        then fail, so the ``other`` pattern and name are put together here, the
-        way Babel does it (``_format_currency_long_name``)."""
+        unless the plural category of *value* cannot be computed from its own
+        digits (see :func:`_plural_category`): Babel's own lookup of the unit
+        pattern would then fail, so the pattern and name are put together here,
+        the way Babel does it (``_format_currency_long_name``), for the
+        category of the value with its fraction shortened (``other`` when even
+        that fails)."""
         try:
             self.locale.plural_form(value)
         except ValueError:
             number = pattern.apply(value, self.locale, currency=currency, currency_digits=False,
                                    decimal_quantization=False)
-            unit_pattern = get_currency_unit_pattern(currency, locale=self.locale)
-            return unit_pattern.format(number, get_currency_name(currency, count=value, locale=self.locale))
+            shortened = _truncated_fraction(value)
+            try:
+                unit_pattern = get_currency_unit_pattern(currency, count=shortened, locale=self.locale)
+            except ValueError:
+                unit_pattern = get_currency_unit_pattern(currency, locale=self.locale)
+            return unit_pattern.format(number, get_currency_name(currency, count=shortened, locale=self.locale))
         return format_currency(value, currency, format=pattern, locale=self.locale, currency_digits=False,
                                format_type="name", decimal_quantization=False)
 
