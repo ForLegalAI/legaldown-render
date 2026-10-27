@@ -89,4 +89,11 @@ markdown-it-py) come from PyPI.
   overrides the installed validator with `main`, so it tests main regardless of the range). The
   tests fail on any `legaldown.LegaldownDeprecationWarning`, so a release never calls what the
   validator's next minor version removes.
+- **Recommendation: gate the upload on the tests.** The `publish` workflow builds and uploads
+  without running the test suite, and `ci.yml` runs separately, so a release can reach PyPI from
+  a commit whose tests fail. Add the lint, test, and conformance jobs (or one called workflow)
+  as `needs:` of the `build` job in `publish.yml`, or require a passing CI run on the tagged
+  commit before the Release is published. This repository's workflows are not changed here.
+- The license is declared once, as the SPDX expression `license = "MIT"` in `pyproject.toml`
+  (PEP 639), so the deprecated `License :: OSI Approved :: MIT License` classifier is not listed.
 - The package ships a `py.typed` marker, so type checkers use its annotations directly.

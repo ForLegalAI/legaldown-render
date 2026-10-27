@@ -331,7 +331,7 @@ def test_representatives_are_labelled_and_french_labels_space_their_colons() -> 
     relabelled = render(source, format="text", overrides={"labels.represented_by": "Acting for"}).output
     assert "Acting for: John Smith" in relabelled
     french = render(source.replace("language: en", "language: fr"), format="text").output
-    assert "Représentée par\xa0: John Smith" in french
+    assert "Représenté(e) par\xa0: John Smith" in french
     assert "Nom\xa0: " in french and "\nLieu\xa0:\n" in french
     assert "Date d'effet\xa0: " in french
 

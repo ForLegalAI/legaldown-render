@@ -75,8 +75,8 @@ errors, because a draft with visible markers is useful. Under `--strict` it refu
 
 **4. Content and presentation stay separate.** Everything visual comes from the style template,
 including numbering schemes, locale, and the labels used in the template view. The same source
-must render correctly with any compatible template (§13.7). Locale is a render-time setting and
-is never read from the document; `language` is only a hint (§10.1).
+must render correctly with any compatible template (§13.7). Locale is a render-time setting
+of the style: the document's `language` is only the hint used when the style sets none (§10.1).
 
 **5. Output is deterministic.** Identical inputs produce byte-identical output: no timestamps,
 no random ids, stable anchor names, stable ordering. This makes golden-file tests possible and

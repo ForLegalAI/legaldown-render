@@ -37,7 +37,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Labels following the document language (§13.7) | ✅ Built in for `en`, `cs`, `de`, `fr`, `pl`, and `sk`; any label can be set by a style |
 | A conditional unit's condition is shown (§15.8, MUST) | ✅ Also for a custom style: `labels.condition` must contain `{condition}`, or the style is refused |
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
-| `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments |
+| `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments (see "Text after a comment", below) |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
 | Links (§8.7) | ✅ Every link is a hyperlink in HTML and shows `text <url>` in plain text, whatever its scheme (`ftp:`, `sip:`, `urn:`, ...), except one whose URL is empty or uses `javascript:`, `vbscript:`, `file:`, or `data:`, which shows its text alone. A link with no text shows its URL; the text writer omits `<url>` for an autolink |
 | Images and file-reference paths (§8.7, §2.3) | ✅ A relative path (`../` included, as §2.3 defines no default document root) renders `<img>` in HTML and its alt text in plain text. A path with a URI scheme (`data:` too), an absolute one (`/`, `\`, `//host`), or a Windows drive path is never fetched or embedded: the alt text is shown and the Error `path-not-relative` is reported, which `--strict` refuses. An empty path shows the alt text with no diagnostic |
@@ -61,13 +61,35 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   The containment rule (`path-outside-root`) is not checked: no document root is configured.
 - **Nesting limit.** The validator reads lists 64 levels deep and quotes 16; deeper, an item's or
   quote's content is its text. The renderer follows it, and refuses (`DocumentError`) a document
-  whose lists, quotes, and inline formatting (emphasis, links) together nest more than 100 levels,
-  while building it and before resolving or writing it, so no document can exhaust the stack.
+  in which the enclosing lists and quotes plus one text's inline formatting (emphasis, links) nest
+  more than 100 levels, while building it and before resolving or writing it, so no document can
+  exhaust the stack. The count is per text: a defined term's own text (`"A *b*" {{def: x}}`) is
+  built separately, so the emphasis inside the term does not add to the emphasis around it. Each
+  is checked against the limit with the enclosing lists and quotes, and their sum can exceed 100.
 - **Comment-only items and quotes.** A list item whose blocks are all comments or raw HTML is
   left out (§8.6: the author removed it), and so is a list left with no items and a quote that
   holds only comments. Numbers and designations are those of the items that remain. An item with
   no content at all keeps its place (CommonMark), and so does an empty drafting note, whose label
   is the template construct (§15.6).
+- **Text after a comment.** A comment that starts a line is a CommonMark HTML block, which ends at
+  the line holding `-->`. Anything after the `-->` on that line belongs to the block and is dropped
+  with it, with the validator's `raw-html` Warning: `<!-- c --> text` renders nothing (the lines
+  after it are ordinary paragraphs again). A line holding only the comment is dropped with no
+  Warning, and a comment inside a line of text (`before <!-- c --> after`) is dropped alone,
+  keeping the text around it (§8.6).
+- **Directives in a link or image destination.** A destination is not text: `[x](#{{ref: a}})`,
+  `<https://e.com/{{ref: a}}>` and `![i](p/{{field: x}}.png)` are not resolved. The `href` or `src`
+  holds the directive's source, percent-encoded (`#%7B%7Bref:%20a%7D%7D`). The validator still reads
+  the directive, so a broken `{{ref:}}` there is reported (`ref-broken`), and the visible text of
+  an autolink shows it resolved, unlike its target. Directives in link text and alt text are
+  resolved.
+- **Table cells.** A row with more cells than the header has loses the extra cells, as GFM
+  specifies, with no diagnostic from the validator or the renderer; a shorter row is padded with
+  empty cells.
+- **Parties and `{{party:}}`.** The title block lists each party as an identification block, by
+  `legal_name` (then `label`, then `name`), and the signature blocks use `legal_name` (§3.6). The
+  text uses `label`, falling back to `legal_name` (§3.6): "the Seller" in a sentence, "Acme
+  Corporation" in the title block.
 - **`{{term:}}` text.** A `{{term:}}` shows the term as rendered at its first definition in the
   body, with its Markdown, `{{ref:}}`s and placeholders resolved as at the definition
   (`"A *b* c" {{def: abc}}` is "A b c", `"Fee per {{ref: h}}"` is "Fee per 1"), not the term's raw

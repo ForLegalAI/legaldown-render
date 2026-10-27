@@ -6,10 +6,12 @@ time, under a style template (§13.7)::
 
     from legaldown_render import render
 
-    result = render(open("contract.lgd").read(), format="html", style="default")
+    with open("contract.lgd", encoding="utf-8") as source:
+        result = render(source.read(), format="html", style="default")
     for diagnostic in result.diagnostics:
         print(diagnostic.level, diagnostic.rule, diagnostic.message)
-    open("contract.html", "w").write(result.output)
+    with open("contract.html", "w", encoding="utf-8", newline="\n") as output:
+        output.write(result.output)
 
 Parsing and Core validation come from legaldown-validator; this package
 claims the Rendering conformance level (§17.3). Exact coverage:

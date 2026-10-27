@@ -29,7 +29,7 @@ BUILTIN_LABELS: dict[str, Labels] = {
     "cs": Labels(
         drafting_note="Poznámka pro zpracovatele",
         condition="Pouze pokud: {condition}",
-        identification_number="IČO",
+        identification_number="Identifikační číslo",
         date_of_birth="Datum narození",
         address="Adresa",
         represented_by="Zastoupení",
@@ -71,7 +71,7 @@ BUILTIN_LABELS: dict[str, Labels] = {
         identification_number="N° d'immatriculation",
         date_of_birth="Date de naissance",
         address="Adresse",
-        represented_by="Représentée par",
+        represented_by="Représenté(e) par",
         effective_date="Date d'effet",
         version="Version",
         attachments="Annexes",
@@ -106,7 +106,7 @@ BUILTIN_LABELS: dict[str, Labels] = {
     "sk": Labels(
         drafting_note="Poznámka pre spracovateľa",
         condition="Iba ak: {condition}",
-        identification_number="IČO",
+        identification_number="Identifikačné číslo",
         date_of_birth="Dátum narodenia",
         address="Adresa",
         represented_by="Zastúpenie",
