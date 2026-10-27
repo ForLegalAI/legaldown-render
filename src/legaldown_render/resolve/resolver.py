@@ -20,8 +20,13 @@ and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
 ``render-link-refused`` for a link whose URL scheme is not one links may use
 (§8.7), ``render-term-too-long`` for a term whose text is longer than a
 ``{{term:}}`` may show, ``render-term-limit`` for terms that refer to each other too deeply or too often,
-and ``path-not-relative`` for an image whose path is not relative (§2.3), which
-the validator does not check yet.
+and the two file-reference rules of §2.3, which the validator does not check yet:
+``path-not-relative`` for a path with a URI scheme or an absolute one, and
+``path-outside-root`` for one that leaves the document root, when a root is
+configured. They apply to every file reference: an ``{{include:}}``,
+``attachments[].file``, ``amends.file``, ``supersedes.file``, a ``translations``
+value, and an image. The files are never read at this level; what the renderer
+does with a path that fails is in :meth:`Resolver._reference`.
 
 Every one of them names the file and the line it is at (§16.9): the first line
 of the block, list item or heading being resolved, or the line of a frontmatter
@@ -38,7 +43,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 from urllib.parse import unquote
 
-from legaldown import Diagnostic, Document, Party, ValidationResult
+from legaldown import Amends, Diagnostic, Document, Party, ValidationResult
 from legaldown.grammar import (
     ALWAYS,
     DECISION_QUESTION_TYPES,
@@ -97,13 +102,20 @@ from ..tree import (
     plain_text,
     unlinked,
 )
-from ..urls import is_empty_path, is_link_target, is_relative_path, printable
+from ..urls import file_reference_problem, is_empty_path, is_link_target, printable
 from .numbering import RENUMBERED, extend, fill, format_counter, heading_levels
 from .values import DURATION_UNITS, Formatter
 
 #: Definition anchors are prefixed with a character no identifier can hold,
 #: so they can never collide with a section or item anchor (§5.6).
 DEFINITION_ANCHOR_PREFIX = "def:"
+#: What the renderer does with a file reference that fails §2.3 (the rest of
+#: a message of ``path-not-relative`` or ``path-outside-root``). An attachment's
+#: path is shown as the placeholder's text and is not linked to, wherever it is
+#: reported from (the frontmatter, a ``{{attach:}}``), so that it is one message.
+_NEVER_READ = "It is never read."
+_ATTACHMENT_EFFECT = "It is shown as text, not linked to, and never read."
+
 #: The attachments heading's anchor, with a colon for the same reason.
 ATTACHMENTS_ANCHOR = "ld:attachments"
 
@@ -182,8 +194,12 @@ class Resolver:
         result: ValidationResult,
         style: Style,
         formatter: Formatter,
+        base: str | None = None,
     ) -> None:
         self.tree = tree
+        # The directory of the document relative to the document root (§2.3),
+        # or None when there is no root: the containment rule is then not checked.
+        self.base = base
         self.document = document
         self.metadata = document.metadata
         self.result = result
@@ -238,6 +254,7 @@ class Resolver:
     # -- entry point ----------------------------------------------------------
 
     def run(self) -> RenderTree:
+        self._references()
         self._survey()
         attachments = self._attachments()
         sections = self._number_sections()
@@ -651,12 +668,15 @@ class Resolver:
                     # No path, no picture: <img src=""> would request the page
                     # itself. §2.3 says nothing of an empty path, so no rule fires.
                     return alt
-                if not is_relative_path(src):
-                    # §2.3: an image path is relative and has no URI scheme, so a
-                    # remote or absolute image is never fetched or embedded. Its
-                    # alt text stands in; the validator (0.4) does not check
-                    # image paths, so the renderer reports the Core rule.
-                    self._not_relative(src)
+                # markdown-it has percent-encoded the path ("C:\\x" reads
+                # "C:%5Cx"); it is read as the URL it is, and shown as written.
+                if self._reference("Image path", src, url=True, shown=unquote(src),
+                                   effect="Its alt text is shown instead."):
+                    # §2.3: an image path is relative and within the document
+                    # root, so a remote, absolute or outside image is never
+                    # fetched or embedded. Its alt text stands in; the validator
+                    # (0.4) does not check file references, so the renderer
+                    # reports the Core rule.
                     return alt
                 return replace(inline, children=alt, title=self._resolve_inlines(_attribute_text(title)))
             case _:
@@ -959,13 +979,20 @@ class Resolver:
         if title is None:
             return FailureMarker(f"[UNKNOWN ATTACHMENT: {attachment_id}]")
         anchor = self.attachment_anchors.get(attachment_id)
+        index = next((i for i, a in enumerate(self.metadata.attachments) if a.id == attachment_id), None)
+        key = ("attachments", index, "title") if index is not None else ()
         if anchor is not None:
             href = "#" + anchor
         else:
-            declared = next((a for a in self.metadata.attachments if a.id == attachment_id), None)
-            href = declared.file if declared and declared.file else None
-        key = next((("attachments", i, "title") for i, a in enumerate(self.metadata.attachments)
-                    if a.id == attachment_id), ())
+            file = self.metadata.attachments[index].file if index is not None else ""
+            href = file or None
+            # A link to the file is a URL: its path is read as one (%2e%2e is
+            # "..") and must be relative and within the root (§2.3), or the
+            # attachment's title is text. A path with the same problem as
+            # written is the same finding, reported once (see _references).
+            if href and self._reference(self._attachment_label(attachment_id), href, url=True,
+                                        effect=_ATTACHMENT_EFFECT):
+                href = None
         return Value("attach", directive.params.get("label") or self._plain_value(title, *key), href)
 
     def _choose(self, directive: Directive, question_id: str) -> Inline:
@@ -986,6 +1013,9 @@ class Resolver:
         return Choice(question_id, options, self.style.template_view.choice_separator)
 
     def _include(self, directive: Directive, path: str) -> Inline:
+        # The path is a file reference (§2.3) whether or not the file is read:
+        # the marker shows it as text, never as something to fetch.
+        self._reference("Include path", path, effect="It is shown as text and never read.")
         # Includes are a Full-level capability (§17.4): never dropped silently.
         self._warn(
             "render-not-processed",
@@ -1124,26 +1154,65 @@ class Resolver:
             f"sips, sms, urn, geo, news and relative links are; its text is shown.",
         )
 
-    def _not_relative(self, path: str) -> None:
-        """Report an image *path* that is not relative as the Core Error
-        ``path-not-relative`` (§2.3, §16.2), unless the validator has
-        reported it (:func:`~legaldown_render.diagnostics.covered_by`: its
-        report of the path, at this line). markdown-it has percent-encoded
-        the path ("C:\\x" reads "C:%5Cx"), so it is decoded to name the path
-        as written."""
-        path = unquote(path)
-        shown = printable(path)
-        diagnostic = self._found(
-            "path-not-relative", "error",
-            f"Image path '{shown}' is not relative (§2.3): file references are relative paths with no "
-            f"URI scheme. Its alt text is shown instead.",
-        )
-        # Assumption: the validator quotes the path in its message as '<path>',
-        # as written. Matching the quoted form keeps a path that is a prefix of
-        # another ("/a" and "/ab") from being counted as already reported.
-        if covered_by(diagnostic, path, self.result.diagnostics) or repeats(diagnostic, self.diagnostics):
-            return
-        self.diagnostics.append(diagnostic)
+    def _reference(self, label: str, path: str, *, effect: str, url: bool = False,
+                   shown: str | None = None) -> bool:
+        """Check *path*, a file reference of the document (§2.3; *label* says
+        which, e.g. "Include path"): True if it is not relative or leaves the
+        document root, which is reported as the Core Error ``path-not-relative``
+        or ``path-outside-root`` (§16.2), with *effect* saying what the renderer
+        does instead (it never reads the file). *url* says the path is read as
+        a URL (see :func:`~legaldown_render.urls.file_reference_problem`);
+        *shown* is the path as the document wrote it, if that is not *path*.
+
+        A report is left out when the validator made it already
+        (:func:`~legaldown_render.diagnostics.covered_by`: its report of the
+        path, at this line) or this resolver did (the same message). The
+        validator quotes the path in its message as '<path>', as written;
+        matching the quoted form keeps a path that is a prefix of another
+        ("/a" and "/ab") from being counted as already reported."""
+        problem = file_reference_problem(path, base=self.base, url=url)
+        if problem is None:
+            return False
+        shown = path if shown is None else shown
+        if problem == "not-relative":
+            rule, what = "path-not-relative", ("is not relative (§2.3): file references are relative paths "
+                                               "with no URI scheme.")
+        else:
+            rule, what = "path-outside-root", ("is outside the document root (§2.3): a file reference may "
+                                               "not leave the root.")
+        diagnostic = self._found(rule, "error", f"{label} '{printable(shown)}' {what} {effect}")
+        if not (covered_by(diagnostic, shown, self.result.diagnostics) or repeats(diagnostic, self.diagnostics)):
+            self.diagnostics.append(diagnostic)
+        return True
+
+    def _attachment_label(self, attachment_id: str) -> str:
+        return f"Attachment '{printable(attachment_id)}' file path"
+
+    def _references(self) -> None:
+        """Check the file references in the frontmatter (§2.3): each
+        ``attachments[].file``, ``amends.file``, ``supersedes.file``, and
+        ``translations`` value, at the line of its key. They are shown, never
+        read: an attachment's path is the placeholder's text, and the
+        amended and translated documents are not loaded below Full (§17.4).
+        ``supersedes`` as a plain string describes the superseded document
+        (§3.2) and is not a path."""
+        metadata = self.metadata
+        references: list[tuple[str, str, tuple[Any, ...], str]] = []
+        for index, attachment in enumerate(metadata.attachments):
+            references.append((self._attachment_label(attachment.id), attachment.file,
+                               ("attachments", index, "file"), _ATTACHMENT_EFFECT))
+        if metadata.amends is not None:
+            references.append(("Amended document path", metadata.amends.file, ("amends", "file"), _NEVER_READ))
+        if isinstance(metadata.supersedes, Amends):
+            references.append(("Superseded document path", metadata.supersedes.file, ("supersedes", "file"),
+                               _NEVER_READ))
+        for language, path in metadata.translations.items():
+            references.append((f"Translation '{printable(language)}' path", path, ("translations", language),
+                               _NEVER_READ))
+        for label, path, key, effect in references:
+            if path:
+                with self._at(self.key_line(*key)):
+                    self._reference(label, path, effect=effect)
 
 
 _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
@@ -1246,9 +1315,12 @@ def resolve_tree(
     result: ValidationResult,
     style: Style,
     formatter: Formatter,
+    base: str | None = None,
 ) -> tuple[RenderTree, list[Diagnostic]]:
-    """The resolved tree, and the diagnostics only rendering can produce."""
-    resolver = Resolver(tree, document, result, style, formatter)
+    """The resolved tree, and the diagnostics only rendering can produce.
+    *base* is the document's directory relative to the document root (§2.3),
+    or None when no root is configured."""
+    resolver = Resolver(tree, document, result, style, formatter, base)
     resolved = resolver.run()
     return resolved, resolver.diagnostics
 
