@@ -922,6 +922,11 @@ def test_empty_list_items_keep_their_place() -> None:
     output = text("# A\n\n- \n  - \n- b {#b}\n\nSee {{ref: b}}.\n")
     assert "(a)\n    (i)\n(b) b" in output
     assert "See 1(b)." in output
+    # An item that holds only a comment is the author removing it (§8.6):
+    # it is left out, and the numbers are still the validator's.
+    output = text("# A\n\n- \n- <!-- gone -->\n- b {#b}\n\nSee {{ref: b}}.\n")
+    assert "(a)\n(b) b" in output
+    assert "See 1(b)." in output
 
 
 @pytest.mark.parametrize("output_format", ["html", "text"])

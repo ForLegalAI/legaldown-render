@@ -96,13 +96,18 @@ Markdown cannot reinterpret directive syntax, such as an underscore in an identi
 random for each build, so no text in a document, whether written literally, as an entity, or
 percent-encoded, can pass for a sentinel. Emphasis that wraps only a defined term is dropped with
 it, because the style decides how defined terms look (§7.2). A `{{def:}}` becomes a sentinel
-that renders nothing, led by a punctuation character so that an emphasis closer just before it
-still closes. A defined term in a link title or alt text shows its term but is not the
+that renders nothing. Every sentinel is wrapped in a punctuation character (U+2E31, Unicode
+category Po, which markdown-it's `isPunctChar` accepts) on both sides, as the `{{` and `}}` it
+replaces are punctuation, so that CommonMark's emphasis flanking rules see the same neighbours as
+in the source: `_text_{{ref: a}}` closes its emphasis. A defined term in a link title or alt text shows its term but is not the
 definition's anchor.
 
 An HTML block in the model (`kind="html"`), a comment block included, renders nothing (§8.6).
 Within a block's text, inline comments and tags are dropped; where one stood between two spaces,
-one space stays. The validator reports raw HTML other than comments (`raw-html`, §8.7). A heading
+one space stays, and before a line break none does. A list item whose blocks are all comments,
+and a quote that holds only comments, are dropped (with a list left empty), after the whole list
+is traversed so that the validator's item numbers stay aligned with the markers it placed. The
+validator reports raw HTML other than comments (`raw-html`, §8.7). A heading
 in a list item or a quote (`kind="heading"`) is not a section (§4.1) and shows as a bold line.
 
 The builder never works around the validator's model. Where the model loses or misreads
@@ -135,7 +140,7 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 | Directive | Resolves to | Failure markers |
 |---|---|---|
 | `{{ref:}}` | `CrossRef(designation, anchor)` (§13.3). A ref to an unnumbered item or paragraph falls back to its section's designation, with `ref-not-enumerated` | `[BROKEN REF: id]` |
-| `{{term:}}` | `TermRef(label or term, def anchor)` (§7.3, §13.4) | `[UNDEFINED: id]` |
+| `{{term:}}` | `TermRef(label or the definition's rendered term text, def anchor)` (§7.3, §13.4); the text is collected in `Resolver._survey` | `[UNDEFINED: id]` |
 | `"Term" {{def:}}` | `DefinedTerm` without quotation marks, anchored at `def:<id>` (§7.2) | n/a |
 | `{{date:}}` `{{money:}}` `{{duration:}}` | `Value`, formatted for the locale by Babel (ADR 0005) | `[INVALID DATE: …]`, `[INVALID AMOUNT: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION: …]`, `[INVALID DURATION UNIT: …]` |
 | `{{party:}}` `{{side:}}` | `Value(label or display name)` (§3.6) | `[INVALID PARTY: …]`, `[UNKNOWN PARTY: …]`, and the side forms |
