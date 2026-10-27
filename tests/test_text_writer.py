@@ -1,5 +1,6 @@
-"""Text writer fidelity (WP5): attachment separators (W1), table cells and
-alignment (W4), quotes and list items (W5), list indent (W6), blank labels (W7)."""
+"""The plain-text writer's layout (§13.8): attachment separators, table cells
+and alignment, quotes and list items (also those that open with a table, code
+or a quote), list indent, and the labels a style may blank."""
 from __future__ import annotations
 
 import pytest
@@ -39,8 +40,7 @@ def text(body: str, **overrides: object) -> str:
     return render(FRONT + body, format="text", overrides=overrides).output
 
 
-# -- W1: attachments.separator (§13.8) -------------------------------------------
-
+# -- Attachment separators (§13.8) -----------------------------------------------
 
 @pytest.mark.parametrize("separator", ["rule", "page-break"])
 def test_a_separator_precedes_each_attachment(separator: str) -> None:
@@ -67,8 +67,7 @@ def test_the_writer_needs_no_style_and_defaults_to_the_default_styles_separator(
     assert TextWriter().write(result.tree) == result.output
 
 
-# -- W4: tables ------------------------------------------------------------------
-
+# -- Tables ----------------------------------------------------------------------
 
 def test_a_pipe_in_a_cell_is_escaped() -> None:
     output = text("# A\n\n| a | b |\n|---|---|\n| x \\| y | z |\n")
@@ -86,8 +85,7 @@ def test_a_table_with_fewer_alignments_than_columns_still_prints() -> None:
     assert TextWriter().table(table) == "| x | x |\n|---:|---|\n| x | x |"
 
 
-# -- W5: quotes and list items ---------------------------------------------------
-
+# -- Quotes and list items -------------------------------------------------------
 
 def test_one_quote_stays_one_quote() -> None:
     output = text("# A\n\n> first\n>\n> second\n")
@@ -120,8 +118,34 @@ def test_a_paragraph_after_a_nested_list_is_separated() -> None:
     assert "1. one\n   (i) child\n\n   after\n" in output
 
 
-# -- W6: list indent -------------------------------------------------------------
+def test_an_item_that_opens_with_a_table_keeps_a_valid_table() -> None:
+    out = text("# A\n\n1. | x | y |\n   |---|---|\n   | 1 | 2 |\n")
+    assert "\n1.\n   | x | y |\n   |---|---|\n   | 1 | 2 |\n" in out
+    assert "1. |" not in out
 
+
+def test_an_item_that_opens_with_code_indents_it_under_the_item_text() -> None:
+    out = text("# A\n\n1. ```\n   code\n   more\n   ```\n2. next\n")
+    assert "\n1.\n       code\n       more\n2. next\n" in out
+
+
+def test_an_item_that_opens_with_a_quote_puts_the_quote_on_its_own_lines() -> None:
+    out = text("# A\n\n1. > one\n   >\n   > two\n2. next\n")
+    assert "\n1.\n   > one\n   >\n   > two\n2. next\n" in out
+    assert "1. >" not in out
+
+
+def test_blocks_after_a_non_paragraph_first_block_are_set_apart() -> None:
+    out = text("# A\n\n1. | x |\n   |---|\n   | 1 |\n\n   then text\n")
+    assert "\n1.\n   | x |\n   |---|\n   | 1 |\n\n   then text\n" in out
+
+
+def test_an_item_that_opens_with_a_paragraph_is_unchanged() -> None:
+    out = text("# A\n\n1. first\n   > quote\n2. second\n   | x |\n   |---|\n   | 1 |\n")
+    assert "\n1. first\n\n   > quote\n2. second\n\n   | x |\n   |---|\n   | 1 |\n" in out
+
+
+# -- List indent -----------------------------------------------------------------
 
 def test_a_conditional_item_indents_by_its_label_not_the_condition_label() -> None:
     body = ("# A\n\n- first\n- by courts {#i when=forum:courts}\n\n  nested\n\n  - deep\n"
@@ -130,8 +154,7 @@ def test_a_conditional_item_indents_by_its_label_not_the_condition_label() -> No
     assert "(b) [Only if: forum:courts] by courts\n\n    nested\n    (i) deep\n" in output
 
 
-# -- W7: blank labels ------------------------------------------------------------
-
+# -- Blank labels ----------------------------------------------------------------
 
 def test_a_blanked_label_drops_its_prefix_in_party_details() -> None:
     output = text("# A\n\nBody.\n", **{"labels.identification_number": ""})

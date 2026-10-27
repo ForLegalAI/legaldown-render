@@ -1,24 +1,15 @@
-"""Links and images (WP3): which image paths are shown (B6, §2.3), which links
-are links (W3, §8.7), and links with no URL or no text (B9/W8)."""
+"""Links and images: which image paths are shown (§2.3), which links are links
+(§8.7), a link with no URL or no text, and how a refused link or image is
+reported."""
 from __future__ import annotations
 
 import pytest
+from conftest import FRONT, html, text
 
 from legaldown_render import RenderRefused, render
-from legaldown_render.writers.html import is_safe_href
+from legaldown_render.urls import displayed_url, is_link_target, is_safe_href
 
-FRONT = "---\ntitle: T\n---\n"
-
-
-def text(body: str, **settings: object) -> str:
-    return render(FRONT + body, format="text", **settings).output
-
-
-def html(body: str, **settings: object) -> str:
-    return render(FRONT + body, format="html", **settings).output
-
-
-# -- B6: image paths (§2.3) ---------------------------------------------------
+# -- Image paths (§2.3) ----------------------------------------------------------
 
 NON_RELATIVE = [
     "https://example.com/p.png",
@@ -122,16 +113,66 @@ def test_the_validators_own_report_is_not_repeated(monkeypatch: pytest.MonkeyPat
     assert any("/other.png" in d.message for d in errors)
 
 
-# -- W3: which links are links (§8.7) -----------------------------------------
+def test_a_path_that_starts_another_is_not_covered_by_the_validators_report() -> None:
+    # Whatever the validator reports for one path, a different path whose text
+    # it contains is still the renderer's to report.
+    result = render(FRONT + "# A\n\n![a](/x.png) ![b](/x.png2)\n")
+    messages = [d.message for d in result.diagnostics if d.rule == "path-not-relative"]
+    assert any("'/x.png2'" in m for m in messages)
+    assert any("'/x.png'" in m for m in messages)
 
 
-@pytest.mark.parametrize("href", [
+@pytest.mark.parametrize("path", ["javascript:alert(1)", "data:text/html,x", "https://e/p.png"])
+def test_the_not_relative_message_is_generic(path: str) -> None:
+    result = render(FRONT + f"# A\n\n![x](<{path}>)\n")
+    message = next(d.message for d in result.diagnostics if d.rule == "path-not-relative")
+    assert "never fetched" not in message
+    assert "file references are relative paths with no URI scheme. Its alt text is shown instead." in message
+
+
+@pytest.mark.parametrize("empty", ["", "  ", "%20"])
+def test_an_image_with_no_path_is_its_alt_text(empty: str) -> None:
+    for fmt in ("html", "text"):
+        result = render(FRONT + f"# A\n\nBefore ![the logo](<{empty}>) after.\n", format=fmt, strict=True)
+        assert "<img" not in result.output
+        assert 'src=""' not in result.output
+        assert "Before the logo after." in result.output
+        assert not [d for d in result.diagnostics if d.level == "error"]
+
+
+# -- Which links are links (§8.7) ------------------------------------------------
+
+HANDLERS = [
+    "ms-msdt:/id PCWDiagnostic", "ms-word:ofe|u|https://x/a.docx", "ms-officecmd:{}", "search-ms:query=x",
+    "ms-appinstaller:?source=https://x/a.appx", "vscode://file/x", "intent://x#Intent;end", "blob:https://x/1",
+    "about:blank", "jar:https://x/a.jar!/", "view-source:https://x", "mhtml:file://x", "ms-its:x.chm::/a.htm",
+    "C:\\x", "C:/x", "localhost:8080", "magnet:?xt=urn:btih:x", "javascript:alert(1)", "file:///etc/passwd",
+    "data:text/html,x", " MS-MSDT:x",
+]
+
+ALLOWED = [
+    "http://e/x", "https://e/x", "mailto:a@e", "tel:+1", "ftp://e/x", "ftps://e/x", "sftp://e/x", "sip:a@e",
+    "sips:a@e", "sms:+1", "urn:isbn:1", "geo:1,2", "news:a.b", "a/b.pdf", "../a.pdf", "#top", "?q=1",
     "ftp://example.com/f", "sip:alice@example.com", "urn:isbn:0451450523", "https://example.com",
-    "mailto:a@example.com", "tel:+420123456789", "attachments/a.pdf", "../a.pdf", "#top",
-])
-def test_every_link_of_an_allowed_scheme_is_a_hyperlink(href: str) -> None:
-    output = html(f"# A\n\nSee [the link](<{href}>).\n")
-    assert f'<a href="{href}">the link</a>' in output
+    "mailto:a@example.com", "tel:+420123456789", "attachments/a.pdf",
+]
+
+
+@pytest.mark.parametrize("href", ALLOWED)
+def test_an_allowed_scheme_or_a_relative_url_is_a_link(href: str) -> None:
+    assert is_link_target(href)
+    assert f'<a href="{href}">click</a>' in html(f"# A\n\nSee [click](<{href}>).\n")
+
+
+@pytest.mark.parametrize("href", HANDLERS)
+def test_a_protocol_handler_or_pseudo_scheme_is_not_a_link(href: str) -> None:
+    assert not is_link_target(href)
+    body = f"# A\n\nSee [click](<{href}>) now.\n"
+    result = render(FRONT + body, format="html")
+    assert "See click now." in result.output
+    assert "<a href" not in result.output.split("</header>")[1]
+    assert "See click now." in text(body)
+    assert "<" not in text(body).split("See click now.")[0].split("\n")[-1]
 
 
 @pytest.mark.parametrize("href", [
@@ -152,10 +193,14 @@ def test_a_refused_link_is_its_text_in_both_writers(href: str) -> None:
     assert not is_safe_href(href)
 
 
-def test_the_allow_list_is_judged_as_a_browser_reads_the_url() -> None:
+def test_the_scheme_is_judged_as_a_browser_reads_the_url() -> None:
+    # markdown-it percent-encodes a tab in a URL it parses ("ms%09-msdt:x" is a
+    # relative path to a browser); the check still holds for a URL it is given
+    # directly, as a browser would read it.
     for href in ("java\tscript:alert(1)", "jav\nascript:x", "\x01javascript:x", " JAVASCRIPT:x", "data:text/html,x",
-                 "VBScript:x", "FILE:///x"):
+                 "VBScript:x", "FILE:///x", "ms\t-msdt:x", "\u0000 vscode://x"):
         assert not is_safe_href(href), repr(href)
+        assert not is_link_target(href), repr(href)
     for href in ("https://example.com", "#section", "attachments/a.pdf", "mailto:a@example.com", "ftp://x/y",
                  "sip:a@b", "urn:x:y", "x/data:y", "javascript", "HTTPS://X", "\thttps://x"):
         assert is_safe_href(href), href
@@ -176,8 +221,24 @@ def test_a_link_with_an_unusual_scheme_shows_its_url_in_text() -> None:
     assert "the file <ftp://example.com/f>" in text("# A\n\nGet [the file](ftp://example.com/f).\n")
 
 
-# -- B9/W8: links without a URL or without text -----------------------------
+def test_a_refused_link_is_reported_once_as_a_warning() -> None:
+    body = "# A\n\n[a](ms-msdt:x) and [b](ms-msdt:x) and [c](vscode://x) and [d](http://ok) and [e]().\n"
+    result = render(FRONT + body, format="html")
+    refused = [d for d in result.diagnostics if d.rule == "render-link-refused"]
+    assert [d.level for d in refused] == ["warning", "warning"]
+    assert "Link to 'ms-msdt:x' is not rendered as a link" in refused[0].message
+    assert "its text is shown" in refused[0].message
+    assert "vscode://x" in refused[1].message
+    assert result.ok  # a Warning does not refuse, even under --strict's Errors
+    assert render(FRONT + body, format="text").diagnostics == result.diagnostics
 
+
+def test_an_empty_or_allowed_link_is_not_reported() -> None:
+    result = render(FRONT + "# A\n\n[a]() [b](<>) [c](https://e) [d](#x) [e](rel/path)\n")
+    assert not [d for d in result.diagnostics if d.rule == "render-link-refused"]
+
+
+# -- Links without a URL or without text -----------------------------------------
 
 def test_a_link_with_no_url_is_its_text() -> None:
     assert "<a " not in html("# A\n\nSee [x]().\n").split("</header>")[1]
@@ -198,6 +259,18 @@ def test_a_link_with_no_text_shows_its_url() -> None:
     assert "See http://z.y." in text("# A\n\nSee [](http://z.y).\n")
 
 
+def test_displayed_url_undoes_the_encoding_unless_it_shows_a_control() -> None:
+    assert displayed_url(" https://e/a%20b ") == "https://e/a b"
+    assert displayed_url("https://e/a%0ab") == "https://e/a%0ab"
+    assert displayed_url("https://e/%E2%80%AE") == "https://e/%E2%80%AE"
+
+
+def test_a_link_with_no_text_shows_the_written_url() -> None:
+    body = "# A\n\nSee [](<https://e/a b/é>).\n"
+    assert 'href="https://e/a%20b/%C3%A9">https://e/a b/é</a>' in html(body)
+    assert "See https://e/a b/é." in text(body)
+
+
 def test_an_autolink_is_its_address_alone_in_text() -> None:
     assert "Mail a@b.c now" in text("# A\n\nMail <a@b.c> now\n")
     assert "Call tel:+1 now" in text("# A\n\nCall [tel:+1](tel:+1) now\n")
@@ -214,13 +287,3 @@ def test_a_link_text_that_differs_from_its_url_shows_both_in_text() -> None:
 def test_a_link_around_a_picture_keeps_the_picture_not_its_url() -> None:
     output = html("# A\n\n[![](img/p.png)](https://example.com)\n")
     assert '<a href="https://example.com"><img src="img/p.png" alt=""></a>' in output
-
-
-@pytest.mark.parametrize("empty", ["", "  ", "%20"])
-def test_an_image_with_no_path_is_its_alt_text(empty: str) -> None:
-    for fmt in ("html", "text"):
-        result = render(FRONT + f"# A\n\nBefore ![the logo](<{empty}>) after.\n", format=fmt, strict=True)
-        assert "<img" not in result.output
-        assert 'src=""' not in result.output
-        assert "Before the logo after." in result.output
-        assert not [d for d in result.diagnostics if d.level == "error"]
