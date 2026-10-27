@@ -52,13 +52,33 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 - **Assembly reads no other files.** A template with include fragments, LegalDown attachment
   files, or `translations` is refused when rendered with answers, as §17.6 requires below Full.
   A template with Errors is refused too, since §15.7.2 defines no output for one.
-- **Line numbers.** The validator's diagnostics name their line, and the CLI prints it. The
-  renderer's own (`render-ref-ambiguous`, `ref-not-enumerated`, `render-not-processed`,
-  `render-link-refused`) do not
-  yet ([validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93)).
+- **Line numbers (§16.9).** Every diagnostic names its line, the validator's and the renderer's
+  own (`render-ref-ambiguous`, `ref-not-enumerated`, `render-not-processed`,
+  `render-link-refused`, `path-not-relative`, `render-term-limit`, `render-term-too-long`,
+  `render-locale-fallback`), and the CLI prints it as `file:line:`. The renderer's line is the
+  **first line of the block it is in**, as `Document.line_of` gives it, whatever line the
+  directive itself is on: a paragraph's, a table's header row, a quote's first `>`, a code
+  block's opening fence, a heading's (a section title); for a list item, the line of **its marker**
+  (nested items too), also for the blocks the item holds; a block inside a quote has the quote's
+  line, since the validator addresses nothing deeper. A `{{ref:}}` or `{{term:}}` paragraph is
+  lifted by the validator and written back, so the renderer cannot place the directive in it; the
+  validator's own diagnostics for a directive can therefore name a later line of a paragraph than
+  the renderer's do, until [validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93).
+  Findings about frontmatter are at the line of their key: the `language` key for
+  `render-locale-fallback` of the document's language, and the `title`, `subtitle`, `version`,
+  `effective_date`, `sides[].label` and `sides[].parties[]` key (a party's details, name and
+  signatories are all at the party's key) or `attachments[].title` for a directive in that value
+  (also where the body shows it, as `{{attach:}}` or `{{party:}}` do). A finding in a term's text
+  is at the term's definition, whichever reference asks for it first; `render-term-limit` is at the
+  definition being worked out when the limit was reached. The same finding (rule, level and
+  message) is reported once, at its first line: the same refused link, or the same non-relative
+  image path, on two lines is one diagnostic, at the first of them. A document with no source to
+  name a line of (built from a dict) reports no line. With `answers`, the lines are those of the
+  assembled document (§15.8), not of the template file.
 - **`path-not-relative` for images.** The renderer reports the Core rule `path-not-relative`
-  (§2.3, §16.2) for an image path, because the validator (0.4) does not check image paths; it
-  leaves its own report out when the validator names the same path. The Error has no line number.
+  (§2.3, §16.2) for an image path, because the validator (0.4) does not check image paths. It
+  leaves its own report out when the validator names the same path at the same line (or no line),
+  and keeps it for a path the validator did not name, or the same path at another line.
   The containment rule (`path-outside-root`) is not checked: no document root is configured.
 - **Nesting limit.** The validator reads lists 64 levels deep and quotes 16; deeper, an item's or
   quote's content is its text. The renderer follows it, and refuses (`DocumentError`) a document

@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from functools import cache
 from itertools import count
+from typing import Any
 from urllib.parse import unquote
 
 from legaldown import Block as ModelBlock
@@ -197,6 +198,22 @@ class _Builder:
         # Each text is lexed once in a render.
         self.lex = cache(lex)
         self.depth = 0  # quotes and list items the builder is inside
+        # Where the builder is, for the lines of the nodes it builds (§16.9):
+        # the top-level block (section index or None for the preamble, block
+        # index) when it is at one that a list's items can be addressed in
+        # (``Document.line_of``), and the line of the innermost unit it is in.
+        # A block in a quote, or past the first in an item, is not addressable;
+        # it takes the line of the quote or the item.
+        self.at: tuple[int | None, int] | None = None
+        self.line: int | None = None
+        # The lines of the parts of the document, read once: ``Document.line_of``
+        # checks the whole document against its source on every call. None
+        # without a source, or when the document no longer fits it.
+        self.layout = document.layout()
+        # The lines of the items of the top-level list being built, in the
+        # pre-order the validator numbers them (see list()); None for a list
+        # whose items are not addressable.
+        self.item_lines: list[int] | None = None
         nonce = secrets.token_hex(8)
         # A sentinel with its wrappers; only a complete one matches, so a
         # wrapper character in the source is never taken.
@@ -368,6 +385,9 @@ class _Builder:
             if block.kind == "html":
                 continue  # never emitted: a comment (§8.6) or raw HTML (§8.7)
             placed = self.placed.get((section, index), []) if markers else []
+            if markers:
+                self.at = (section, index)
+                self.line = self._block_line(section, index)
             built = self.block(block, placed, top_level=top_level)
             if built is not None:
                 out.append(built)
@@ -380,14 +400,14 @@ class _Builder:
                 inlines = self.text(_paragraph_source(block))
                 if not inlines and not identifier:
                     return None  # only a comment
-                return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level)
+                return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level, line=self.line)
             case "unordered_list" | "ordered_list":
                 return self.list(block, placed)
             case "quote":
                 return self.quote(block)
             case "code":
                 code = code_content(block)
-                return CodeBlock(code.text, code.info)
+                return CodeBlock(code.text, code.info, line=self.line)
             case "table":
                 width = len(block.headers)
                 # Every row as wide as the header: short rows padded, extra
@@ -397,6 +417,7 @@ class _Builder:
                     header=tuple(self.text(cell) for cell in block.headers),
                     rows=tuple(tuple(self.text(cell) for cell in row) for row in rows),
                     align=tuple(block.align),
+                    line=self.line,
                 )
             case "rule":
                 return Rule()
@@ -404,7 +425,7 @@ class _Builder:
                 # A heading in a list item or a quote: not a section (§4.1),
                 # so it has no number and no anchor. It shows as a bold line.
                 inlines = self.text(block.text)
-                return Paragraph((Strong(inlines),)) if inlines else None
+                return Paragraph((Strong(inlines),), line=self.line) if inlines else None
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
     def list(self, block: ModelBlock, placed: list[PlacedMarker]) -> List | None:
@@ -413,7 +434,37 @@ class _Builder:
         number among all the list's items, as the validator numbers them.
         None for a list whose every item is only a comment."""
         markers = {marker.item: marker for marker in placed}
-        return self._list(block, markers, count())
+        outer = self.item_lines
+        self.item_lines = self._item_lines(*self.at) if self.at else None
+        try:
+            return self._list(block, markers, count())
+        finally:
+            self.item_lines = outer
+
+    # -- lines (§16.9) --------------------------------------------------------
+
+    def _block_line(self, section: int | None, index: int) -> int | None:
+        """The first line of top-level block *index* of the preamble (*section*
+        None) or of a section: what ``Document.line_of`` gives."""
+        if self.layout is None:
+            return None
+        spans = self.layout.preamble if section is None else self.layout.sections[section].blocks
+        return spans[index].start
+
+    def _item_lines(self, section: int | None, index: int) -> list[int] | None:
+        """The marker lines of the items of top-level list *index*, nested items
+        included, in pre-order as ``Document.line_of`` numbers them."""
+        if self.layout is None:
+            return None
+        spans = self.layout.preamble if section is None else self.layout.sections[section].blocks
+
+        def walk(items: Iterable[Any]) -> Iterator[int]:
+            for item in items:
+                yield item.start
+                for inner in item.blocks:
+                    yield from walk(inner.items)
+
+        return list(walk(spans[index].items))
 
     def _list(self, block: ModelBlock, markers: dict[int | None, PlacedMarker], numbers: Iterator[int]) -> List | None:
         """*block*'s items, numbered from *numbers* in pre-order, to find the
@@ -430,28 +481,36 @@ class _Builder:
         try:
             items: list[ListItem] = []
             for item in list_items(block):
-                marker = markers.get(next(numbers))
+                number = next(numbers)
+                marker = markers.get(number)
                 children = list(item.blocks)
                 identifier = condition = ""
                 if marker is not None:
                     identifier, condition = marker.identifier, marker.condition
                     children[0] = replace(children[0], text=_cut_marker(children[0].text, marker))
                 blocks: list[Block] = []
-                for child in children:
-                    if child.kind in ("ordered_list", "unordered_list"):
-                        nested = self._list(child, markers, numbers)
-                        if nested is not None:
-                            blocks.append(nested)
-                    elif child.kind == "html":
-                        continue  # never emitted (§8.6, §8.7)
-                    elif (built := self.block(child, [], top_level=False)) is not None:
-                        blocks.append(built)
+                outer = self.line
+                # The item's marker line; in a quote an item is not addressable.
+                item_line = self.item_lines[number] if self.item_lines is not None else outer
+                self.line = item_line
+                try:
+                    for child in children:
+                        if child.kind in ("ordered_list", "unordered_list"):
+                            nested = self._list(child, markers, numbers)
+                            if nested is not None:
+                                blocks.append(nested)
+                        elif child.kind == "html":
+                            continue  # never emitted (§8.6, §8.7)
+                        elif (built := self.block(child, [], top_level=False)) is not None:
+                            blocks.append(built)
+                finally:
+                    self.line = outer
                 # Only a comment: the item is removed. Defensive: an item a
                 # marker belongs to (an anchor or a condition) never vanishes.
                 if item.blocks and all(child.kind == "html" for child in item.blocks) \
                         and not identifier and not condition:
                     continue
-                items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition))
+                items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition, line=item_line))
         finally:
             self.depth -= 1
         return List(ordered=block.kind == "ordered_list", items=tuple(items)) if items else None
@@ -477,14 +536,17 @@ class _Builder:
         # The quotes and list items the quote is in, before entering it.
         read = drafting_note_blocks if drafting else quote_blocks
         children = read(block, depth=self.depth)
+        line, at = self.line, self.at
         self.depth += 1
+        self.at = None  # what is in a quote has the quote's line
         try:
             blocks = self.blocks(children, None, markers=False)
         finally:
             self.depth -= 1
+            self.at = at
         if drafting:
-            return DraftingNote(blocks)
-        return Quote(blocks) if blocks else None
+            return DraftingNote(blocks, line=line)
+        return Quote(blocks, line=line) if blocks else None
 
     # -- document -------------------------------------------------------------
 
@@ -497,6 +559,7 @@ class _Builder:
                 identifier=self.result.index.sections[index].identifier,
                 condition=section.condition,
                 blocks=self.blocks(section.blocks, index),
+                line=None if self.layout is None else self.layout.sections[index].heading.start,
             )
             for index, section in enumerate(document.sections)
         )

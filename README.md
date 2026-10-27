@@ -69,7 +69,9 @@ legaldown-render --print-style --style continental              # every setting,
 `--locale` sets how dates, money, and durations are formatted. The words the renderer generates
 (such as "Represented by" or "Signatures") follow the document's `language` (§13.7), whatever the locale.
 
-Diagnostics go to stderr, one per line with its rule id. The exit code is 0 when the document
+Diagnostics go to stderr, one per line, as `file:line: level: [rule] message` (the line is that of
+the block or heading they are in, or of the frontmatter key they are about; see CONFORMANCE.md).
+The exit code is 0 when the document
 rendered, even if it has errors (they show as markers), 1 when rendering was refused (strict mode,
 or a template that cannot be assembled with its answers) or the document or answers file cannot be
 read (a document that is not UTF-8 included) or the output file cannot be written, 2 for an invalid
@@ -101,6 +103,8 @@ with open("contract.html", "w", encoding="utf-8", newline="\n") as output:
 ```
 
 `render()` also accepts a `RenderOptions`. Pass `answers={...}` to render a template filled in.
+Each diagnostic has its `line` and its `file`: `render_file()` and the command name the file (its
+name, without the directory); for text given to `render()`, pass `filename=`.
 Problems in the document never raise. Only an invalid style (`StyleError`), an unknown output
 format (`OptionsError`), an unreadable document (`DocumentError`), strict mode, or a template that
 cannot be assembled with its answers (`RenderRefused`) do. All of them are `RenderError`s, and

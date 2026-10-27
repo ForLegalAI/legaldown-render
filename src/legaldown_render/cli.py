@@ -192,7 +192,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,
-                            strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment)
+                            strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment,
+                            filename="" if args.input == "-" else Path(args.input).name)
     try:
         result = render(source, options)
     except StyleError as error:

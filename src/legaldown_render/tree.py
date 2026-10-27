@@ -186,6 +186,12 @@ class Paragraph:
     label: str | None = None
     anchor: str | None = None
     condition_label: str | None = None
+    #: Its first line in the document's file, counted from 1 (§16.9), which the
+    #: renderer's diagnostics name; None when the document has no source to
+    #: name a line of. Not part of equality: the same content is equal
+    #: wherever it stood. A block inside a list item or a quote has the item's
+    #: or the quote's line: the validator addresses nothing deeper.
+    line: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +202,8 @@ class ListItem:
     label: str | None = None
     anchor: str | None = None
     condition_label: str | None = None
+    #: The item's marker line (see Paragraph.line).
+    line: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +217,8 @@ class List:
 @dataclass(frozen=True, slots=True)
 class Quote:
     blocks: tuple[Block, ...]
+    #: Its first line (see Paragraph.line); the blocks inside it have it too.
+    line: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,12 +227,16 @@ class DraftingNote:
 
     blocks: tuple[Block, ...]
     label: str | None = None
+    #: Its first line (see Paragraph.line); the blocks inside it have it too.
+    line: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
 class CodeBlock:
     text: str
     info: str = ""
+    #: Its first line (see Paragraph.line).
+    line: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +245,8 @@ class Table:
     rows: tuple[tuple[tuple[Inline, ...], ...], ...]
     #: Per column: "left", "center", "right", or "".
     align: tuple[str, ...]
+    #: Its first line (see Paragraph.line); every cell has it too.
+    line: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +279,8 @@ class Section:
     designation: str | None = None
     anchor: str | None = None
     condition_label: str | None = None
+    #: The heading's first line (see Paragraph.line).
+    line: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,22 +373,41 @@ def iter_inlines(inlines: tuple[Inline, ...]) -> Iterator[Inline]:
 
 def iter_block_inlines(block: Block) -> Iterator[Inline]:
     """Every inline inside *block*, depth first."""
+    for inline, _ in iter_located_block_inlines(block):
+        yield inline
+
+
+def iter_located_block_inlines(block: Block, line: int | None = None) -> Iterator[tuple[Inline, int | None]]:
+    """Every inline inside *block*, depth first, with the line of the unit
+    holding it: that of the nearest enclosing node that has one, else *line*."""
+    line = getattr(block, "line", None) or line
     match block:
         case Paragraph(inlines=inlines):
-            yield from iter_inlines(inlines)
+            yield from ((inline, line) for inline in iter_inlines(inlines))
         case List(items=items):
             for item in items:
                 for child in item.blocks:
-                    yield from iter_block_inlines(child)
+                    yield from iter_located_block_inlines(child, item.line or line)
         case Quote(blocks=blocks) | DraftingNote(blocks=blocks):
             for child in blocks:
-                yield from iter_block_inlines(child)
+                yield from iter_located_block_inlines(child, line)
         case Table(header=header, rows=rows):
             for cell in header:
-                yield from iter_inlines(cell)
+                yield from ((inline, line) for inline in iter_inlines(cell))
             for row in rows:
                 for cell in row:
-                    yield from iter_inlines(cell)
+                    yield from ((inline, line) for inline in iter_inlines(cell))
+
+
+def iter_located_body_inlines(tree: RenderTree) -> Iterator[tuple[Inline, int | None]]:
+    """Every inline in the document's body (the preamble, then each section's
+    heading and blocks), with its line (:func:`iter_located_block_inlines`)."""
+    for block in tree.preamble:
+        yield from iter_located_block_inlines(block)
+    for section in tree.sections:
+        yield from ((inline, section.line) for inline in iter_inlines(section.title))
+        for block in section.blocks:
+            yield from iter_located_block_inlines(block, section.line)
 
 
 def iter_tree_inlines(tree: RenderTree) -> Iterator[Inline]:

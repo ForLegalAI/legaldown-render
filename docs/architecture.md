@@ -83,6 +83,7 @@ never decides a structural or LegalDown question itself:
 | Whether a quote is a drafting note, and its content | The validator's `is_drafting_note()` and `drafting_note_blocks()` |
 | Which list item a marker belongs to | `PlacedMarker.item`: the item's number among the list's items, in pre-order |
 | A lifted definition, `{{ref:}}` or `{{term:}}` block's source | The validator's `render_block()` |
+| The line of a heading, a top-level block or a list item (§16.9) | `Document.line_of()` |
 
 These are all the validator's public API: the model and the result from `legaldown`, and, for
 assembly, `parse_template` (`Template.form().assemble()`), `AssemblyError`, and the answers
@@ -190,6 +191,7 @@ clamped to 1–5, as the validator numbers them.
 src/legaldown_render/
 ├── __init__.py        public API, __version__, SPEC_VERSION, CONFORMANCE_LEVEL
 ├── api.py             render(), render_file(), RenderOptions, RenderResult
+├── diagnostics.py     frontmatter key lines for diagnostics, and when a diagnostic repeats another
 ├── cli.py             the legaldown-render command
 ├── errors.py          RenderError, StyleError, OptionsError, DocumentError, RenderRefused, InternalError
 ├── tree.py            render tree nodes (source and resolved inlines, blocks, document)
@@ -240,9 +242,30 @@ Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can ev
 `ref-not-enumerated` and `path-not-relative` (an Error for an image path that is not relative, §2.3,
 reported here because validator 0.4 does not check image paths), specification rule ids, plus renderer-specific ids prefixed `render-`:
 `render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, or 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), a `{{term:}}` shows its id), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
-diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
-have none yet: they are about a directive within a block, and the validator makes only a block's
-line public (`Document.line_of`, U2).
+diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
+`file:line:`.
+
+**Lines.** The builder asks `Document.line_of` for the line of every section heading, top-level
+block and list item (an item's pre-order number, which the builder already tracks for markers) and
+stores it as `line` on `Section`, `Paragraph`, `ListItem`, `Table`, `Quote`, `DraftingNote` and
+`CodeBlock` (not part of equality, so trees compare as before). A block inside a quote has the
+quote's line; one inside a list item, the item's. The resolver tracks the line of what it is
+resolving (`Resolver.line`, set with `_at`) and every renderer diagnostic carries it, so the
+granularity is the block's (or the item's, or the heading's): a `{{ref:}}` or `{{term:}}` paragraph
+is lifted by the validator and written back, so the renderer cannot place a directive within a
+block without the validator's internal `Locator`, which would be a second bridge to its internals
+(ADR 0007); it waits for
+[validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93). A finding about
+frontmatter is at its key (`diagnostics.key_line`, which wraps the public `source_map.key` and
+returns None without a source map; one helper for every frontmatter reference). A term's text is
+worked out at the term's definition (`Resolver.term_lines`, recorded by `_survey`) whichever
+reference asks first. `Diagnostic.file` is `RenderOptions.filename`, which `render_file` and the CLI
+set to the file name as the validator does (`Document.filename`, without the directory).
+
+**Repeats.** `Resolver._warn` and `api.render` leave out a diagnostic whose rule, level and message
+a reported one has already, wherever it is (`diagnostics.repeats`), so a repeated finding is
+reported at its first line only. The renderer's `path-not-relative` is left out when the validator
+reported the same path at the same line, or at none (`diagnostics.covered_by`).
 
 ## Security
 
@@ -312,6 +335,7 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_build.py` | Building the tree: comment-only items and quotes, emphasis next to a directive, spacing where an inline comment was dropped |
 | `tests/test_terms.py` | What `{{term:}}` shows, references inside terms, terms that name themselves or each other, the cap on a term text |
 | `tests/test_terms_budget.py` | Reuse of worked-out term texts, the work budget and depth limit for terms that name each other. Bounds the work by counting resolved directives, never by timing |
+| `tests/test_diagnostic_lines.py` | The line and file of every renderer diagnostic: in each kind of block (paragraph, list item, nested item, table, quote, heading, preamble) and at frontmatter keys, the repeats left out, the tree nodes' lines, and `file:line:` on the command line |
 | `tests/test_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme allow-list, empty URLs and empty link text, and how a refusal is reported |
 | `tests/test_text_writer.py` | The plain-text layout: attachment separators, tables, quotes, list items and indent, blanked labels |
 | `tests/test_html.py` | The HTML writer's print stylesheet for attachments |

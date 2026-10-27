@@ -13,7 +13,7 @@ Preferences are split in two, on purpose:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ import yaml
 from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, parse, parse_template, validate
 
 from .build import build_tree, normalize_source
+from .diagnostics import key_line, repeats
 from .errors import DocumentError, OptionsError, RenderRefused, StyleError
 from .resolve import Formatter, parse_locale, resolve_tree
 from .style import Style, load_style
@@ -57,6 +58,14 @@ class RenderOptions:
     answers: Mapping[str, Any] | None = None
     #: HTML only: a complete page (True) or just the ``<article>`` (False).
     standalone: bool = True
+    #: The document's file name, which every diagnostic of the result names as
+    #: its ``file`` (§16.9), the validator's and the renderer's alike, as
+    #: ``Document.filename`` does for the validator: the name without its
+    #: directory. ``render_file`` and the command line set it from the path
+    #: they read; for text given to :func:`render` it is empty unless set.
+    #: With ``answers``, the lines of the diagnostics are those of the
+    #: assembled document (§15.8), not of the template file.
+    filename: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,15 +114,17 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     source = normalize_source(source)
     assembled: list[Diagnostic] = []
     if options.answers is not None:
-        source, assembled = _assemble(source, options.answers)
-    document = _parse(source)
+        source, assembled = _assemble(source, options.answers, options.filename)
+    document = _parse(source, options.filename)
     result = validate(document, final=options.final)
     diagnostics = assembled + list(result.diagnostics)
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
     tree, extra = _resolve(document, result, style)
-    diagnostics += [d for d in extra if d not in diagnostics]
+    # The renderer's findings that the validator's or the assembly's already
+    # name (the same rule, level and message), wherever they are, are not repeated.
+    diagnostics += [d for d in extra if not repeats(d, diagnostics)]
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
@@ -133,17 +144,22 @@ def render_file(path: str | Path, options: RenderOptions | None = None, /, **set
     except UnicodeDecodeError as error:
         raise DocumentError(f"The document cannot be read: {path} is not valid UTF-8 "
                             f"(byte 0x{data[error.start]:02x} at offset {error.start})") from None
+    if options is None:
+        options = RenderOptions(**settings)
+        settings = {}
+    if not options.filename and not settings:
+        options = replace(options, filename=Path(path).name)
     return render(source, options, **settings)
 
 
-def _assemble(source: str, answers: Mapping[str, Any]) -> tuple[str, list[Diagnostic]]:
+def _assemble(source: str, answers: Mapping[str, Any], filename: str = "") -> tuple[str, list[Diagnostic]]:
     """*source* assembled with *answers* (§15.7), and the assembly's
     Warnings (such as ``answer-unknown``). Raises RenderRefused when it
     cannot be assembled: the template has Errors, for which §15.7.2 defines
     no output, or the answers do (``answer-invalid``, ``answer-missing``),
     or the template needs files a renderer below Full does not read
     (includes, LegalDown attachments, translations; §17.6)."""
-    findings = validate(_parse(source)).diagnostics
+    findings = validate(_parse(source, filename)).diagnostics
     errors = sum(1 for d in findings if d.level == "error")
     if errors:
         raise RenderRefused(findings, f"Assembly refused: the template has {errors} error(s), "
@@ -161,9 +177,9 @@ def _assemble(source: str, answers: Mapping[str, Any]) -> tuple[str, list[Diagno
     return result.output, list(result.diagnostics)
 
 
-def _parse(source: str) -> Document:
+def _parse(source: str, filename: str = "") -> Document:
     try:
-        return parse(source)
+        return parse(source, filename=filename)
     except (ValueError, yaml.YAMLError) as error:
         raise DocumentError(f"The document cannot be read: {error}") from error
 
@@ -185,6 +201,9 @@ def _resolve(document: Document, result: ValidationResult, style: Style) -> tupl
                 message=f"No formatting locale is set and the document language '{tree.language}' is not a "
                         f"known locale; values are formatted for 'en'. Set one with --locale or the style's "
                         f"'locale'.",
+                # Document-level: at the frontmatter's `language` key.
+                line=key_line(document, "language"),
+                file=document.filename,
             ))
             locale = parse_locale("en")
     assert locale is not None
