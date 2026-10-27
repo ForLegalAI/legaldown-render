@@ -98,8 +98,9 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   falls back to the validator's term text.
   A term that refers to itself, directly or through other terms (`"A {{term: a}}" {{def: a}}`), is
   rendered without looping: the inner reference shows its `label=`, else the definition id. A term text
-  worked out while another term's text is open depends on which one is open, so only a text worked out
-  at the outermost level is kept and reused. The
+  worked out inside a cycle depends on which terms are open, so a text with
+  a cut at a term open outside it is reused only where the same of its terms are open; every other text
+  is worked out once per term, also in a heading read before the targets are known (§13.3). The
   validator (0.4.0) does not report these cycles; the specification's `definition-circular`
   Warning (§16) is not emitted yet.
 - **Ambiguous references.** Each list starts again at its first number, as contracts are usually

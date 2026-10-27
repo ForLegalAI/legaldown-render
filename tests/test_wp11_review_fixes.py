@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -164,3 +165,33 @@ def test_a_term_reference_reads_as_its_definition_in_a_cycle() -> None:
     used = next(line for line in lines if line.startswith("Used first:"))
     site = next(line for line in lines if line.startswith("Beta "))
     assert used.endswith(f"and {site}.")
+
+
+def _chain(n: int, *, cycle: bool, heading: bool = False) -> str:
+    """Terms t0..tn, each reading the next one twice; the last one reads t0 when *cycle*."""
+    defs = [f'"T{i} {{{{term: t{i + 1}}}}} {{{{term: t{i + 1}}}}}" {{{{def: t{i}}}}}' for i in range(n)]
+    defs.append(f'"T{n}{" {{term: t0}}" if cycle else ""}" {{{{def: t{n}}}}}')
+    title = "About {{term: t0}}" if heading else "A"
+    return f"# {title}\n\nUsed: {{{{term: t0}}}}\n\n" + "\n\n".join(defs) + "\n"
+
+
+@pytest.mark.parametrize("heading", [False, True])
+@pytest.mark.parametrize("scheme", ["decimal", "none"])
+@pytest.mark.parametrize("cycle", [False, True])
+def test_a_branching_chain_of_terms_is_worked_out_once_per_term(cycle: bool, scheme: str, heading: bool) -> None:
+    # Each term reads the next twice: worked out afresh at each use, 20 terms is 2**20 resolutions.
+    # The text of t0 is itself 2**n words long (4**n with a cycle, which reads the chain round
+    # twice), so the chains cannot be longer. Under the none scheme a heading is read as text
+    # before the targets are known (§13.3).
+    started = time.perf_counter()
+    out = text(_chain(9 if cycle else 20, cycle=cycle, heading=heading), overrides={"numbering.scheme": scheme})
+    assert time.perf_counter() - started < 2
+    assert "{{" not in out
+
+
+def test_a_chain_without_a_cycle_reads_as_each_term_does() -> None:
+    lines = text(_chain(3, cycle=False)).splitlines()
+    used = next(line for line in lines if line.startswith("Used: "))
+    # t1 as used inside t0 is the same text as at t1's own definition.
+    site = next(line for line in lines if line.startswith("T1 "))
+    assert used == f"Used: T0 {site} {site}"
