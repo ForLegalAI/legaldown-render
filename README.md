@@ -73,8 +73,11 @@ read (a document that is not UTF-8 included) or the output file cannot be writte
 style, setting, or usage, and 70 for an internal error (a bug to report).
 
 Documents are read as UTF-8, and standard output is written as UTF-8 whatever the console's encoding.
-`-o` takes its format from the file extension (`.html`, `.htm`, `.txt`, `.text`); a name with no
-extension is HTML, and any other extension (`.docx`, `.pdf`, `.md`) needs an explicit `--format`.
+Without `--format`, `-o` takes the format from the file extension: `.html` and `.htm` write HTML,
+`.txt` and `.text` plain text. The extension of a document format this renderer does not write
+(`.docx`, `.doc`, `.odt`, `.rtf`, `.pdf`, `.md`, `.markdown`, `.epub`, `.tex`, in any case) is a usage
+error (exit 2) unless `--format` says what to write. Any other name, with any other extension or
+none (`contract`, `contract.v2`, `report.2025-10-27`, `.out`), is just a name and writes HTML.
 
 ## Python
 

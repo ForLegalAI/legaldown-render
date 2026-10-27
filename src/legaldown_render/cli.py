@@ -25,6 +25,12 @@ from .errors import DocumentError, InternalError, RenderRefused, StyleError
 from .style import builtin_styles, dump_style, load_style, parse_override
 from .writers import FORMATS, format_for_path
 
+#: Extensions of document formats this renderer does not write. An output file
+#: named so (``x.docx``) and no ``--format`` is a mistake to refuse: HTML under
+#: that name would mislead. Any other extension (``contract.v2``,
+#: ``report.2025-10-27``), or none, is just a name and keeps the HTML default.
+_UNWRITTEN_EXTENSIONS = frozenset({".docx", ".doc", ".odt", ".rtf", ".pdf", ".md", ".markdown", ".epub", ".tex"})
+
 
 def _setting(text: str) -> tuple[str, Any]:
     key, separator, value = text.partition("=")
@@ -48,8 +54,12 @@ def _parser() -> argparse.ArgumentParser:
                "See every setting with --print-style.",
     )
     parser.add_argument("input", nargs="?", help="the .lgd file to render, or - for standard input")
-    parser.add_argument("-o", "--output", help="output file (default: standard output); its extension sets the format")
-    parser.add_argument("-f", "--format", choices=sorted(FORMATS), help="output format (default: from --output, else html)")
+    parser.add_argument("-o", "--output", help="output file (default: standard output). Without --format, "
+                        ".html/.htm write HTML and .txt/.text plain text; any other name, with or without an "
+                        "extension, writes HTML, except the extension of a format not written (.docx, .doc, "
+                        ".odt, .rtf, .pdf, .md, .markdown, .epub, .tex), which needs --format")
+    parser.add_argument("-f", "--format", choices=sorted(FORMATS),
+                        help="output format (default: html, or text for --output *.txt/*.text)")
     parser.add_argument("-s", "--style", help="style template: a built-in name or a path to a .yaml file")
     parser.add_argument("--set", dest="overrides", action="append", default=[], type=_setting, metavar="KEY=VALUE",
                         help="override one style setting; repeatable. Text settings take the value as "
@@ -123,9 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     if not output_format and args.output:
         file_name = Path(args.output).name
         output_format = format_for_path(file_name)
-        if not output_format and "." in file_name.rstrip("."):
-            # A name with an extension we do not write (x.docx, x.pdf, x.md): HTML under that
-            # name would mislead. A name without one keeps the html default.
+        if not output_format and Path(file_name).suffix.lower() in _UNWRITTEN_EXTENSIONS:
             parser.error(f"cannot tell the output format from '{args.output}'; use --format html or text")
     output_format = output_format or "html"
     name = "<stdin>" if args.input == "-" else args.input
