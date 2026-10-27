@@ -202,3 +202,19 @@ def test_a_plain_label_may_contain_braced_words() -> None:
 def test_the_labels_that_substitute_still_check_their_fields() -> None:
     assert _problems({"labels.condition": "{condtion}"})
     assert _problems({"labels.attachment_file": "{fil}"})
+
+
+# -- 7: a blank of invisible characters is no visual blank ------------------------
+
+
+@pytest.mark.parametrize("blank", ["​", "﻿", " ​‍﻿ ", " ", "‮⁠"])
+@pytest.mark.parametrize("fmt", ["html", "text"])
+def test_a_blank_of_invisible_characters_falls_back_to_tbd(blank: str, fmt: str) -> None:
+    source = FRONT.replace("title: T", "title: T\nplaceholders:\n  - id: fee\n    type: text") + "# A\n\nFee {{placeholder: fee}}.\n"
+    result = render(source, format=fmt, overrides={"placeholders.blank": blank})
+    assert "[TBD: fee]" in result.output
+
+
+def test_a_blank_with_a_visible_character_is_kept() -> None:
+    source = FRONT.replace("title: T", "title: T\nplaceholders:\n  - id: fee\n    type: text") + "# A\n\nFee {{placeholder: fee}}.\n"
+    assert "Fee ​__​." in render(source, format="text", overrides={"placeholders.blank": "​__​"}).output

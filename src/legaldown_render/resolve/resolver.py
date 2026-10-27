@@ -23,6 +23,7 @@ the validator does not check yet.
 """
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
@@ -752,9 +753,12 @@ class Resolver:
         prompt = ""
         if self.style.placeholders.show_prompt and isinstance(declared, dict):
             prompt = str(declared.get("prompt") or "")
-        # §13.5 rule 6: a style whose blank is empty offers no visual blank.
+        # §13.5 rule 6: a style whose blank is empty offers no visual blank,
+        # and neither does one of whitespace or format characters only
+        # (U+200B zero-width space, U+FEFF, bidi controls): it shows nothing.
         blank = self.style.placeholders.blank
-        return Blank(placeholder_id, blank if blank.strip() else f"[TBD: {placeholder_id}]", prompt)
+        shows = any(not c.isspace() and unicodedata.category(c) != "Cf" for c in blank)
+        return Blank(placeholder_id, blank if shows else f"[TBD: {placeholder_id}]", prompt)
 
     def _attach(self, directive: Directive, attachment_id: str) -> Inline:
         title = self.result.index.attachment_lookup.get(attachment_id)

@@ -105,7 +105,7 @@ values:
   duration: long             # long (12 months) | short | narrow
 
 placeholders:
-  blank: "[_____]"           # empty or whitespace only: renders [TBD: id] (§13.5 rule 6)
+  blank: "[_____]"           # empty, or only whitespace/invisible characters: renders [TBD: id] (§13.5 rule 6)
   show_prompt: false         # show the question's prompt next to the blank (§15.8)
 
 title_block: { parties: true, effective_date: true, version: false }
