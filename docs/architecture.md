@@ -326,19 +326,41 @@ out when the validator reported the same path at the same line, or at none (`dia
 - At Rendering level, the only files read are the document, the style template, and the answers
   file the CLI reads with `--answers` (the Python API takes answers as a mapping). Attachment
   files and includes are never opened.
-- **A style template is trusted input.** Nothing in it is a security boundary:
-  - A value placed into the stylesheet (fonts, sizes, colours, margins, `page.size`) is stripped
-    of `;{}<>` only (`writers/html.py:_css`). That keeps it from ending its declaration or the
-    `<style>` element, but not from breaking the CSS after it: `typography.font_size: "12pt ("`
-    is emitted as written and leaves the rest of the stylesheet unparsable. It is not validated
-    as CSS.
-  - `html.extra_css` is appended to the stylesheet as it is, so it can contain anything,
-    `</style>` included.
+- **A style template is trusted input, unless it is loaded untrusted.** By default a template, a
+  `--set` value and an `extends` path are the operator's, and the loader still keeps a value from
+  breaking out of the stylesheet:
+  - A value placed into the stylesheet (fonts, sizes, colours, margins, `page.size`,
+    `html.max_width`) is refused with a `StyleError` naming the setting when it contains `/*`, `*/`,
+    `</`, a backslash, a control character or a line break (`style/model.py:css_problem`, called
+    from `style/loader.py:_convert` for every field declared with `css_field`). It is rejected,
+    never stripped: removing one token can form another (`/` + `/**/` + `*` is `/*`). Anything else
+    is the operator's, so `calc()` and `var()` load. A value is not validated as CSS, though, so
+    `12pt (` is emitted as written and leaves the rest of the stylesheet unparsable.
+  - `html.extra_css` is raw CSS, appended as written, but it may not contain `</style` in any case.
+  - `writers/html.py:_css` is the last line, for `writers.html.stylesheet()` given a `Style` built
+    by hand, which the loader never saw: it strips `;{}<>\@`, control characters and line breaks,
+    and removes comment delimiters until none is left. A lone `/` stays, since `calc(100% / 3)`
+    needs it.
   - `extends` names any path the process can read, absolute or with `../`; only cycles are
-    rejected. (A style file is read with `yaml.safe_load`, and as UTF-8.)
-  A service that renders for several parties must choose the style itself, and never accept a
-  style file, `--set` values, or `extends` paths from a user it does not trust. Document source
-  has no such power: it is never emitted as HTML or CSS (§8.7).
+    rejected. A style file is read with `yaml.safe_load`, as UTF-8.
+- **Untrusted mode** (`load_style(..., trusted=False)`, `RenderOptions.untrusted`, `--untrusted`)
+  is for a service that renders what its users send. The style is a built-in name, a `Style`, a
+  mapping, or YAML text (a string with a line break), never a file path: nothing is read from disk
+  but the package's own styles. `extends` may name only a built-in style. Each setting that reaches
+  the stylesheet must match a strict grammar declared next to the field (`style/model.py:CSS_KINDS`:
+  length, line-height, colour, font-weight, font-family, page size, margin, max-width), enforced in
+  `_convert` for a mapping and, through `style_to_dict`, for a `Style` object and for settings
+  objects given as overrides. The grammars allow no function, no variable and no `!important`, so
+  `calc(1em + 2px)` and `var(--x)` are refused. `html.extra_css` must be empty. YAML text is at most
+  64 KiB (UTF-8 bytes) and may not use aliases (the "billion laughs" shape; a nesting that exhausts
+  the stack is a `StyleError` too). A message names the setting and the problem, and never quotes
+  the style, a key, a template field or a path (a YAML error gives the line and column only), so it
+  can be shown to the user who sent it. `RenderOptions.untrusted` also requires a `document_root`
+  (§2.3: a renderer for documents it does not control SHOULD set one): without it `render` raises an
+  `OptionsError`, and the command exits 2. The option and the flag are one switch for both checks.
+  Defaults are unchanged: trusted, no root required. A service should still choose the style
+  itself. Document source has no power over the stylesheet either way: it is never emitted as HTML
+  or CSS (§8.7).
 
 ## Testing
 
