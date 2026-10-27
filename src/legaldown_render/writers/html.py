@@ -9,9 +9,10 @@ numbers are the ones resolution computed and survive copying and printing.
 
 Safety (docs/architecture.md): every text node and attribute is escaped, raw
 HTML from the source never reaches this writer (§8.7), and a link whose URL
-is empty or uses a script, ``file:``, or ``data:`` scheme
-(:data:`~legaldown_render.urls.DENIED_SCHEMES`, judged as a browser reads the
-URL) renders as its text alone. Every other scheme is a hyperlink (§8.7).
+is empty or uses a scheme outside the allow-list
+(:data:`~legaldown_render.urls.LINK_SCHEMES`, judged as a browser reads the
+URL: script, ``file:``, ``data:``, protocol handlers) renders as its text
+alone, and the resolver reports it. Every other link is a hyperlink (§8.7).
 This check is the gate for every ``href`` and ``src`` the writer emits (a link,
 an image, a value's link): the builder turns markdown-it's own check off.
 An image path that is not relative (§2.3) never gets here: resolution has
@@ -56,7 +57,7 @@ from ..tree import (
     has_visible_content,
     plain_text,
 )
-from ..urls import is_link_target, is_safe_href
+from ..urls import displayed_url, is_link_target, is_safe_href
 
 __all__ = ["HtmlWriter", "is_safe_href", "stylesheet"]
 
@@ -314,7 +315,7 @@ class HtmlWriter:
                 return f"<code>{_text(text)}</code>"
             case Link(href=href, children=children, title=title):
                 # A link with no text shows its URL (§8.7: it is still a hyperlink).
-                shown = children if has_visible_content(children) else (Text(href.strip()),)
+                shown = children if has_visible_content(children) else (Text(displayed_url(href)),)
                 if not is_link_target(href):
                     return self.inlines(children)
                 title_attr = f' title="{_attr(plain_text(title))}"' if title else ""

@@ -127,9 +127,9 @@ def test_the_validators_own_report_is_not_repeated(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.parametrize("href", [
     "ftp://example.com/f", "sip:alice@example.com", "urn:isbn:0451450523", "https://example.com",
-    "mailto:a@example.com", "tel:+420123456789", "magnet:?xt=urn:btih:x", "attachments/a.pdf", "../a.pdf", "#top",
+    "mailto:a@example.com", "tel:+420123456789", "attachments/a.pdf", "../a.pdf", "#top",
 ])
-def test_every_link_but_the_dangerous_ones_is_a_hyperlink(href: str) -> None:
+def test_every_link_of_an_allowed_scheme_is_a_hyperlink(href: str) -> None:
     output = html(f"# A\n\nSee [the link](<{href}>).\n")
     assert f'<a href="{href}">the link</a>' in output
 
@@ -152,12 +152,12 @@ def test_a_refused_link_is_its_text_in_both_writers(href: str) -> None:
     assert not is_safe_href(href)
 
 
-def test_the_deny_list_is_judged_as_a_browser_reads_the_url() -> None:
+def test_the_allow_list_is_judged_as_a_browser_reads_the_url() -> None:
     for href in ("java\tscript:alert(1)", "jav\nascript:x", "\x01javascript:x", " JAVASCRIPT:x", "data:text/html,x",
                  "VBScript:x", "FILE:///x"):
         assert not is_safe_href(href), repr(href)
     for href in ("https://example.com", "#section", "attachments/a.pdf", "mailto:a@example.com", "ftp://x/y",
-                 "sip:a@b", "urn:x:y", "a:b", "x/data:y", "javascript"):
+                 "sip:a@b", "urn:x:y", "x/data:y", "javascript", "HTTPS://X", "\thttps://x"):
         assert is_safe_href(href), href
 
 

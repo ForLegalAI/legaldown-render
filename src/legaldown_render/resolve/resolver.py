@@ -17,7 +17,8 @@ The validator has already reported every document-level Error for the
 failures shown here, so the resolver only adds the diagnostics that need a
 style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
 and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
-and ``path-not-relative`` for an image whose path is not relative (§2.3), which
+``render-link-refused`` for a link whose URL scheme is not one links may use
+(§8.7), and ``path-not-relative`` for an image whose path is not relative (§2.3), which
 the validator does not check yet.
 """
 from __future__ import annotations
@@ -84,7 +85,7 @@ from ..tree import (
     plain_text,
     unlinked,
 )
-from ..urls import is_empty_path, is_relative_path
+from ..urls import is_empty_path, is_link_target, is_relative_path, printable
 from .numbering import RENUMBERED, extend, fill, format_counter, heading_levels
 from .values import DURATION_UNITS, Formatter
 
@@ -532,7 +533,9 @@ class Resolver:
                 return Emphasis(self._resolve_inlines(children))
             case Strong(children=children):
                 return Strong(self._resolve_inlines(children))
-            case Link(children=children, title=title):
+            case Link(href=href, children=children, title=title):
+                if href.strip() and not is_link_target(href):
+                    self._link_refused(href)
                 return replace(inline, children=self._resolve_inlines(children),
                                title=self._resolve_inlines(_attribute_text(title)))
             case Image(src=src, children=children, title=title):
@@ -890,6 +893,18 @@ class Resolver:
         if diagnostic not in self.diagnostics:
             self.diagnostics.append(diagnostic)
 
+    def _link_refused(self, href: str) -> None:
+        """Report a link whose URL does not use a scheme links may use
+        (:data:`~legaldown_render.urls.LINK_SCHEMES`) as ``render-link-refused``:
+        the writers show its text and say nothing (ADR 0003), so the reader of
+        the document would not otherwise know a link was lost."""
+        shown = printable(unquote(href.strip()))
+        self._warn(
+            "render-link-refused",
+            f"Link to '{shown}' is not rendered as a link: only http, https, mailto, tel, ftp, ftps, sftp, sip, "
+            f"sips, sms, urn, geo, news and relative links are; its text is shown.",
+        )
+
     def _not_relative(self, path: str) -> None:
         """Report an image *path* that is not relative as the Core Error
         ``path-not-relative`` (§2.3, §16.2), unless the validator has
@@ -898,13 +913,17 @@ class Resolver:
         percent-encoded the path ("C:\\x" reads "C:%5Cx"), so it is decoded
         to name the path as written."""
         path = unquote(path)
-        if any(d.rule == "path-not-relative" and path in d.message for d in self.result.diagnostics):
+        # Assumption: the validator quotes the path in its message as '<path>',
+        # as written. Matching the quoted form keeps a path that is a prefix of
+        # another ("/a" and "/ab") from being counted as already reported.
+        if any(d.rule == "path-not-relative" and f"'{path}'" in d.message for d in self.result.diagnostics):
             return
+        path = printable(path)
         diagnostic = Diagnostic(
             rule="path-not-relative",
             level="error",
-            message=f"Image path '{path}' is not relative (§2.3): an image path is a relative path with no URI "
-                    f"scheme, and a remote resource is never fetched. Its alt text is shown instead.",
+            message=f"Image path '{path}' is not relative (§2.3): file references are relative paths with no "
+                    f"URI scheme. Its alt text is shown instead.",
         )
         if diagnostic not in self.diagnostics:
             self.diagnostics.append(diagnostic)
