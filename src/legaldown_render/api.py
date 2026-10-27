@@ -62,7 +62,8 @@ class RenderOptions:
     #: The document's file name, which every diagnostic of the result names as
     #: its ``file`` (§16.9), the validator's and the renderer's alike, as
     #: ``Document.filename`` does for the validator: the name without its
-    #: directory. ``render_file`` and the command line set it from the path
+    #: directory (a directory given is dropped, whether it is written with ``/``
+    #: or ``\``). ``render_file`` and the command line set it from the path
     #: they read; for text given to :func:`render` it is empty unless set.
     #: With ``answers``, the lines of the diagnostics are those of the
     #: assembled document (§15.8), not of the template file.
@@ -125,6 +126,9 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.format not in FORMATS:
         raise OptionsError(f"unknown output format '{options.format}' (known: {', '.join(FORMATS)})")
     base = _document_base(options)
+    name = options.filename.replace("\\", "/").rsplit("/", 1)[-1]
+    if name != options.filename:
+        options = replace(options, filename=name)
     if options.document_path is not None and not options.filename:
         options = replace(options, filename=PurePath(options.document_path).name)
     overrides = dict(options.overrides)

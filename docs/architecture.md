@@ -261,7 +261,7 @@ frontmatter is at its key (`diagnostics.key_line`, which wraps the public `sourc
 returns None without a source map; one helper for every frontmatter reference). A term's text is
 worked out at the term's definition (`Resolver.term_lines`, recorded by `_survey`) whichever
 reference asks first. `Diagnostic.file` is `RenderOptions.filename`, which `render_file` and the CLI
-set to the file name as the validator does (`Document.filename`, without the directory).
+set to the file name as the validator does (`Document.filename`, without the directory; `render` drops one given, `/` or `\`).
 
 **Repeats.** `Resolver._warn` and `Resolver._reference` add a diagnostic through `diagnostics.record`,
 which keeps one finding (rule, level, message) once, at the lowest line it was seen at: the

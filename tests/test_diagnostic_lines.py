@@ -336,6 +336,13 @@ def _included(found) -> str:  # type: ignore[no-untyped-def]
     return found.message.split("{{include: ")[1].split("}}")[0]
 
 
+@pytest.mark.parametrize("given", ["a/b.lgd", "a\\b.lgd", "/abs/dir/b.lgd", "C:\\x\\y/b.lgd"])
+def test_the_file_name_is_without_its_directory(given: str) -> None:
+    source = HEAD + "\n# A\n\n{{include: x.lgd}}\n"
+    result = render(source, filename=given)
+    assert {d.file for d in result.diagnostics} == {"b.lgd"}
+
+
 def test_key_line_is_general_and_none_without_a_source() -> None:
     from legaldown import Document, parse
 
