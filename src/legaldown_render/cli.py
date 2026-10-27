@@ -16,7 +16,7 @@ import argparse
 import contextlib
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from legaldown import AnswersError, load_answers
 
@@ -35,20 +35,40 @@ from .writers import FORMATS, file_extension, format_for_path
 _UNWRITTEN_EXTENSIONS = frozenset({"docx", "doc", "odt", "rtf", "pdf", "md", "markdown", "epub", "tex"})
 
 
+def _safe(text: str) -> str:
+    """*text* for stderr, with every control character written out (see
+    :func:`~legaldown_render.urls.printable`) except the line breaks that
+    structure a multi-line message. Command-line values (file names, a style
+    name, a locale, a setting key) and the library's messages that quote them
+    reach a terminal only through this."""
+    return "\n".join(printable(line) for line in text.split("\n"))
+
+
+def _complain(message: str) -> None:
+    print(_safe(message), file=sys.stderr)
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        # argparse echoes the offending value (an invalid choice, an
+        # unrecognized argument): written out, not obeyed by the terminal.
+        super().error(_safe(message))
+
+
 def _setting(text: str) -> tuple[str, Any]:
     key, separator, value = text.partition("=")
     if not separator or not key.strip():
-        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got '{text}'")
+        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got '{printable(text)}'")
     # Typed by the setting: text stays as written, anything else is YAML.
     try:
         return key.strip(), parse_override(key.strip(), value)
     except StyleError as error:
         # argparse shows only ArgumentTypeError (and TypeError/ValueError, with a generic message).
-        raise argparse.ArgumentTypeError(str(error)) from None
+        raise argparse.ArgumentTypeError(_safe(str(error))) from None
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="legaldown-render",
         description="Render a LegalDown document to HTML or plain text.",
         epilog="Style settings: --style picks a template (built-in: "
@@ -134,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             print(dump_style(load_style(args.style, overrides=overrides)), end="")
         except StyleError as error:
-            print(f"legaldown-render: {error}", file=sys.stderr)
+            _complain(f"legaldown-render: {error}")
             return 2
         return 0
     if not args.input:
@@ -145,17 +165,17 @@ def main(argv: list[str] | None = None) -> int:
         file_name = Path(args.output).name
         output_format = format_for_path(file_name)
         if not output_format and file_extension(file_name) in _UNWRITTEN_EXTENSIONS:
-            parser.error(f"cannot tell the output format from '{args.output}'; use --format html or text")
+            parser.error(f"cannot tell the output format from '{printable(args.output)}'; use --format html or text")
     output_format = output_format or "html"
     name = "<stdin>" if args.input == "-" else args.input
     try:
         source = _read_source(args.input)
     except OSError as error:
-        print(f"legaldown-render: cannot read {name}: {error.strerror or error}", file=sys.stderr)
+        _complain(f"legaldown-render: cannot read {name}: {error.strerror or error}")
         return 1
     except UnicodeDecodeError as error:
-        print(f"legaldown-render: cannot read {name}: not valid UTF-8 "
-              f"(byte 0x{error.object[error.start]:02x} at offset {error.start})", file=sys.stderr)
+        _complain(f"legaldown-render: cannot read {name}: not valid UTF-8 "
+                  f"(byte 0x{error.object[error.start]:02x} at offset {error.start})")
         return 1
 
     answers = None
@@ -165,10 +185,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             answers = load_answers(args.answers)
         except OSError as error:
-            print(f"legaldown-render: cannot read {Path(args.answers)}: {error}", file=sys.stderr)
+            _complain(f"legaldown-render: cannot read {Path(args.answers)}: {error}")
             return 1
         except AnswersError as error:
-            print(f"legaldown-render: {error}", file=sys.stderr)
+            _complain(f"legaldown-render: {error}")
             return 1
 
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,
@@ -176,17 +196,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = render(source, options)
     except StyleError as error:
-        print(f"legaldown-render: {error}", file=sys.stderr)
+        _complain(f"legaldown-render: {error}")
         return 2
     except RenderRefused as error:
         _report(name, error.diagnostics, quiet=args.quiet)
-        print(f"legaldown-render: {printable(str(error))}", file=sys.stderr)
+        _complain(f"legaldown-render: {printable(str(error))}")
         return 1
     except DocumentError as error:
         print(f"{printable(name)}: error: {printable(str(error))}", file=sys.stderr)
         return 1
     except InternalError as error:
-        print(f"legaldown-render: internal error: {error}", file=sys.stderr)
+        _complain(f"legaldown-render: internal error: {error}")
         return 70
 
     _report(name, result.diagnostics, quiet=args.quiet)
@@ -194,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             Path(args.output).write_text(result.output, encoding="utf-8", newline="\n")
         except OSError as error:
-            print(f"legaldown-render: cannot write {args.output}: {error.strerror or error}", file=sys.stderr)
+            _complain(f"legaldown-render: cannot write {args.output}: {error.strerror or error}")
             return 1
     else:
         sys.stdout.write(result.output)

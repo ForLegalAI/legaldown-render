@@ -125,14 +125,17 @@ _MALFORMED = {
 #: times this.
 _MAX_TERM_TEXT = 1000
 
-#: The most term texts worked out in one document (each real computation, not
-#: a text taken from the cache), and the most terms open inside one another.
-#: Past either, a ``{{term:}}`` shows its label or definition id and the
-#: Warning ``render-term-limit`` is reported. A document of terms that name
-#: each other (k terms each naming all k) would otherwise take time
-#: exponential in k, and a long chain of terms would exhaust the stack. No
-#: real document comes near them.
-_MAX_TERM_RUNS = 2000
+#: The most inline nodes resolved, in one document, inside a term text that is
+#: worked out again (a second or later text of a term, for another set of open
+#: terms: only terms that name each other cause these), nested ones included;
+#: and the most terms open inside one another. Past either, a ``{{term:}}``
+#: shows its label or definition id and the Warning ``render-term-limit`` is
+#: reported. A term's first text costs nothing (it is bounded by the number of
+#: terms), so this bounds the extra work cycles can cause to a small multiple of
+#: the document, where k terms each naming all k would otherwise take time
+#: exponential in k, and a long chain of terms would exhaust the stack. No real
+#: document comes near them.
+_MAX_TERM_WORK = 200_000
 _MAX_TERM_DEPTH = 32
 
 #: How many texts (one per different set of open terms around it) are kept for
@@ -206,7 +209,9 @@ class Resolver:
         # because they were open.
         self._seen: set[str] = set()
         self._cut: set[str] = set()
-        self._term_runs = 0
+        # Inline nodes resolved inside repeat computations (see _while_open).
+        self._term_work = 0
+        self._repeating = 0
         # False until every target is registered and the placeholder types are
         # known (run() sets it just before the inlines are resolved).
         self._targets_known = False
@@ -401,6 +406,8 @@ class Resolver:
         def text(inlines: tuple[Inline, ...]) -> str:
             parts: list[str] = []
             for inline in inlines:
+                if self._repeating:
+                    self._term_work += 1
                 match inline:
                     case DirectiveSource(directive=directive):
                         if directive.name != "ref":
@@ -567,6 +574,8 @@ class Resolver:
         return tuple(out)
 
     def _resolve_inline(self, inline: Inline) -> Inline | tuple[Inline, ...] | None:
+        if self._repeating:
+            self._term_work += 1
         match inline:
             case DirectiveSource(directive=directive):
                 return self._directive(directive)
@@ -754,10 +763,13 @@ class Resolver:
 
         A cycle can still ask for a great many different texts (k terms that
         each name all k have more ways round than any cache holds), so the work
-        is limited: past :data:`_MAX_TERM_DEPTH` terms open at once, or
-        :data:`_MAX_TERM_RUNS` texts worked out in the document, the result is
-        ``None`` (the reference shows its label or id) and the Warning
-        ``render-term-limit`` says so, once.
+        is limited. A text worked out when the cache already holds one for
+        this term (for other open terms) is a repeat, and the inline nodes
+        resolved inside a repeat, nested ones included, are counted; first
+        texts are free. Past :data:`_MAX_TERM_WORK` such nodes, or with
+        :data:`_MAX_TERM_DEPTH` terms open at once, the result is ``None`` (the
+        reference shows its label or id), and the Warning ``render-term-limit``
+        says so, once.
         """
         key = definition_id if key is None else key
         around = set(self._terms_open)
@@ -766,7 +778,8 @@ class Resolver:
                 self._seen |= kept.seen
                 self._cut |= kept.cut
                 return kept.text
-        if len(self._terms_open) >= _MAX_TERM_DEPTH or self._term_runs >= _MAX_TERM_RUNS:
+        repeat = bool(cache.get(key))
+        if len(self._terms_open) >= _MAX_TERM_DEPTH or (repeat and self._term_work >= _MAX_TERM_WORK):
             # Terms that refer to each other this deeply or this often are
             # not resolved further: like a cut, the reference shows its label
             # or id, and nothing is kept.
@@ -776,7 +789,7 @@ class Resolver:
                 "some {{term:}} references show their definition id.",
             )
             return None
-        self._term_runs += 1
+        self._repeating += repeat
         self._terms_open.append(definition_id)
         outer = self._seen, self._cut
         self._seen, self._cut = set(), set()
@@ -786,6 +799,7 @@ class Resolver:
             if len(cache.setdefault(key, [])) < _TERM_TEXTS_PER_TERM:
                 cache[key].append(_TermText(text, seen, cut))
         finally:
+            self._repeating -= repeat
             self._terms_open.pop()
             self._seen = outer[0] | self._seen
             self._cut = outer[1] | (self._cut & around)
