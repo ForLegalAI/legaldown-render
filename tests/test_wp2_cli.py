@@ -55,6 +55,8 @@ def test_stdin_to_stdout_is_utf8_whatever_the_console_encoding(fmt: str) -> None
     expected = render(CZECH, format=fmt).output.encode("utf-8")
     done = _run(["-", "-f", fmt, "-q"], CZECH.encode("utf-8"))
     assert done.returncode == 0, done.stderr
+    # Exact bytes: the output is UTF-8 with LF line endings on every platform, so
+    # the same comparison holds on Windows (no CRLF translation of stdout).
     assert done.stdout == expected
     assert "Příloha".encode() in done.stdout
 
@@ -64,6 +66,7 @@ def test_file_to_stdout_is_utf8_whatever_the_console_encoding(tmp_path: Path) ->
     path.write_bytes(CZECH.encode("utf-8"))
     done = _run([str(path), "-f", "text", "-q"])
     assert done.returncode == 0, done.stderr
+    # Exact bytes, as above: UTF-8 with LF line endings on every platform.
     assert done.stdout == render(CZECH, format="text").output.encode("utf-8")
 
 
@@ -149,9 +152,10 @@ def test_output_that_is_a_directory(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert "cannot write" in capsys.readouterr().err
 
 
-# --- S6: unknown extension -------------------------------------------------------------------
+# --- S6: an extension of a format not written -----------------------------------------------
 
-@pytest.mark.parametrize("name", ["x.docx", "x.pdf", "x.md", "x.DOCX"])
+@pytest.mark.parametrize("name", ["x.docx", "x.pdf", "x.md", "x.DOCX", "x.doc", "x.odt", "x.rtf", "x.markdown",
+                                  "x.epub", "x.tex", "x.v2.Pdf"])
 def test_unknown_output_extension_without_format_is_a_usage_error(
         tmp_path: Path, capsys: pytest.CaptureFixture[str], name: str) -> None:
     target = tmp_path / name
@@ -175,6 +179,30 @@ def test_output_without_an_extension_keeps_the_html_default(tmp_path: Path) -> N
         target.parent.mkdir(exist_ok=True)
         assert main([FEATURES, "-q", "-o", str(target)]) == 0
         assert target.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
+
+
+@pytest.mark.parametrize("name", ["contract.v2", "report.2025-10-27", ".out", "out.", "notes.final", "x.json"])
+def test_any_other_extension_keeps_the_html_default(tmp_path: Path, name: str) -> None:
+    target = tmp_path / name
+    assert main([FEATURES, "-q", "-o", str(target)]) == 0
+    assert target.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
+
+
+def test_a_known_extension_still_sets_the_format(tmp_path: Path) -> None:
+    for name, start in (("a.TXT", "Services Agreement"), ("a.text", "Services Agreement"),
+                        ("a.htm", "<!DOCTYPE html>"), ("a.html", "<!DOCTYPE html>")):
+        target = tmp_path / name
+        assert main([FEATURES, "-q", "-o", str(target)]) == 0
+        assert target.read_text(encoding="utf-8").startswith(start)
+
+
+def test_the_help_states_the_output_rule(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "its extension sets the format" not in help_text
+    assert "any other name, with or without an extension, writes HTML" in help_text
+    assert ".docx, .doc, .odt, .rtf, .pdf, .md, .markdown, .epub, .tex" in help_text
 
 
 # --- S2: error hierarchy ---------------------------------------------------------------------

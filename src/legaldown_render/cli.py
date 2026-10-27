@@ -7,7 +7,8 @@ be written; 2 — a usage or style problem; 70 — an internal error (a bug to
 report).
 
 Documents and output are always UTF-8 (the HTML says ``<meta charset="utf-8">``),
-never the console's or the locale's encoding.
+never the console's or the locale's encoding, and output has LF line endings on
+every platform.
 """
 from __future__ import annotations
 
@@ -24,6 +25,12 @@ from .api import RenderOptions, render
 from .errors import DocumentError, InternalError, RenderRefused, StyleError
 from .style import builtin_styles, dump_style, load_style, parse_override
 from .writers import FORMATS, format_for_path
+
+#: Extensions of document formats this renderer does not write. An output file
+#: named so (``x.docx``) and no ``--format`` is a mistake to refuse: HTML under
+#: that name would mislead. Any other extension (``contract.v2``,
+#: ``report.2025-10-27``), or none, is just a name and keeps the HTML default.
+_UNWRITTEN_EXTENSIONS = frozenset({".docx", ".doc", ".odt", ".rtf", ".pdf", ".md", ".markdown", ".epub", ".tex"})
 
 
 def _setting(text: str) -> tuple[str, Any]:
@@ -48,8 +55,12 @@ def _parser() -> argparse.ArgumentParser:
                "See every setting with --print-style.",
     )
     parser.add_argument("input", nargs="?", help="the .lgd file to render, or - for standard input")
-    parser.add_argument("-o", "--output", help="output file (default: standard output); its extension sets the format")
-    parser.add_argument("-f", "--format", choices=sorted(FORMATS), help="output format (default: from --output, else html)")
+    parser.add_argument("-o", "--output", help="output file (default: standard output). Without --format, "
+                        ".html/.htm write HTML and .txt/.text plain text; any other name, with or without an "
+                        "extension, writes HTML, except the extension of a format not written (.docx, .doc, "
+                        ".odt, .rtf, .pdf, .md, .markdown, .epub, .tex), which needs --format")
+    parser.add_argument("-f", "--format", choices=sorted(FORMATS),
+                        help="output format (default: html, or text for --output *.txt/*.text)")
     parser.add_argument("-s", "--style", help="style template: a built-in name or a path to a .yaml file")
     parser.add_argument("--set", dest="overrides", action="append", default=[], type=_setting, metavar="KEY=VALUE",
                         help="override one style setting; repeatable. Text settings take the value as "
@@ -75,13 +86,15 @@ def _parser() -> argparse.ArgumentParser:
 def _configure_streams() -> None:
     """Make the standard streams safe for any content, whatever the console's
     encoding: the document and the style are UTF-8, so what is written to
-    standard output is UTF-8 as well, and a diagnostic that quotes characters
+    standard output is UTF-8 as well, with LF line endings (no translation to
+    CRLF on Windows), and a diagnostic that quotes characters
     the console cannot show escapes them (``\\u2192``) instead of failing with a
     UnicodeEncodeError. Replaced streams without ``reconfigure`` (a test
-    capture, a StringIO) are left alone."""
+    capture, a StringIO) are left alone. :func:`main` calls this only when it
+    runs as the program (see there)."""
     if hasattr(sys.stdout, "reconfigure"):
         with contextlib.suppress(ValueError, OSError):
-            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     if hasattr(sys.stderr, "reconfigure"):
         with contextlib.suppress(ValueError, OSError):
             sys.stderr.reconfigure(errors="backslashreplace")
@@ -99,7 +112,13 @@ def _read_source(path: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    _configure_streams()
+    """Run the command: *argv* is the argument list, or None for the process's
+    own (``sys.argv``). Only then is ``main`` the program, as the console script
+    and ``python -m legaldown_render.cli`` call it, and only then are the
+    standard streams reconfigured: a caller that passes *argv* is in-process
+    code whose ``sys.stdout`` and ``sys.stderr`` are not ours to change."""
+    if argv is None:
+        _configure_streams()
     parser = _parser()
     args = parser.parse_args(argv)
     overrides = dict(args.overrides)
@@ -123,9 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     if not output_format and args.output:
         file_name = Path(args.output).name
         output_format = format_for_path(file_name)
-        if not output_format and "." in file_name.rstrip("."):
-            # A name with an extension we do not write (x.docx, x.pdf, x.md): HTML under that
-            # name would mislead. A name without one keeps the html default.
+        if not output_format and Path(file_name).suffix.lower() in _UNWRITTEN_EXTENSIONS:
             parser.error(f"cannot tell the output format from '{args.output}'; use --format html or text")
     output_format = output_format or "html"
     name = "<stdin>" if args.input == "-" else args.input
@@ -173,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     _report(name, result.diagnostics, quiet=args.quiet)
     if args.output:
         try:
-            Path(args.output).write_text(result.output, encoding="utf-8")
+            Path(args.output).write_text(result.output, encoding="utf-8", newline="\n")
         except OSError as error:
             print(f"legaldown-render: cannot write {args.output}: {error.strerror or error}", file=sys.stderr)
             return 1
