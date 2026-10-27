@@ -2,12 +2,17 @@
 
 Exit codes: 0 — rendered (document errors, if any, are shown as markers and
 listed on stderr); 1 — not rendered: refused under ``--strict``, or the
-document cannot be read; 2 — a usage or style problem; 70 — an internal
-error (a bug to report).
+document cannot be read (including input that is not UTF-8) or the output cannot
+be written; 2 — a usage or style problem; 70 — an internal error (a bug to
+report).
+
+Documents and output are always UTF-8 (the HTML says ``<meta charset="utf-8">``),
+never the console's or the locale's encoding.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,8 +21,8 @@ from legaldown import AnswersError, load_answers
 
 from . import __version__
 from .api import RenderOptions, render
-from .errors import DocumentError, InternalError, RenderRefused
-from .style import StyleError, builtin_styles, dump_style, load_style, parse_override
+from .errors import DocumentError, InternalError, RenderRefused, StyleError
+from .style import builtin_styles, dump_style, load_style, parse_override
 from .writers import FORMATS, format_for_path
 
 
@@ -26,7 +31,11 @@ def _setting(text: str) -> tuple[str, Any]:
     if not separator or not key.strip():
         raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got '{text}'")
     # Typed by the setting: text stays as written, anything else is YAML.
-    return key.strip(), parse_override(key.strip(), value)
+    try:
+        return key.strip(), parse_override(key.strip(), value)
+    except StyleError as error:
+        # argparse shows only ArgumentTypeError (and TypeError/ValueError, with a generic message).
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -63,7 +72,34 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_streams() -> None:
+    """Make the standard streams safe for any content, whatever the console's
+    encoding: the document and the style are UTF-8, so what is written to
+    standard output is UTF-8 as well, and a diagnostic that quotes characters
+    the console cannot show escapes them (``\\u2192``) instead of failing with a
+    UnicodeEncodeError. Replaced streams without ``reconfigure`` (a test
+    capture, a StringIO) are left alone."""
+    if hasattr(sys.stdout, "reconfigure"):
+        with contextlib.suppress(ValueError, OSError):
+            sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        with contextlib.suppress(ValueError, OSError):
+            sys.stderr.reconfigure(errors="backslashreplace")
+
+
+def _read_source(path: str) -> str:
+    """The document at *path*, or standard input for ``-``, decoded as UTF-8
+    from its bytes (never in the locale's encoding). Raises OSError, or
+    UnicodeDecodeError for input that is not UTF-8."""
+    if path == "-":
+        buffer = getattr(sys.stdin, "buffer", None)
+        # A replaced stdin without bytes (StringIO) already holds text.
+        return buffer.read().decode("utf-8") if buffer is not None else sys.stdin.read()
+    return Path(path).read_bytes().decode("utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_streams()
     parser = _parser()
     args = parser.parse_args(argv)
     overrides = dict(args.overrides)
@@ -83,12 +119,24 @@ def main(argv: list[str] | None = None) -> int:
     if not args.input:
         parser.error("an input file is required")
 
-    output_format = args.format or (format_for_path(args.output) if args.output else None) or "html"
+    output_format = args.format
+    if not output_format and args.output:
+        file_name = Path(args.output).name
+        output_format = format_for_path(file_name)
+        if not output_format and "." in file_name.rstrip("."):
+            # A name with an extension we do not write (x.docx, x.pdf, x.md): HTML under that
+            # name would mislead. A name without one keeps the html default.
+            parser.error(f"cannot tell the output format from '{args.output}'; use --format html or text")
+    output_format = output_format or "html"
     name = "<stdin>" if args.input == "-" else args.input
     try:
-        source = sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
+        source = _read_source(args.input)
     except OSError as error:
         print(f"legaldown-render: cannot read {name}: {error.strerror or error}", file=sys.stderr)
+        return 1
+    except UnicodeDecodeError as error:
+        print(f"legaldown-render: cannot read {name}: not valid UTF-8 "
+              f"(byte 0x{error.object[error.start]:02x} at offset {error.start})", file=sys.stderr)
         return 1
 
     answers = None
@@ -124,7 +172,11 @@ def main(argv: list[str] | None = None) -> int:
 
     _report(name, result.diagnostics, quiet=args.quiet)
     if args.output:
-        Path(args.output).write_text(result.output, encoding="utf-8")
+        try:
+            Path(args.output).write_text(result.output, encoding="utf-8")
+        except OSError as error:
+            print(f"legaldown-render: cannot write {args.output}: {error.strerror or error}", file=sys.stderr)
+            return 1
     else:
         sys.stdout.write(result.output)
     return 0

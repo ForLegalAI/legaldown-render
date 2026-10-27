@@ -21,9 +21,9 @@ import yaml
 from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, parse, parse_template, validate
 
 from .build import build_tree, normalize_source
-from .errors import DocumentError, RenderRefused
+from .errors import DocumentError, OptionsError, RenderRefused, StyleError
 from .resolve import Formatter, parse_locale, resolve_tree
-from .style import Style, StyleError, load_style
+from .style import Style, load_style
 from .tree import RenderTree, assert_resolved
 from .writers import FORMATS, HtmlWriter, TextWriter
 
@@ -86,7 +86,8 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
 
     Problems in the document never raise: they render as failure markers and
     are listed in ``diagnostics``. Raises :class:`StyleError` for an invalid
-    style or setting, :class:`DocumentError` for a document that cannot be
+    style or setting, :class:`OptionsError` for an unknown output format,
+    :class:`DocumentError` for a document that cannot be
     read, and :class:`RenderRefused` in strict mode when the document has
     errors, or when a template cannot be assembled with ``answers``.
     """
@@ -95,7 +96,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     elif settings:
         raise TypeError("pass either a RenderOptions or keyword settings, not both")
     if options.format not in FORMATS:
-        raise ValueError(f"unknown output format '{options.format}' (known: {', '.join(FORMATS)})")
+        raise OptionsError(f"unknown output format '{options.format}' (known: {', '.join(FORMATS)})")
     overrides = dict(options.overrides)
     if options.locale:
         overrides["locale"] = options.locale

@@ -24,21 +24,11 @@ from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 import yaml
 
+from ..errors import StyleError
 from . import model
 from .model import Style
 
 STYLE_FORMAT_VERSION = 1
-
-
-class StyleError(ValueError):
-    """A style template or override is invalid. ``problems`` lists each
-    problem with its key path."""
-
-    def __init__(self, source: str, problems: list[str]) -> None:
-        self.source = source
-        self.problems = problems
-        details = "\n".join(f"  - {problem}" for problem in problems)
-        super().__init__(f"Invalid style {source}:\n{details}")
 
 
 def builtin_styles() -> list[str]:
@@ -119,9 +109,12 @@ def _read(spec: str | Path, relative_to: Path | None) -> tuple[dict, str, Path |
     if relative_to is not None and not path.is_absolute():
         path = relative_to / path
     try:
-        text = path.read_text("utf-8")
+        text = path.read_bytes().decode("utf-8")
     except OSError as error:
         raise StyleError(str(path), [f"cannot read the file: {error.strerror or error}"]) from None
+    except UnicodeDecodeError as error:
+        raise StyleError(str(path), [f"cannot read the file: not valid UTF-8 (byte 0x{error.object[error.start]:02x} "
+                                     f"at offset {error.start})"]) from None
     raw = _parse(text, str(path))
     raw.setdefault("name", path.stem)
     return raw, str(path), path.parent
