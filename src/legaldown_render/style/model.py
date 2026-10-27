@@ -15,9 +15,11 @@ every key and value against these dataclasses.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field, fields, replace
-from typing import Literal
+from typing import Any, Literal
 
 Counter = Literal["decimal", "lower-alpha", "upper-alpha", "lower-roman", "upper-roman"]
 
@@ -208,12 +210,94 @@ class Labels:
     signature_title: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Values that reach the stylesheet
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CssKind:
+    """What a style setting that is written into the HTML stylesheet holds.
+
+    ``grammar`` is the strict grammar an untrusted style is held to
+    (docs/style-templates.md, "Untrusted styles"): plain values only, no
+    function, no variable, nothing a reader could mistake for more than one
+    value. ``expects`` says what it accepts, for the message."""
+
+    grammar: re.Pattern[str]
+    expects: str
+
+
+_NUMBER = r"(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)"
+_LENGTH = rf"(?:0|{_NUMBER}(?:em|rem|ex|ch|pt|pc|px|mm|cm|in|%))"
+_FONT_NAME = r"""(?:"[\w .\-]{1,60}"|'[\w .\-]{1,60}'|-?[A-Za-z][\w\-]{0,40}(?: [\w\-]{1,40}){0,4})"""
+_PAPER = r"(?:[Aa][3-5]|[Bb][4-5]|[Ll]etter|[Ll]egal|[Ll]edger)"
+_ORIENTATION = r"(?:portrait|landscape)"
+
+CSS_KINDS: dict[str, CssKind] = {
+    "length": CssKind(re.compile(_LENGTH), "a length such as 11pt, 1.2em or 0"),
+    "line-height": CssKind(re.compile(rf"(?:normal|{_NUMBER}|{_LENGTH})"), "normal, a number such as 1.5, or a length"),
+    "color": CssKind(
+        re.compile(r"(?:#(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})|[A-Za-z]{3,24}"
+                   r"|(?:rgb|rgba|hsl|hsla)\([0-9.%, /]{1,40}\))"),
+        "a colour: #rgb, #rrggbb, a colour name, or rgb()/hsl() with plain numbers"),
+    "font-weight": CssKind(re.compile(r"(?:normal|bold|bolder|lighter|[1-9][0-9]{0,2}|1000)"),
+                           "normal, bold, or a number from 1 to 1000"),
+    "font-family": CssKind(re.compile(rf"{_FONT_NAME}(?:, ?{_FONT_NAME}){{0,9}}"),
+                           "font names separated by commas, with names of more than one word quoted"),
+    "page-size": CssKind(
+        re.compile(rf"(?:auto|{_ORIENTATION}|{_PAPER}(?: {_ORIENTATION})?|{_LENGTH}(?: {_LENGTH})?)"),
+        "a paper size such as A4 or letter (and landscape or portrait), or one or two lengths"),
+    "margin": CssKind(re.compile(rf"{_LENGTH}(?: {_LENGTH}){{0,3}}"), "one to four lengths separated by spaces"),
+    "max-width": CssKind(re.compile(rf"(?:none|{_LENGTH})"), "none or a length such as 46rem"),
+    # Raw CSS appended to the stylesheet: no grammar, so an untrusted style may not set it at all.
+    "css": CssKind(re.compile(r"(?!)"), "empty"),
+}
+
+#: What no value placed in the stylesheet may contain, trusted or not: it
+#: would open or close a comment, end the ``<style>`` element, or escape what
+#: follows. Rejected, never stripped: removing one token can form another.
+CSS_FORBIDDEN = ("/*", "*/", "</", "\\")
+
+
+def css_field(kind: str, default: str) -> Any:
+    """A text setting that reaches the stylesheet, of the :data:`CSS_KINDS`
+    entry *kind*. The loader checks its value (:func:`css_problem`)."""
+    assert kind in CSS_KINDS, kind
+    return field(default=default, metadata={"css": kind})
+
+
+def css_problem(value: str, kind: str, *, trusted: bool) -> str | None:
+    """What is wrong with *value* for a setting of *kind* written into the
+    stylesheet, or None. It never quotes the value.
+
+    Always: no comment delimiter, ``</``, backslash, control character, or
+    line break (and, for raw CSS, no ``</style``). An untrusted style is held
+    to the grammar of its kind, and may set no raw CSS."""
+    if kind == "css":
+        if "</style" in value.lower():
+            return "must not contain '</style' (it would end the stylesheet)"
+        if not trusted and value:
+            return "is not allowed in an untrusted style (it is raw CSS); leave it empty"
+        return None
+    for token in CSS_FORBIDDEN:
+        if token in value:
+            return f"must not contain '{token}' (it would break out of the stylesheet)"
+    if any(unicodedata.category(char) in ("Cc", "Zl", "Zp") for char in value):
+        return "must not contain a control character or a line break"
+    if not trusted:
+        css = CSS_KINDS[kind]
+        if not css.grammar.fullmatch(value):
+            return f"is not a plain value an untrusted style may use; expected {css.expects}"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class HeadingStyle:
     """Presentation of one heading level."""
 
-    size: str = "1em"
-    weight: str = "700"
+    size: str = css_field("length", "1em")
+    weight: str = css_field("font-weight", "700")
     italic: bool = False
     transform: Literal["none", "uppercase", "small-caps"] = "none"
     align: Literal["left", "center"] = "left"
@@ -221,11 +305,11 @@ class HeadingStyle:
 
 @dataclass(frozen=True, slots=True)
 class Typography:
-    font_family: str = 'Georgia, "Times New Roman", serif'
-    font_size: str = "11pt"
-    line_height: str = "1.5"
-    color: str = "#1a1a1a"
-    link_color: str = "#1f4e8c"
+    font_family: str = css_field("font-family", 'Georgia, "Times New Roman", serif')
+    font_size: str = css_field("length", "11pt")
+    line_height: str = css_field("line-height", "1.5")
+    color: str = css_field("color", "#1a1a1a")
+    link_color: str = css_field("color", "#1f4e8c")
     justify: bool = False
 
 
@@ -234,16 +318,17 @@ class Page:
     """Print layout. Used by the HTML writer's print stylesheet now, and by
     the PDF writer later."""
 
-    size: str = "A4"
-    margin: str = "25mm"
+    size: str = css_field("page-size", "A4")
+    margin: str = css_field("margin", "25mm")
 
 
 @dataclass(frozen=True, slots=True)
 class Html:
-    max_width: str = "46rem"
-    #: Appended to the generated stylesheet. Trusted configuration: a hosted
-    #: service must not accept it from untrusted users.
-    extra_css: str = ""
+    max_width: str = css_field("max-width", "46rem")
+    #: Appended to the generated stylesheet. Raw CSS, so trusted configuration:
+    #: it may not contain ``</style``, and an untrusted style may not set it
+    #: (``load_style(trusted=False)``).
+    extra_css: str = css_field("css", "")
 
 
 def _default_headings() -> dict[int, HeadingStyle]:

@@ -36,8 +36,9 @@ class RenderOptions:
 
     #: ``html`` or ``text``.
     format: str = "html"
-    #: A built-in style name, a path to a YAML style template, or a Style.
-    style: str | Path | Style | None = None
+    #: A built-in style name, a path to a YAML style template, a Style, or (see
+    #: :func:`~.style.load_style`) a mapping or YAML text.
+    style: str | Path | Style | Mapping[str, Any] | None = None
     #: Per-job style overrides by dotted key, e.g. ``{"numbering.scheme": "none"}``.
     overrides: Mapping[str, Any] = field(default_factory=dict)
     #: Shorthand for ``overrides={"locale": ...}``: the formatting locale.
@@ -84,6 +85,14 @@ class RenderOptions:
     #: and it names the file of the diagnostics when ``filename`` is empty. A
     #: document outside the root is an :class:`OptionsError`.
     document_path: str | Path | None = None
+    #: The document and the style are somebody else's, as for a service that
+    #: renders what its users upload. The renderer then requires a
+    #: ``document_root`` (§2.3: an implementation that processes documents it
+    #: does not control SHOULD set one; :class:`OptionsError` without), and
+    #: loads the style with ``trusted=False`` (:func:`~.style.load_style`): no
+    #: style file, ``extends`` only built-in styles, strict values, no raw CSS.
+    #: False (the default) takes the style as the operator's own.
+    untrusted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +122,8 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
 
     Problems in the document never raise: they render as failure markers and
     are listed in ``diagnostics``. Raises :class:`StyleError` for an invalid
-    style or setting, :class:`OptionsError` for an unknown output format or a
+    style or setting, :class:`OptionsError` for an unknown output format, an
+    ``untrusted`` render without a ``document_root``, or a
     document outside its document root, :class:`DocumentError` for a document that cannot be
     read, and :class:`RenderRefused` in strict mode when the document has
     errors, or when a template cannot be assembled with ``answers``.
@@ -124,13 +134,16 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
         raise TypeError("pass either a RenderOptions or keyword settings, not both")
     if options.format not in FORMATS:
         raise OptionsError(f"unknown output format '{options.format}' (known: {', '.join(FORMATS)})")
+    if options.untrusted and options.document_root is None:
+        raise OptionsError("an untrusted render needs a document_root (§2.3): name the directory that file "
+                           "references may not leave")
     base = _document_base(options)
     if options.document_path is not None and not options.filename:
         options = replace(options, filename=PurePath(options.document_path).name)
     overrides = dict(options.overrides)
     if options.locale:
         overrides["locale"] = options.locale
-    style = load_style(options.style, overrides=overrides)
+    style = load_style(options.style, overrides=overrides, trusted=not options.untrusted)
 
     source = normalize_source(source)
     assembled: list[Diagnostic] = []
@@ -142,7 +155,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
-    tree, extra = _resolve(document, result, style, base)
+    tree, extra = _resolve(document, result, style, base, options.untrusted)
     # The renderer's findings that the validator's or the assembly's already
     # name (the same rule, level and message), wherever they are, are not repeated.
     diagnostics += [d for d in extra if not repeats(d, diagnostics)]
@@ -235,13 +248,14 @@ def _parse(source: str, filename: str = "") -> Document:
 
 
 def _resolve(document: Document, result: ValidationResult, style: Style,
-             base: str | None) -> tuple[RenderTree, list[Diagnostic]]:
+             base: str | None, untrusted: bool = False) -> tuple[RenderTree, list[Diagnostic]]:
     diagnostics: list[Diagnostic] = []
     # Raw HTML is never emitted; the validator reports it (raw-html, §8.7).
     tree = build_tree(document, result)
     locale = parse_locale(style.locale) if style.locale else None
     if style.locale and locale is None:
-        raise StyleError("setting", [f"locale: '{style.locale}' is not a known locale (e.g. en-US, cs-CZ)"])
+        shown = "" if untrusted else f" '{style.locale}'"
+        raise StyleError("setting", [f"locale:{shown} is not a known locale (e.g. en-US, cs-CZ)"])
     if locale is None:
         # No locale set: the document's language is the hint (§10.1).
         locale = parse_locale(tree.language)

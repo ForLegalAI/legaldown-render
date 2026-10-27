@@ -10,6 +10,12 @@ Values are layered, each layer overriding the one before (docs/style-templates.m
 The merged mapping is then checked against the dataclasses in :mod:`.model`.
 Every problem is collected, with its key path, before :class:`StyleError` is
 raised, so one run reports everything that is wrong with a template.
+
+A style is trusted input by default: the operator's own file. ``trusted=False``
+(:func:`load_style`) is for a style that comes from someone else — it reads
+no file, extends only built-in styles, holds every value that reaches the
+stylesheet to a strict grammar, and never quotes the style in a message
+(docs/architecture.md, Security).
 """
 from __future__ import annotations
 
@@ -28,9 +34,16 @@ import yaml
 
 from ..errors import StyleError
 from . import model
-from .model import Style, template_settings
+from .model import Style, css_problem, template_settings
 
 STYLE_FORMAT_VERSION = 1
+
+#: The longest YAML text an untrusted style may be (bytes of UTF-8).
+MAX_UNTRUSTED_STYLE_BYTES = 64 * 1024
+
+#: How an untrusted style is named in a message, instead of its own name (which
+#: is source text) or a path.
+_UNTRUSTED_SOURCE = "'untrusted style'"
 
 
 def builtin_styles() -> list[str]:
@@ -40,26 +53,55 @@ def builtin_styles() -> list[str]:
 
 
 def load_style(
-    style: str | Path | Style | None = None,
+    style: str | Path | Style | Mapping[str, Any] | None = None,
     *,
     overrides: Mapping[str, Any] | None = None,
+    trusted: bool = True,
 ) -> Style:
     """The validated :class:`Style` for *style* — a built-in name, a path to
-    a YAML file, or a :class:`Style` — with *overrides* applied.
+    a YAML file, a :class:`Style`, a mapping, or YAML text (a string with a
+    line break) — with *overrides* applied.
 
     *overrides* maps dotted keys to values, e.g.
     ``{"numbering.scheme": "mixed", "locale": "cs-CZ"}``; nested mappings are
     accepted too.
+
+    Always: a value written into the stylesheet may not contain a comment
+    delimiter, ``</``, a backslash, a control character or a line break, and
+    ``html.extra_css`` may not contain ``</style``.
+
+    With ``trusted=False`` the style is somebody else's. It is a built-in
+    name, a :class:`Style`, a mapping, or YAML text of at most 64 KiB without
+    aliases, never a file; it may extend only built-in styles; every value that
+    reaches the stylesheet (fonts, sizes, colours, margins, page size) must
+    match a strict grammar (:data:`~.model.CSS_KINDS`), also in a
+    :class:`Style` and in *overrides*; and ``html.extra_css`` must be empty.
+    A message names the setting and the problem and never quotes the style or
+    a path.
     """
+    try:
+        return _load(style, overrides, trusted)
+    except RecursionError:
+        if trusted:
+            raise
+        raise StyleError(_UNTRUSTED_SOURCE, ["the style is nested too deeply"]) from None
+
+
+def _load(style: Any, overrides: Mapping[str, Any] | None, trusted: bool) -> Style:
     if isinstance(style, Style):
-        data, source = style_to_dict(style), f"'{style.name}'"
+        data = style_to_dict(style)
+        source = f"'{style.name}'" if trusted else _UNTRUSTED_SOURCE
+    elif isinstance(style, Mapping) or (isinstance(style, str) and ("\n" in style or "\r" in style)):
+        source = "'(style)'" if trusted else _UNTRUSTED_SOURCE
+        raw = _parse(style, source, trusted) if isinstance(style, str) else _check_raw(_copy(style), source, trusted)
+        data, _ = _extend(raw, source, None, f"'(style {id(raw)})'", (), trusted)
     else:
-        data, source = _load_chain(style if style is not None else "default", seen=())
+        data, source = _load_chain(style if style is not None else "default", seen=(), trusted=trusted)
     if overrides:
-        expanded = _expand_dotted(overrides)
+        expanded = _expand_dotted(overrides, trusted)
         _refuse_meta_overrides(expanded)
         data = _merge(data, expanded)
-    return _build(data, source)
+    return _build(data, source, trusted)
 
 
 def style_to_dict(style: Style) -> dict[str, Any]:
@@ -84,7 +126,7 @@ def dump_style(style: Style) -> str:
 
 
 def _load_chain(
-    spec: str | Path, *, seen: tuple[tuple[str, str], ...], relative_to: Path | None = None
+    spec: str | Path, *, seen: tuple[tuple[str, str], ...], relative_to: Path | None = None, trusted: bool = True
 ) -> tuple[dict, str]:
     """The merged raw mapping for *spec* and every template it extends.
 
@@ -92,7 +134,13 @@ def _load_chain(
     A file's identity is its resolved path, so ``../dir/a.yaml`` and
     ``a.yaml`` — or a symbolic link — are one template and a cycle through
     them is found."""
-    raw, source, folder, identity = _read(spec, relative_to)
+    raw, source, folder, identity = _read(spec, relative_to, trusted)
+    return _extend(raw, source, folder, identity, seen, trusted)
+
+
+def _extend(raw: dict, source: str, folder: Path | None, identity: str,
+            seen: tuple[tuple[str, str], ...], trusted: bool) -> tuple[dict, str]:
+    """*raw* merged onto the template it extends (``default`` when it names none)."""
     if any(identity == earlier for earlier, _ in seen):
         chain = " -> ".join((*(label for _, label in seen), source))
         raise StyleError(source, [f"extends: circular chain {chain}"])
@@ -103,20 +151,36 @@ def _load_chain(
             # Start from every built-in default, so that a partial mapping —
             # one heading level's alignment, say — merges field by field.
             return _merge(style_to_dict(Style()), raw), source
-        base, _ = _load_chain("default", seen=here)
+        base, _ = _load_chain("default", seen=here, trusted=trusted)
     elif isinstance(parent, str) and parent:
-        base, _ = _load_chain(parent, seen=here, relative_to=folder)
+        if not trusted and not _is_builtin_name(parent):
+            raise StyleError(source, ["extends: an untrusted style may extend only a built-in style, "
+                                      f"by name (built-in: {', '.join(builtin_styles())})"])
+        base, _ = _load_chain(parent, seen=here, relative_to=folder, trusted=trusted)
     else:
-        raise StyleError(source, ["extends: must be a style name or a path"])
+        raise StyleError(source, ["extends: must be a style name or a path" if trusted
+                                  else "extends: must be the name of a built-in style"])
     return _merge(base, raw), source
 
 
-def _read(spec: str | Path, relative_to: Path | None) -> tuple[dict, str, Path | None, str]:
+def _is_builtin_name(name: str) -> bool:
+    return name in builtin_styles()
+
+
+def _read(spec: str | Path, relative_to: Path | None,
+          trusted: bool = True) -> tuple[dict, str, Path | None, str]:
     """The raw mapping in *spec*, a label for messages, the folder that
     relative ``extends`` paths are resolved against, and the template's
-    identity (its resolved path, or the quoted name of a built-in)."""
+    identity (its resolved path, or the quoted name of a built-in). An
+    untrusted style reads built-in styles only, never a file."""
     name = str(spec)
     is_path = isinstance(spec, Path) or name.endswith((".yaml", ".yml")) or "/" in name or "\\" in name
+    if not trusted:
+        if not isinstance(spec, str) or is_path or not _is_builtin_name(name):
+            known = ", ".join(builtin_styles())
+            raise StyleError(_UNTRUSTED_SOURCE, [f"an untrusted style is a built-in style (built-in: {known}), "
+                                                 f"a mapping, or YAML text, never a file"])
+        is_path = False
     if not is_path:
         if name not in builtin_styles():
             known = ", ".join(builtin_styles())
@@ -148,19 +212,57 @@ def _identity(path: Path) -> str:
         return os.path.abspath(path)
 
 
-def _parse(text: str, source: str) -> dict:
+def _parse(text: str, source: str, trusted: bool = True) -> dict:
+    if not trusted:
+        _check_untrusted_text(text)
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as error:
-        raise StyleError(source, [f"not valid YAML: {error}"]) from None
-    if raw is None:
-        return {}
+        # PyYAML's message quotes the source around the problem, which for a
+        # style from elsewhere would show a reader whatever the text holds.
+        raise StyleError(source, [f"not valid YAML: {error}" if trusted else _untrusted_yaml_problem(error)]) from None
+    return _check_raw({} if raw is None else raw, source, trusted)
+
+
+def _check_raw(raw: Any, source: str, trusted: bool = True) -> dict:
+    """*raw*, a style template as loaded, once it is known to be a mapping of
+    the format version this renderer reads."""
     if not isinstance(raw, dict):
         raise StyleError(source, ["a style template must be a YAML mapping"])
     version = raw.get("version", STYLE_FORMAT_VERSION)
     if version != STYLE_FORMAT_VERSION:
-        raise StyleError(source, [f"version: this renderer reads style format {STYLE_FORMAT_VERSION}, got {version!r}"])
+        got = f", got {version!r}" if trusted else ""
+        raise StyleError(source, [f"version: this renderer reads style format {STYLE_FORMAT_VERSION}{got}"])
     return raw
+
+
+def _check_untrusted_text(text: str) -> None:
+    """Refuse YAML text that is too large or uses aliases. An alias lets a
+    small text stand for an enormous structure (the "billion laughs" shape),
+    and nothing in a style needs one."""
+    if len(text.encode("utf-8", "replace")) > MAX_UNTRUSTED_STYLE_BYTES:
+        raise StyleError(_UNTRUSTED_SOURCE, [f"the style text is larger than {MAX_UNTRUSTED_STYLE_BYTES // 1024} KiB"])
+    try:
+        for event in yaml.parse(text, Loader=yaml.SafeLoader):
+            if isinstance(event, yaml.AliasEvent):
+                raise StyleError(_UNTRUSTED_SOURCE, [f"YAML aliases are not allowed (line {event.start_mark.line + 1})"])
+    except yaml.YAMLError:
+        pass  # reported, without the source, by the load that follows
+
+
+def _untrusted_yaml_problem(error: yaml.YAMLError) -> str:
+    """Where a YAML text is wrong, and what, without quoting it. A scanner or
+    parser problem names a kind of mistake; any other (an unknown tag, an
+    undefined alias, a duplicate anchor) names text from the source, so it
+    gives the place only."""
+    mark = getattr(error, "problem_mark", None)
+    where = f" (line {mark.line + 1}, column {mark.column + 1})" if mark is not None else ""
+    problem = getattr(error, "problem", None)
+    if problem and isinstance(error, (yaml.scanner.ScannerError, yaml.parser.ParserError)):
+        # Even there a quoted piece can be the source's (a tag handle).
+        problem = re.sub(r"'[^']*'", "'...'", problem)
+        return f"not valid YAML: {problem}{where}"
+    return f"not valid YAML{where}"
 
 
 def _merge(base: Mapping, override: Mapping) -> dict:
@@ -176,7 +278,7 @@ def _merge(base: Mapping, override: Mapping) -> dict:
     return merged
 
 
-def _expand_dotted(overrides: Mapping[str, Any]) -> dict:
+def _expand_dotted(overrides: Mapping[str, Any], trusted: bool = True) -> dict:
     """*overrides* as one nested mapping. Dotted and nested keys for the
     same setting merge in order, and the caller's values are copied, never
     modified."""
@@ -187,7 +289,8 @@ def _expand_dotted(overrides: Mapping[str, Any]) -> dict:
         for part in parents:
             target = target.setdefault(part, {})
             if not isinstance(target, dict):
-                raise StyleError("overrides", [f"{key}: '{part}' is set to a value and cannot hold keys"])
+                raise StyleError("overrides", [f"{key}: '{part}' is set to a value and cannot hold keys" if trusted
+                                               else "an override is set to a value and cannot hold keys"])
         value = _copy(value)
         if isinstance(value, dict) and isinstance(target.get(last), dict):
             value = _merge(target[last], value)
@@ -295,16 +398,16 @@ def _is_text(hint: Any) -> bool:
 _FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def _build(data: Mapping, source: str) -> Style:
+def _build(data: Mapping, source: str, trusted: bool = True) -> Style:
     problems: list[str] = []
-    style = _convert(data, Style, "", problems)
-    problems.extend(_template_problems(style))
+    style = _convert(data, Style, "", problems, trusted=trusted)
+    problems.extend(_template_problems(style, trusted))
     if problems:
         raise StyleError(source, problems)
     return style
 
 
-def _template_problems(style: Style) -> list[str]:
+def _template_problems(style: Style, trusted: bool = True) -> list[str]:
     """What is wrong with the ``{field}`` names in the style's text templates
     (:func:`~.model.template_settings`): an identifier-shaped field the
     setting does not accept (a typo would be shown literally), or a required
@@ -314,14 +417,16 @@ def _template_problems(style: Style) -> list[str]:
     bare field for it (``labels.condition``): it already shows the condition.
     Where there is no such fallback, an empty template lacks its fields.
     :func:`~.model.template_settings` lists only the settings that substitute
-    fields, and drops the required fields of one the style does not use."""
+    fields, and drops the required fields of one the style does not use. An
+    untrusted style's own field name is not quoted."""
     problems = []
     for key, template, fields in template_settings(style):
         found = set(_FIELD_RE.findall(template))
         accepted = ", ".join(f"{{{name}}}" for name in sorted(fields.accepted))
         for name in sorted(found - fields.accepted):
             takes = f"accepts {accepted}" if accepted else "takes no fields"
-            problems.append(f"{key}: unknown field {{{name}}}; this setting {takes}")
+            unknown = f"{{{name}}}" if trusted else "a {field}"
+            problems.append(f"{key}: unknown field {unknown}; this setting {takes}")
         if fields.empty_falls_back and not template:
             continue
         for name in sorted(fields.required - found):
@@ -329,29 +434,42 @@ def _template_problems(style: Style) -> list[str]:
     return problems
 
 
-def _convert(value: Any, hint: Any, path: str, problems: list[str]) -> Any:
+def _got(value: Any, trusted: bool) -> str:
+    """`` (got 3)`` for a message about a value — nothing for an untrusted
+    style, whose text a message does not quote."""
+    return f" (got {value!r})" if trusted else ""
+
+
+def _convert(value: Any, hint: Any, path: str, problems: list[str], *, trusted: bool = True,
+             css: str | None = None) -> Any:
+    """*value* as *hint*, appending each problem to *problems*. *css* is the
+    kind of a text setting that reaches the stylesheet (:func:`~.model.css_field`),
+    whose value :func:`~.model.css_problem` checks; *trusted* is False for a
+    style from someone else, which is held to the strict grammars and never
+    quoted."""
     label = path or "(root)"
     origin = get_origin(hint)
     if dataclasses.is_dataclass(hint):
-        return _convert_dataclass(value, hint, path, problems)
+        return _convert_dataclass(value, hint, path, problems, trusted=trusted)
     if origin is Literal:
         allowed = get_args(hint)
         # By type too: True == 1 and 2.0 == 2, but neither is a level.
         if not any(value == option and type(value) is type(option) for option in allowed):
-            problems.append(f"{label}: must be one of {', '.join(map(str, allowed))} (got {value!r})")
+            problems.append(f"{label}: must be one of {', '.join(map(str, allowed))}{_got(value, trusted)}")
             return allowed[0]
         return value
     if origin in (Union, types.UnionType):
         options = [arg for arg in get_args(hint) if arg is not type(None)]
         if value is None and type(None) in get_args(hint):
             return None
-        return _convert(value, options[0], path, problems)
+        return _convert(value, options[0], path, problems, trusted=trusted, css=css)
     if origin is tuple:
         item_hint = get_args(hint)[0]
         if not isinstance(value, (list, tuple)):
             problems.append(f"{label}: must be a list")
             return ()
-        return tuple(_convert(item, item_hint, f"{path}[{index}]", problems) for index, item in enumerate(value))
+        return tuple(_convert(item, item_hint, f"{path}[{index}]", problems, trusted=trusted)
+                     for index, item in enumerate(value))
     if origin is dict:
         key_hint, item_hint = get_args(hint)
         if not isinstance(value, Mapping):
@@ -363,38 +481,44 @@ def _convert(value: Any, hint: Any, path: str, problems: list[str]) -> Any:
                 try:
                     key = int(key)
                 except (TypeError, ValueError):
-                    problems.append(f"{path}.{key}: key must be a number")
+                    problems.append(f"{path}.{key}: key must be a number" if trusted
+                                    else f"{path}: a key must be a number")
                     continue
                 if not 1 <= key <= 5:
                     problems.append(f"{path}.{key}: heading levels are 1 to 5 (§4.1)")
                     continue
-            converted[key] = _convert(item, item_hint, f"{path}.{key}", problems)
+            converted[key] = _convert(item, item_hint, f"{path}.{key}", problems, trusted=trusted)
         return converted
     if hint is bool:
         if not isinstance(value, bool):
-            problems.append(f"{label}: must be true or false (got {value!r})")
+            problems.append(f"{label}: must be true or false{_got(value, trusted)}")
             return False
         return value
     if hint is int:
         if isinstance(value, bool) or not isinstance(value, int):
-            problems.append(f"{label}: must be a whole number (got {value!r})")
+            problems.append(f"{label}: must be a whole number{_got(value, trusted)}")
             return 0
         return value
     if hint is str:
         # YAML reads 700 or 1.5 as numbers; they are fine as text here.
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return str(value)
-        if not isinstance(value, str):
-            problems.append(f"{label}: must be text (got {value!r})")
+            value = str(value)
+        elif not isinstance(value, str):
+            problems.append(f"{label}: must be text{_got(value, trusted)}")
+            return ""
+        if css is not None and (problem := css_problem(value, css, trusted=trusted)):
+            problems.append(f"{label}: {problem}")
             return ""
         return value
     raise TypeError(f"unsupported style field type {hint!r} at {label}")  # a bug in model.py
 
 
-def _convert_dataclass(value: Any, cls: type, path: str, problems: list[str]) -> Any:
+def _convert_dataclass(value: Any, cls: type, path: str, problems: list[str], *, trusted: bool = True) -> Any:
     label = path or "(root)"
     if isinstance(value, cls):
-        return value
+        # Checked like data, not taken as built: a settings object handed in as
+        # an override would otherwise skip every check below.
+        value = _plain(value)
     if cls is model.Numbering and isinstance(value, Mapping) and isinstance(value.get("levels"), (list, tuple)) \
             and len(value["levels"]) > 5:
         problems.append(f"{path}.levels: at most 5 formats, one per heading level (§4.1); got {len(value['levels'])}")
@@ -409,9 +533,15 @@ def _convert_dataclass(value: Any, cls: type, path: str, problems: list[str]) ->
         where = f"{path}.{key}" if path else key
         if key not in known:
             suggestion = _closest(key, list(known))
-            problems.append(f"{where}: unknown key" + (f" (did you mean '{suggestion}'?)" if suggestion else ""))
+            if not trusted:
+                # The key is the style's own text: say where, and what is known instead.
+                hint = f"did you mean '{suggestion}'?" if suggestion else f"known: {', '.join(known)}"
+                problems.append(f"{path or '(root)'}: unknown key ({hint})")
+            else:
+                problems.append(f"{where}: unknown key" + (f" (did you mean '{suggestion}'?)" if suggestion else ""))
             continue
-        values[key] = _convert(item, hints[key], where, problems)
+        values[key] = _convert(item, hints[key], where, problems, trusted=trusted,
+                               css=known[key].metadata.get("css"))
     return cls(**values)
 
 
