@@ -71,11 +71,17 @@ def heading_levels(numbering: Numbering) -> tuple[LevelFormat, ...]:
 
 
 _FIELD_RE = re.compile(r"\{(n|path|section)\}")
+_EMPTY_SECTION_RE = re.compile(r"\{section\}\.")
 
 
 def fill(template: str, **values: str) -> str:
     """*template* with ``{n}``, ``{path}``, and ``{section}`` replaced. Any
-    other braces are kept as written."""
+    other braces are kept as written. When *section* is given as the empty
+    string (a preamble item has no section, §4.4), ``{section}`` and ONE
+    immediately following ``.`` are removed first, so "{section}.{n}" gives
+    "1", the same as the item's designation."""
+    if values.get("section") == "":
+        template = _EMPTY_SECTION_RE.sub("", template)
     return _FIELD_RE.sub(lambda match: values.get(match.group(1), ""), template)
 
 

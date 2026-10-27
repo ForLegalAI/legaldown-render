@@ -150,9 +150,11 @@ Headings, list items, and paragraphs are all numbered with the same building blo
 | `ref` | This level's piece of a **designation**, the text `{{ref:}}` renders |
 
 Both templates can use `{n}` (this level's counter), `{path}` (the full designation up to this
-level), and `{section}` (the containing section's designation, for items and paragraphs). For
-example, decimal headings use `label: "{path}"` and `ref: ".{n}"`. Legal enumeration uses
-`label: "({n})"` and `ref: "({n})"`, so the second item of Section 2.3 is shown as "(b)" and
+level), and `{section}` (the containing section's designation, for items and paragraphs). In the
+preamble, which has no section, `{section}` is empty and it is removed together with the `.` after
+it, so `label: "{section}.{n}"` shows "1", not ".1". For example, decimal headings use
+`label: "{path}"` and `ref: ".{n}"`. Legal enumeration uses `label: "({n})"` and `ref: "({n})"`, so the
+second item of Section 2.3 is shown as "(b)" and
 referenced as "2.3(b)". Under the `none` scheme, designations are heading text, and item pieces
 are set off by a space ("Termination (a)", §13.3).
 
