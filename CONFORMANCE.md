@@ -40,7 +40,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments (see "Text after a comment", below) |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
 | Links (§8.7) | ⚠️ Partial, a documented deviation for safety with untrusted documents: links with schemes outside the allow-list render as text with a `render-link-refused` Warning. A link is a hyperlink in HTML and shows `text <url>` in plain text when its URL is relative, a fragment, or has one of the schemes `http`, `https`, `mailto`, `tel`, `ftp`, `ftps`, `sftp`, `sip`, `sips`, `sms`, `urn`, `geo`, `news` (an allow-list, judged as a browser reads the URL). Any other scheme (`javascript:`, `file:`, `data:`, protocol handlers such as `ms-msdt:`, `vscode:`, `search-ms:`, and pseudo-schemes such as `C:\x` or `localhost:8080`), or an empty URL, is not a link: its text is shown alone, and the Warning `render-link-refused` is reported for a non-empty URL. A link with no text shows its URL as written; the text writer omits `<url>` for an autolink |
-| Images and file-reference paths (§8.7, §2.3) | ✅ Every file reference (`{{include:}}`, `attachments[].file`, `amends.file`, `supersedes.file`, a `translations` value, an image) must be relative, and within the document root when one is configured (`--root DIR`, `document_root=`; see "File references", below). A path with a URI scheme (`data:` too), an absolute one (`/`, `\`, `//host`), or a Windows drive path is the Error `path-not-relative`; a path that leaves the root is the Error `path-outside-root`; `--strict` refuses both. Such an image shows its alt text and is never fetched or embedded; an `{{attach:}}` shows its text with no link; an include marker and an attachment's path stay as text, and no file is ever read. A relative path (`../` included, as §2.3 defines no default root) renders `<img>` in HTML and its alt text in plain text. An empty image path shows the alt text with no diagnostic |
+| Images and file-reference paths (§8.7, §2.3) | ✅ Every file reference (`{{include:}}`, `attachments[].file`, `amends.file`, `supersedes.file`, a `translations` value, an image) must be relative, and within the document root when one is configured (`--root DIR`, `document_root=`; see "File references", below). A path with a URI scheme (`data:` too), an absolute one (`/`, `\`, `//host`), a Windows drive path, or one with a control character is the Error `path-not-relative`; a path that leaves the root is the Error `path-outside-root`; `--strict` refuses both. Such an image shows its alt text and is never fetched or embedded; an `{{attach:}}` shows its text with no link; an include marker and an attachment's path stay as text, and no file is ever read. A relative path (`../` included, as §2.3 defines no default root) renders `<img>` in HTML and its alt text in plain text. An empty image path shows the alt text with no diagnostic |
 | Plain-text layout (§13.6, optional) | ✅ `attachments.separator` (§13.8): `none` prints no `---`; `rule` and `page-break` both print one before the attachments heading and between consecutive attachments, so the heading stays with the first (text has no pages). One quote stays one quote (blank lines keep the `>`), and the blocks of a list item are set apart by blank lines and indented under the item's label, whatever its condition label; an item that opens with a nested list, table, code block or quote has its label on a line of its own, so that block stays valid. A pipe in a table cell is backslash-escaped, and the separator row marks column alignment (`:---`, `:---:`, `---:`). A label a style blanks drops its `label: ` prefix in the title block, party details and signature blocks (a signature row with neither label nor value is omitted); HTML keeps an empty `<dt>` so its grid layout and the `<dl>` stay valid |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML table is dropped with the Warning |
 | Visual blank for a placeholder (§13.5 rule 6) | ✅ `placeholders.blank`; a blank that is empty, or only whitespace or invisible format characters (U+200B, U+FEFF), renders `[TBD: id]` |
@@ -66,15 +66,19 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   the renderer's do, until [validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93).
   Findings about frontmatter are at the line of their key: the `language` key for
   `render-locale-fallback` of the document's language, and the `title`, `subtitle`, `version`,
-  `effective_date`, `sides[].label` and `sides[].parties[]` key (a party's details, name and
-  signatories are all at the party's key) or `attachments[].title` for a directive in that value
+  `effective_date`, `sides[].label`, a field of a party (`legal_name`, `label`, `address`,
+  `identification_number`, `date_of_birth`, a custom field, a representative's `name` or `title`:
+  each at its own key, or where the source writes the value, as with a `<<` merge; the party's key
+  where it writes none) or `attachments[].title` for a directive in that value
   (also where the body shows it, as `{{attach:}}` or `{{party:}}` do). A finding in a term's text
   is at the term's definition, whichever reference asks for it first; `render-term-limit` is at the
   definition being worked out when the limit was reached; `render-designation-cycle` is at the
   heading it closes on, and `render-designation-limit` at the first heading that reached a limit
   (or, for a reference longer than the cap, at the reference). The same finding (rule, level and
-  message) is reported once, at its first line: the same refused link, or the same non-relative
-  image path, on two lines is one diagnostic, at the first of them. A document with no source to
+  message) is reported once, at the lowest line it is seen at: the same refused link, or the same
+  non-relative image path, on two lines is one diagnostic, at the earlier of them, whichever the
+  renderer reached first (it works out the body before the title block). The renderer's own
+  diagnostics are listed in the order of their lines (none last), after the validator's. A document with no source to
   name a line of (built from a dict) reports no line. With `answers`, the lines are those of the
   assembled document (§15.8), not of the template file.
 - **File references (§2.3).** The renderer reports `path-not-relative` and `path-outside-root`
@@ -94,12 +98,19 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   (`RenderOptions.document_path`); text given to `render()`, or standard input, is at the root. A
   document outside the root, or on another Windows drive, is an `OptionsError` (exit 2).
   How a path is read: a backslash is a separator, so `..\..\x` leaves the root as `../../x` does
-  (the renderer's reading; a leading `\` is not relative anyway); `..` and `.` followed by spaces
-  are `..` and `.` (Windows reads them so); tabs and newlines inside a scheme, and spaces and
-  control characters at either end, are ignored as a browser ignores them. Percent-encoding is
+  (the renderer's reading; a leading `\` is not relative anyway); `..` followed by dots and
+  spaces (`.. `, `...`) is `..`, and `.` followed by spaces is `.` (Windows reads them so);
+  tabs and newlines inside a scheme, and spaces and control characters at either end, are ignored
+  as a browser ignores them. A control character left inside a path (NUL, ESC, any other of Unicode
+  category Cc), after the decoding below and what is ignored above, makes it `path-not-relative`;
+  a newline at the end of a YAML block scalar is ignored. Percent-encoding is
   decoded once, only for what is used as a URL, an image's source and the link `{{attach:}}` would
   make to an attachment's file: there `%2e%2e/` is `../`. A path in the frontmatter or an
   `{{include:}}` is a file name, read as written, where `%2e%2e` is a directory with that name.
+  An attachment's `file` is read as a URL only where it becomes a link (`attachments.render: omit`
+  with `{{attach:}}`), so a percent-encoded traversal in it is reported only in that mode.
+  A relative file name with a colon before any `/` reads as a URI scheme (§2.3), so it is
+  `path-not-relative`: write `./report:v2.png`.
   `supersedes` as a plain string describes the superseded document (§3.2) and is not a path.
   Markdown links (`[text](/etc/passwd)`, §8.7) are not file references and stay governed by the
   link allow-list (`render-link-refused`): they are links the reader may follow, not files the

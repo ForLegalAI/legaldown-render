@@ -113,7 +113,7 @@ with open("contract.html", "w", encoding="utf-8", newline="\n") as output:
 
 `render()` also accepts a `RenderOptions`. Pass `answers={...}` to render a template filled in.
 Each diagnostic has its `line` and its `file`: `render_file()` and the command name the file (its
-name, without the directory); for text given to `render()`, pass `filename=`.
+name, without the directory); for text given to `render()`, pass `filename=` (a directory in it is dropped, `/` or `\`).
 `document_root=` is the `--root` of the command line, and `document_path=` says where the document
 is in it (`render_file()` sets it from its path; text given to `render()` is at the root); a
 document outside the root raises `OptionsError`. For example, a hosting service that renders

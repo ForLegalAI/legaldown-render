@@ -13,7 +13,7 @@ Preferences are split in two, on purpose:
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePath
 from typing import Any
@@ -22,7 +22,7 @@ import yaml
 from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, parse, parse_template, validate
 
 from .build import build_tree, normalize_source
-from .diagnostics import key_line, repeats
+from .diagnostics import by_line, key_line, repeats
 from .errors import DocumentError, OptionsError, RenderRefused, StyleError
 from .resolve import Formatter, parse_locale, resolve_tree
 from .style import Style, load_style
@@ -62,7 +62,8 @@ class RenderOptions:
     #: The document's file name, which every diagnostic of the result names as
     #: its ``file`` (§16.9), the validator's and the renderer's alike, as
     #: ``Document.filename`` does for the validator: the name without its
-    #: directory. ``render_file`` and the command line set it from the path
+    #: directory (a directory given is dropped, whether it is written with ``/``
+    #: or ``\``). ``render_file`` and the command line set it from the path
     #: they read; for text given to :func:`render` it is empty unless set.
     #: With ``answers``, the lines of the diagnostics are those of the
     #: assembled document (§15.8), not of the template file.
@@ -125,6 +126,9 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.format not in FORMATS:
         raise OptionsError(f"unknown output format '{options.format}' (known: {', '.join(FORMATS)})")
     base = _document_base(options)
+    name = options.filename.replace("\\", "/").rsplit("/", 1)[-1]
+    if name != options.filename:
+        options = replace(options, filename=name)
     if options.document_path is not None and not options.filename:
         options = replace(options, filename=PurePath(options.document_path).name)
     overrides = dict(options.overrides)
@@ -144,8 +148,9 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
 
     tree, extra = _resolve(document, result, style, base)
     # The renderer's findings that the validator's or the assembly's already
-    # name (the same rule, level and message), wherever they are, are not repeated.
-    diagnostics += [d for d in extra if not repeats(d, diagnostics)]
+    # name (the same rule, level and message), wherever they are, are not repeated;
+    # the rest follow in the order of their lines.
+    diagnostics += [d for d in by_line(extra) if not repeats(d, diagnostics)]
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
@@ -209,7 +214,7 @@ def _assemble(source: str, answers: Mapping[str, Any], filename: str = "") -> tu
     no output, or the answers do (``answer-invalid``, ``answer-missing``),
     or the template needs files a renderer below Full does not read
     (includes, LegalDown attachments, translations; §17.6)."""
-    findings = validate(_parse(source, filename)).diagnostics
+    findings = _named(validate(_parse(source, filename)).diagnostics, filename)
     errors = sum(1 for d in findings if d.level == "error")
     if errors:
         raise RenderRefused(findings, f"Assembly refused: the template has {errors} error(s), "
@@ -219,12 +224,20 @@ def _assemble(source: str, answers: Mapping[str, Any], filename: str = "") -> tu
         result = parse_template(source).form(answers).assemble()
     except AssemblyError as error:
         raise DocumentError(f"The template cannot be assembled: {error}") from error
+    diagnostics = _named(result.diagnostics, filename)
     if not result.ok:
-        errors = [d for d in result.diagnostics if d.level == "error"]
-        raise RenderRefused(result.diagnostics, f"Assembly refused: {len(errors)} error(s) in the answers or "
-                                                "the template (§15.7).")
+        errors = [d for d in diagnostics if d.level == "error"]
+        raise RenderRefused(diagnostics, f"Assembly refused: {len(errors)} error(s) in the answers or "
+                                         "the template (§15.7).")
     # The source was normalized, and assembly keeps its line breaks.
-    return result.output, list(result.diagnostics)
+    return result.output, diagnostics
+
+
+def _named(diagnostics: Iterable[Diagnostic], filename: str) -> list[Diagnostic]:
+    """*diagnostics* with *filename* as the ``file`` of each one that names no
+    file (§16.9): the assembly's findings are the document's, and the
+    assembler does not know the file it was given."""
+    return [replace(d, file=filename) if not d.file else d for d in diagnostics]
 
 
 def _parse(source: str, filename: str = "") -> Document:

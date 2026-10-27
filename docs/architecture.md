@@ -294,11 +294,14 @@ frontmatter is at its key (`diagnostics.key_line`, which wraps the public `sourc
 returns None without a source map; one helper for every frontmatter reference). A term's text is
 worked out at the term's definition (`Resolver.term_lines`, recorded by `_survey`) whichever
 reference asks first. `Diagnostic.file` is `RenderOptions.filename`, which `render_file` and the CLI
-set to the file name as the validator does (`Document.filename`, without the directory).
+set to the file name as the validator does (`Document.filename`, without the directory; `render` drops one given, `/` or `\`).
 
-**Repeats.** `Resolver._warn` and `api.render` leave out a diagnostic whose rule, level and message
-a reported one has already, wherever it is (`diagnostics.repeats`), so a repeated finding is
-reported at its first line only. The renderer's `path-not-relative` and `path-outside-root` are left
+**Repeats.** `Resolver._warn` and `Resolver._reference` add a diagnostic through `diagnostics.record`,
+which keeps one finding (rule, level, message) once, at the lowest line it was seen at: the
+resolver works out the body before the title block, so a later sighting at a lower line moves the
+reported one. `api.render` lists the renderer's diagnostics in the order of their lines (`diagnostics.by_line`,
+none last) after the validator's, and leaves out those the validator's or the assembly's name already
+(`diagnostics.repeats`). The renderer's `path-not-relative` and `path-outside-root` are left
 out when the validator reported the same path at the same line, or at none (`diagnostics.covered_by`).
 
 ## Security
@@ -351,7 +354,7 @@ out when the validator reported the same path at the same line, or at none (`dia
   root when it has no path, as text given to `render()` and standard input are); a document
   outside the root, or on another Windows drive, is an `OptionsError`, since the boundary would
   mean nothing. A backslash is read as a separator (the renderer's reading, so a path that goes up
-  on Windows is not missed), `..`/`.` with trailing spaces are `..`/`.`, and percent-encoding is
+  on Windows is not missed), `..` with trailing dots and spaces is `..` and `.` with trailing spaces is `.`, a control character (NUL included) makes the path `not-relative`, and percent-encoding is
   decoded once, only for what is used as a URL (an image's `src`, the link an `{{attach:}}`
   makes): `%2e%2e` is `..` there, and a directory name in a frontmatter or include path. The
   writers' image check is a second line. Markdown links are not file references (§8.7): they stay

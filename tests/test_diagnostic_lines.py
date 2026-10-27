@@ -18,6 +18,7 @@ import legaldown_render.api as api
 from legaldown_render import RenderOptions, render, render_file
 from legaldown_render.cli import main
 from legaldown_render.diagnostics import key_line
+from legaldown_render.errors import RenderRefused
 
 HEAD = "---\ntitle: T\n---\n"
 
@@ -246,14 +247,100 @@ def test_a_finding_in_a_party_or_a_side_is_at_its_key() -> None:
     result = render(SIDES)
     found = {d.message.split("{{include: ")[1][:5]: d.line for d in result.diagnostics
              if d.rule == "render-not-processed"}
-    # A party's detail is at the party; a side's label, at its label key.
-    assert found == {"l.lgd": at(SIDES, 'label: "Seller'), "a.lgd": at(SIDES, "name: acme"),
-                     "b.lgd": at(SIDES, "name: bob")}
+    # A party's address is at its own key; a side's label, at its label key.
+    assert found == {"l.lgd": at(SIDES, 'label: "Seller'), "a.lgd": at(SIDES, 'address: "Street'),
+                     "b.lgd": at(SIDES, 'address: "Road')}
 
 
 def test_signature_blocks_are_not_a_second_report() -> None:
     result = render(SIDES, overrides={"signatures.enabled": True})
     assert len(lines_of(result, "render-not-processed")) == 3
+
+
+# Each field of a party, with its own include: the field's key is its line, and a
+# custom field is at its key (keyed in the party) or at its ``value`` (listed).
+PARTY_FIELDS = """---
+title: T
+document_type: contract
+sides:
+  - name: seller
+    label: Seller
+    parties:
+      - name: acme
+        legal_name: "Acme {{include: legal.lgd}}"
+        type: legal_entity
+        identification_number: "ID {{include: ident.lgd}}"
+        address: "Street {{include: addr.lgd}}"
+        Passport: "Pass {{include: keyed.lgd}}"
+        custom_fields:
+          - label: Extra
+            value: "Extra {{include: listed.lgd}}"
+        representatives:
+          - name: "Rep {{include: repname.lgd}}"
+            title: "Title {{include: reptitle.lgd}}"
+  - name: buyer
+    label: Buyer
+    parties:
+      - name: bob
+        label: "Bob {{include: label.lgd}}"
+        type: natural_person
+        date_of_birth: "{{include: dob.lgd}}"
+---
+
+# A
+"""
+
+
+def test_a_finding_in_a_party_field_is_at_that_field() -> None:
+    result = render(PARTY_FIELDS, overrides={"signatures.enabled": True})
+    found = {_included(d): d.line for d in result.diagnostics if d.rule == "render-not-processed"}
+    assert found == {
+        "legal.lgd": at(PARTY_FIELDS, "legal_name:"),
+        "ident.lgd": at(PARTY_FIELDS, "identification_number:"),
+        "addr.lgd": at(PARTY_FIELDS, "address:"),
+        "keyed.lgd": at(PARTY_FIELDS, "Passport:"),
+        "listed.lgd": at(PARTY_FIELDS, "value: \"Extra"),
+        "repname.lgd": at(PARTY_FIELDS, 'name: "Rep'),
+        "reptitle.lgd": at(PARTY_FIELDS, 'title: "Title'),
+        "label.lgd": at(PARTY_FIELDS, "label: \"Bob"),
+        "dob.lgd": at(PARTY_FIELDS, "date_of_birth:"),
+    }
+
+
+MERGED = """---
+title: T
+document_type: contract
+defaults: &d
+  address: "Street {{include: addr.lgd}}"
+sides:
+  - name: seller
+    label: Seller
+    parties:
+      - name: acme
+        <<: *d
+        legal_name: Acme
+        type: legal_entity
+---
+
+# A
+"""
+
+
+def test_a_party_field_merged_in_is_where_the_source_writes_it() -> None:
+    # The address is merged in (``<<``): it is written where it is defined.
+    [found] = [d for d in render(MERGED).diagnostics if d.rule == "render-not-processed"]
+    assert found.line == at(MERGED, "address:")
+
+
+def _included(found) -> str:  # type: ignore[no-untyped-def]
+    return found.message.split("{{include: ")[1].split("}}")[0]
+
+
+@pytest.mark.parametrize("given", ["a/b.lgd", "a\\b.lgd", "/abs/dir/b.lgd", "C:\\x\\y/b.lgd"])
+def test_the_file_name_is_without_its_directory(given: str) -> None:
+    source = HEAD + "\n# A\n\n{{include: x.lgd}}\n"
+    result = render(source, filename=given)
+    assert {d.file for d in result.diagnostics} == {"b.lgd"}
 
 
 def test_key_line_is_general_and_none_without_a_source() -> None:
@@ -334,6 +421,28 @@ def test_the_same_finding_on_two_lines_is_reported_once_at_the_first() -> None:
     result = render(source)
     assert lines_of(result, "path-not-relative") == [at(source, "One")]
     assert lines_of(result, "render-link-refused") == [at(source, "Three")]
+
+
+def test_a_finding_seen_again_at_a_lower_line_is_reported_at_the_lower() -> None:
+    # The body is resolved before the title, so the title's is the later sighting.
+    source = '---\ntitle: "T {{include: x.lgd}}"\n---\n\n# A\n\nBody {{include: x.lgd}}\n'
+    assert at(source, "title:") < at(source, "Body")
+    assert lines_of(render(source), "render-not-processed") == [at(source, "title:")]
+
+
+def test_a_repeat_under_the_none_scheme_is_at_the_lowest_line() -> None:
+    # The heading is read for its designation and again in its place: still one finding.
+    source = '---\ntitle: "T {{include: x.lgd}}"\n---\n\n# A {{include: x.lgd}}\n\nBody {{include: x.lgd}}\n'
+    result = render(source, overrides={"numbering.scheme": "none"})
+    assert lines_of(result, "render-not-processed") == [at(source, "title:")]
+
+
+def test_the_renderers_diagnostics_are_in_the_order_of_their_lines() -> None:
+    source = ('---\ntitle: "T {{include: t.lgd}}"\nsubtitle: "S {{include: s.lgd}}"\n---\n\n# A\n\n'
+              "![a](/x.png)\n\nBody {{include: b.lgd}}\n")
+    result = render(source)
+    lines = [d.line for d in result.diagnostics if d.rule in ("render-not-processed", "path-not-relative")]
+    assert lines == sorted(lines) and len(lines) == 4
 
 
 def test_different_findings_of_one_rule_each_have_their_line() -> None:
@@ -418,6 +527,23 @@ def test_assembly_names_the_file_too() -> None:
     # The lines are those of the assembled document (the answers are filled in).
     [found] = [d for d in result.diagnostics if d.rule == "render-not-processed"]
     assert found.line is not None
+
+
+def test_an_assembly_warning_names_the_file() -> None:
+    template = ("---\ntitle: T\nquestions:\n  q:\n    type: text\n    prompt: Q\n---\n\n# A\n\n"
+                "Hello {{placeholder: q}}\n")
+    result = render(template, RenderOptions(answers={"q": "world", "zzz": "1"}, filename="t.lgd"))
+    [unknown] = [d for d in result.diagnostics if d.rule == "answer-unknown"]
+    assert unknown.file == "t.lgd"
+
+
+def test_a_refused_assembly_names_the_file_in_every_diagnostic() -> None:
+    template = ("---\ntitle: T\nquestions:\n  q:\n    type: text\n    prompt: Q\n---\n\n# A\n\n"
+                "Hello {{placeholder: q}}\n")
+    with pytest.raises(RenderRefused) as refused:
+        render(template, RenderOptions(answers={"q": 5}, filename="t.lgd"))
+    assert [d.rule for d in refused.value.diagnostics] == ["answer-invalid"]
+    assert {d.file for d in refused.value.diagnostics} == {"t.lgd"}
 
 
 # -- The command line ------------------------------------------------------------------------

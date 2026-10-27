@@ -45,7 +45,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 from urllib.parse import unquote
 
-from legaldown import Amends, Diagnostic, Document, Party, ValidationResult
+from legaldown import Amends, CustomField, Diagnostic, Document, Party, Representative, ValidationResult
 from legaldown.grammar import (
     ALWAYS,
     DECISION_QUESTION_TYPES,
@@ -64,7 +64,7 @@ from legaldown.grammar import (
 from legaldown.syntax import Directive
 
 from ..build import plain_inlines
-from ..diagnostics import KeyLines, covered_by, repeats
+from ..diagnostics import KeyLines, covered_by, record
 from ..style import Style, effective_labels
 from ..style.model import LevelFormat
 from ..tree import (
@@ -431,14 +431,14 @@ class Resolver:
         self._memo = [None] * len(sections)
         self._stack, self._cycles = [], []
         self._limited, self._limited_at = False, None
-        mark, work = len(self.diagnostics), self._term_work
+        kept, work = list(self.diagnostics), self._term_work
         self._stage = _DESIGNATING
         try:
             for index in range(len(sections)):
                 self._designation(index)
         finally:
             self._stage = _EARLY
-            del self.diagnostics[mark:]
+            self.diagnostics[:] = kept  # a repeat may also have lowered the line of one
             self._term_work = work
             self.term_texts_designating = {}
         for index in sorted(set(self._cycles)):
@@ -1309,25 +1309,61 @@ class Resolver:
         return tuple(sides)
 
     def _party_info(self, side_index: int, party_index: int, party: Party) -> PartyInfo:
-        with self._at(self.key_line("sides", side_index, "parties", party_index)):
-            details: list[tuple[str, tuple[Inline, ...]]] = []
-            if party.identification_number:
+        party_path = ("sides", side_index, "parties", party_index)
+        details: list[tuple[str, tuple[Inline, ...]]] = []
+        if party.identification_number:
+            with self._at_key(*party_path, "identification_number"):
                 details.append((self.labels.identification_number or "", self._frontmatter(party.identification_number)))
-            if party.date_of_birth:
+        if party.date_of_birth:
+            with self._at_key(*party_path, "date_of_birth"):
                 details.append((self.labels.date_of_birth or "", self._date_or_text(party.date_of_birth)))
-            if party.address:
+        if party.address:
+            with self._at_key(*party_path, "address"):
                 details.append((self.labels.address or "", self._frontmatter(party.address)))
-            for custom in party.custom_fields:
+        for index, custom in enumerate(party.custom_fields):
+            with self._at_key(*self._custom_field_path(party_path, index, custom)):
                 details.append((custom.label, self._frontmatter(custom.value)))
-            for rep in party.representatives:
-                name, title = self._frontmatter(rep.name), self._frontmatter(rep.title)
-                value = name + (Text(", "),) + title if name and title else name or title
-                if value:
-                    details.append((self.labels.represented_by or "", value))
-            return PartyInfo(
-                name=self._frontmatter(party.legal_name or party.label or party.name),
-                details=tuple(details),
-            )
+        for index, rep in enumerate(party.representatives):
+            name, title = self._representative(party_path, index, rep)
+            value = name + (Text(", "),) + title if name and title else name or title
+            if value:
+                details.append((self.labels.represented_by or "", value))
+        return PartyInfo(
+            name=self._party_name(party_path, party),
+            details=tuple(details),
+        )
+
+    def _party_name(self, party_path: tuple[Any, ...], party: Party) -> tuple[Inline, ...]:
+        """The name a party is shown by (§3.4): its legal name, else its label,
+        else its name, at the key of the one shown."""
+        field = "legal_name" if party.legal_name else "label" if party.label else "name"
+        with self._at_key(*party_path, field):
+            return self._frontmatter(party.legal_name or party.label or party.name)
+
+    def _representative(self, party_path: tuple[Any, ...], index: int,
+                        rep: Representative) -> tuple[tuple[Inline, ...], tuple[Inline, ...]]:
+        """A representative's name and title (§3.4), each at its own key."""
+        representative = (*party_path, "representatives", index)
+        with self._at_key(*representative, "name"):
+            name = self._frontmatter(rep.name)
+        with self._at_key(*representative, "title"):
+            title = self._frontmatter(rep.title)
+        return name, title
+
+    def _custom_field_path(self, party_path: tuple[Any, ...], index: int, custom: CustomField) -> tuple[Any, ...]:
+        """The frontmatter path of a custom field's value (§3.4): its key in
+        the party when the source writes one, else its ``value`` in the
+        party's ``custom_fields`` list."""
+        if self.key_line.has(*party_path, custom.label):
+            return (*party_path, custom.label)
+        return (*party_path, "custom_fields", index, "value")
+
+    def _at_key(self, *path: Any) -> AbstractContextManager[None]:
+        """:meth:`_here` for the frontmatter value at *path*: the line it is
+        written at (a value merged in with ``<<`` is written where it is
+        defined), else the line of the nearest key above it, the party's
+        (§16.9)."""
+        return self._here(self.key_line(*path))
 
     def _attachments(self) -> tuple[AttachmentPart, ...]:
         """Attachment placeholders (§13.8), in declared order. At the
@@ -1356,16 +1392,16 @@ class Resolver:
             with self._at(self.key_line("sides", side_index, "label")):
                 label = self._frontmatter(self.result.index.side_lookup.get(side.name) or side.label or side.name)
             for party_index, party in enumerate(side.parties):
-                with self._at(self.key_line("sides", side_index, "parties", party_index)):
-                    # Where signature blocks are generated, legal_name MUST appear (§3.6).
-                    blocks.append(SignatureParty(
-                        side=label,
-                        name=self._frontmatter(party.legal_name or party.label or party.name),
-                        signatories=tuple(
-                            (self._frontmatter(rep.name), self._frontmatter(rep.title))
-                            for rep in party.representatives
-                        ),
-                    ))
+                party_path = ("sides", side_index, "parties", party_index)
+                # Where signature blocks are generated, legal_name MUST appear (§3.6).
+                blocks.append(SignatureParty(
+                    side=label,
+                    name=self._party_name(party_path, party),
+                    signatories=tuple(
+                        self._representative(party_path, index, rep)
+                        for index, rep in enumerate(party.representatives)
+                    ),
+                ))
         return tuple(blocks)
 
     # -- diagnostics ----------------------------------------------------------
@@ -1376,11 +1412,9 @@ class Resolver:
         return Diagnostic(rule=rule, level=level, message=message, line=self.line, file=self.document.filename)
 
     def _warn(self, rule: str, message: str) -> None:
-        """Report a Warning, unless the same one (rule and message) is
-        reported already: wherever it recurs, it stands at its first line."""
-        diagnostic = self._found(rule, "warning", message)
-        if not repeats(diagnostic, self.diagnostics):
-            self.diagnostics.append(diagnostic)
+        """Report a Warning; the same one (rule and message) reported again is
+        one, at the lowest line it was seen at."""
+        record(self._found(rule, "warning", message), self.diagnostics)
 
     def _link_refused(self, href: str) -> None:
         """Report a link whose URL does not use a scheme links may use
@@ -1406,7 +1440,8 @@ class Resolver:
 
         A report is left out when the validator made it already
         (:func:`~legaldown_render.diagnostics.covered_by`: its report of the
-        path, at this line) or this resolver did (the same message). The
+        path, at this line); one this resolver made is kept once, at the lowest
+        line (:func:`~legaldown_render.diagnostics.record`). The
         validator quotes the path in its message as '<path>', as written;
         matching the quoted form keeps a path that is a prefix of another
         ("/a" and "/ab") from being counted as already reported."""
@@ -1421,8 +1456,8 @@ class Resolver:
             rule, what = "path-outside-root", ("is outside the document root (§2.3): a file reference may "
                                                "not leave the root.")
         diagnostic = self._found(rule, "error", f"{label} '{printable(shown)}' {what} {effect}")
-        if not (covered_by(diagnostic, shown, self.result.diagnostics) or repeats(diagnostic, self.diagnostics)):
-            self.diagnostics.append(diagnostic)
+        if not covered_by(diagnostic, shown, self.result.diagnostics):
+            record(diagnostic, self.diagnostics)
         return True
 
     def _attachment_label(self, attachment_id: str) -> str:

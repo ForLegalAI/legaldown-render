@@ -12,6 +12,7 @@ its text has moved), so a block's several findings share its line.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
 from legaldown import Diagnostic, Document
@@ -37,6 +38,13 @@ class KeyLines:
         line = self._map.key(*path) if self._map is not None else None
         return line if isinstance(line, int) else None
 
+    def has(self, *path: Any) -> bool:
+        """True if the document's source writes the frontmatter node at *path*,
+        as a key or a value (a value merged in with ``<<`` is written where it
+        is defined). A node that is not written has the line of the key above
+        it when asked for (``__call__``)."""
+        return self._map is not None and path in self._map.keys
+
 
 def key_line(document: Document, *path: Any) -> int | None:
     """``KeyLines(document)(*path)``, for a single lookup."""
@@ -45,10 +53,31 @@ def key_line(document: Document, *path: Any) -> int | None:
 
 def repeats(found: Diagnostic, known: Iterable[Diagnostic]) -> bool:
     """True if *known* holds *found*'s finding already: the same rule, level
-    and message, wherever it was. The same finding in two places is reported
-    once, at the first (a link to the same refused URL on two lines is one
-    ``render-link-refused``, at the line of the first)."""
-    return any(d.rule == found.rule and d.level == found.level and d.message == found.message for d in known)
+    and message, wherever it was."""
+    return any(_same(d, found) for d in known)
+
+
+def record(found: Diagnostic, known: list[Diagnostic]) -> None:
+    """Add *found* to *known*, unless it holds the same finding already (the
+    same rule, level and message): the finding is reported once, at the lowest
+    line it was seen at (a link to the same refused URL on two lines is one
+    ``render-link-refused``, at the earlier line, whichever was found first)."""
+    for index, d in enumerate(known):
+        if _same(d, found):
+            if found.line is not None and (d.line is None or found.line < d.line):
+                known[index] = replace(d, line=found.line)
+            return
+    known.append(found)
+
+
+def by_line(found: Iterable[Diagnostic]) -> list[Diagnostic]:
+    """*found* in the order of their lines, those with none last, and those at
+    one line as they were."""
+    return sorted(found, key=lambda d: (d.line is None, d.line or 0))
+
+
+def _same(a: Diagnostic, b: Diagnostic) -> bool:
+    return a.rule == b.rule and a.level == b.level and a.message == b.message
 
 
 def covered_by(found: Diagnostic, path: str, validator: Iterable[Diagnostic]) -> bool:
