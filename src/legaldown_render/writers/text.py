@@ -188,7 +188,9 @@ class TextWriter:
         starts one column after the item's own label (or bullet): a condition
         label (§15.8) does not move it. Blocks of an item are set apart by a
         blank line, except that a nested list stays tight under the paragraph
-        or list it follows."""
+        or list it follows. An item whose first block is not a paragraph (a
+        nested list, table, code block or quote) has its label on a line of its
+        own, so the block starts at a line start and stays what it is."""
         lines: list[str] = []
         for item in block.items:
             label = item.label if item.label else "-"
@@ -198,13 +200,14 @@ class TextWriter:
             for child in item.blocks:
                 if previous is not None and not (isinstance(child, List) and isinstance(previous, Paragraph | List)):
                     lines.append("")
+                if previous is None and not isinstance(child, Paragraph):
+                    # The item opens with a block that must start a line
+                    # (a nested list, a table, code, a quote): its own label
+                    # still comes first, on a line of its own.
+                    lines.append(indent + marker)
                 if isinstance(child, List):
-                    if previous is None:
-                        # The item opens with a nested list: its own label
-                        # still comes first, on a line of its own.
-                        lines.append(indent + marker)
                     lines += self.list(child, content)
-                elif previous is None:
+                elif previous is None and isinstance(child, Paragraph):
                     lines.append(_prefix(f"{marker} {self.block(child)}", indent, hanging=" " * (len(label) + 1)))
                 else:
                     lines.append(_prefix(self.block(child), content))

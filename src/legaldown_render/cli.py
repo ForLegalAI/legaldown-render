@@ -24,13 +24,14 @@ from . import __version__
 from .api import RenderOptions, render
 from .errors import DocumentError, InternalError, RenderRefused, StyleError
 from .style import builtin_styles, dump_style, load_style, parse_override
-from .writers import FORMATS, format_for_path
+from .writers import FORMATS, file_extension, format_for_path
 
-#: Extensions of document formats this renderer does not write. An output file
-#: named so (``x.docx``) and no ``--format`` is a mistake to refuse: HTML under
-#: that name would mislead. Any other extension (``contract.v2``,
-#: ``report.2025-10-27``), or none, is just a name and keeps the HTML default.
-_UNWRITTEN_EXTENSIONS = frozenset({".docx", ".doc", ".odt", ".rtf", ".pdf", ".md", ".markdown", ".epub", ".tex"})
+#: Extensions (:func:`file_extension`, so no dot) of document formats this
+#: renderer does not write. An output file named so (``x.docx``, ``.pdf``,
+#: ``x.pdf.``) and no ``--format`` is a mistake to refuse: HTML under that name
+#: would mislead. Any other extension (``contract.v2``, ``report.2025-10-27``),
+#: or none, is just a name and keeps the HTML default.
+_UNWRITTEN_EXTENSIONS = frozenset({"docx", "doc", "odt", "rtf", "pdf", "md", "markdown", "epub", "tex"})
 
 
 def _setting(text: str) -> tuple[str, Any]:
@@ -142,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     if not output_format and args.output:
         file_name = Path(args.output).name
         output_format = format_for_path(file_name)
-        if not output_format and Path(file_name).suffix.lower() in _UNWRITTEN_EXTENSIONS:
+        if not output_format and file_extension(file_name) in _UNWRITTEN_EXTENSIONS:
             parser.error(f"cannot tell the output format from '{args.output}'; use --format html or text")
     output_format = output_format or "html"
     name = "<stdin>" if args.input == "-" else args.input

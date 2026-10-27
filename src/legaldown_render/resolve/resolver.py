@@ -642,7 +642,11 @@ class Resolver:
         definition is not in the body.
 
         Worked out the first time it is needed and kept, which is once every
-        target is registered and the placeholder types are known. Before that
+        target is registered and the placeholder types are known. Only a text
+        worked out at the outermost level is kept: one worked out while another
+        term's text is being worked out has that term open, so a reference back
+        to it shows its label or id there, and the same term resolved alone
+        would read differently (a cycle). Before that
         (a heading read as text by the ``none`` scheme, §13.3) a text-only pass
         stands in, which leaves references out and is not kept. Resolving the
         term gives out no anchor: a definition inside a term keeps its place in
@@ -655,6 +659,7 @@ class Resolver:
         if definition_id in self.term_texts:
             return self.term_texts[definition_id]
         self._terms_open.append(definition_id)
+        outermost = len(self._terms_open) == 1
         try:
             if not self._targets_known:
                 return self._title_text(source.children)
@@ -665,7 +670,8 @@ class Resolver:
                 self.used_anchors = anchors
         finally:
             self._terms_open.pop()
-        self.term_texts[definition_id] = text
+        if outermost:
+            self.term_texts[definition_id] = text
         return text
 
     def _plain_open(self, definition_id: str, term: str) -> str:
