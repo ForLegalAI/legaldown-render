@@ -10,7 +10,7 @@ BUILTIN_LABELS: dict[str, Labels] = {
     "en": Labels(
         drafting_note="Drafting note",
         condition="Only if: {condition}",
-        identification_number="Registration No.",
+        identification_number="Identification No.",
         date_of_birth="Date of birth",
         address="Address",
         represented_by="Represented by",
@@ -48,7 +48,7 @@ BUILTIN_LABELS: dict[str, Labels] = {
     "de": Labels(
         drafting_note="Bearbeitungshinweis",
         condition="Nur wenn: {condition}",
-        identification_number="Registernummer",
+        identification_number="Identifikationsnummer",
         date_of_birth="Geburtsdatum",
         address="Anschrift",
         represented_by="Vertreten durch",
@@ -68,7 +68,7 @@ BUILTIN_LABELS: dict[str, Labels] = {
     "fr": Labels(
         drafting_note="Note de rédaction",
         condition="Uniquement si\u00a0: {condition}",
-        identification_number="N° d'immatriculation",
+        identification_number="Numéro d'identification",
         date_of_birth="Date de naissance",
         address="Adresse",
         represented_by="Représenté(e) par",
@@ -87,7 +87,7 @@ BUILTIN_LABELS: dict[str, Labels] = {
     "pl": Labels(
         drafting_note="Uwaga redakcyjna",
         condition="Tylko jeżeli: {condition}",
-        identification_number="Nr rejestrowy",
+        identification_number="Numer identyfikacyjny",
         date_of_birth="Data urodzenia",
         address="Adres",
         represented_by="Reprezentacja",
