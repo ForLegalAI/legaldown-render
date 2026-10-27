@@ -15,7 +15,8 @@ every key and value against these dataclasses.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Iterator
+from dataclasses import dataclass, field, fields
 from typing import Literal
 
 Counter = Literal["decimal", "lower-alpha", "upper-alpha", "lower-roman", "upper-roman"]
@@ -283,3 +284,61 @@ class Style:
     headings: dict[int, HeadingStyle] = field(default_factory=_default_headings)
     page: Page = field(default_factory=Page)
     html: Html = field(default_factory=Html)
+
+
+# ---------------------------------------------------------------------------
+# Text templates
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateFields:
+    """The ``{field}`` names a text template setting accepts and requires.
+
+    Only identifier-shaped braces (``{n}``, ``{designation}``) are fields; any
+    other braces (``{}``, ``{1}``, ``{a b}``) are literal text, as the
+    resolver keeps them. ``why`` says what a required field is for, in the
+    message about a template that leaves it out."""
+
+    accepted: frozenset[str] = frozenset()
+    required: frozenset[str] = frozenset()
+    why: str = ""
+
+
+#: The designation-building settings are read in :mod:`..resolve.numbering`
+#: (``fill``) and :mod:`..resolve.resolver`. A heading's ``label`` sees its own
+#: counter and its designation; its ``ref`` is one piece of a designation, so
+#: it sees only the counter.
+HEADING_LABEL = TemplateFields(frozenset({"n", "path"}))
+HEADING_REF = TemplateFields(frozenset({"n"}), frozenset({"n"}), "each level must tell its sections apart (§13.3)")
+#: List items and paragraphs also see the containing section's designation.
+ITEM_LABEL = TemplateFields(frozenset({"n", "path", "section"}))
+ITEM_REF = TemplateFields(frozenset({"n", "section"}), frozenset({"n"}), "each item must tell itself apart (§13.3)")
+REFERENCE_FORMAT = TemplateFields(
+    frozenset({"designation"}), frozenset({"designation"}), "every reference would read the same (§13.3)"
+)
+#: Labels are plain words, except for the two that carry a value.
+LABEL_FIELDS: dict[str, TemplateFields] = {
+    "condition": TemplateFields(
+        frozenset({"condition"}), frozenset({"condition"}), "a conditional unit's condition must be shown (§15.8)"
+    ),
+    "attachment_file": TemplateFields(frozenset({"file"})),
+}
+
+
+def template_settings(style: Style) -> Iterator[tuple[str, str, TemplateFields]]:
+    """Every text template setting of *style* that has been set, as
+    ``(key path, template, fields)``. A label left unset (``None``) takes a
+    built-in one, which is correct by construction."""
+    for name, kind_label, kind_ref in (("numbering", HEADING_LABEL, HEADING_REF),
+                                       ("enumeration", ITEM_LABEL, ITEM_REF)):
+        for index, level in enumerate(getattr(style, name).levels):
+            yield f"{name}.levels[{index}].label", level.label, kind_label
+            yield f"{name}.levels[{index}].ref", level.ref, kind_ref
+    yield "paragraphs.format.label", style.paragraphs.format.label, ITEM_LABEL
+    yield "paragraphs.format.ref", style.paragraphs.format.ref, ITEM_REF
+    yield "references.format", style.references.format, REFERENCE_FORMAT
+    for item in fields(Labels):
+        template = getattr(style.labels, item.name)
+        if template is not None:
+            yield f"labels.{item.name}", template, LABEL_FIELDS.get(item.name, TemplateFields())

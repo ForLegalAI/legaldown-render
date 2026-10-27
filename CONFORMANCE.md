@@ -35,10 +35,12 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Style templates in a separate file (§13.7) | ✅ YAML, layered and validated; see [docs/style-templates.md](docs/style-templates.md) |
 | Signature blocks (§2.2) | ✅ One per party, with `legal_name` and each representative |
 | Labels following the document language (§13.7) | ✅ Built in for `en`, `cs`, `de`, `fr`, `pl`, and `sk`; any label can be set by a style |
+| A conditional unit's condition is shown (§15.8, MUST) | ✅ Also for a custom style: `labels.condition` must contain `{condition}`, or the style is refused |
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML table is dropped with the Warning |
+| Visual blank for a placeholder (§13.5 rule 6) | ✅ `placeholders.blank`; a blank that is empty or only whitespace renders `[TBD: id]` |
 | Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
 | Final check (§15.9, SHOULD) | ✅ `--final` / `final=True`: the validator's `placeholder-unfilled` and `template-construct-present` Errors; with `--strict`, the document is refused |
 

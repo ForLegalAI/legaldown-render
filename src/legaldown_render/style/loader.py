@@ -16,6 +16,8 @@ from __future__ import annotations
 import copy
 import dataclasses
 import difflib
+import os
+import re
 import types
 from collections.abc import Mapping
 from importlib import resources
@@ -26,7 +28,7 @@ import yaml
 
 from ..errors import StyleError
 from . import model
-from .model import Style
+from .model import Style, template_settings
 
 STYLE_FORMAT_VERSION = 1
 
@@ -54,7 +56,9 @@ def load_style(
     else:
         data, source = _load_chain(style if style is not None else "default", seen=())
     if overrides:
-        data = _merge(data, _expand_dotted(overrides))
+        expanded = _expand_dotted(overrides)
+        _refuse_meta_overrides(expanded)
+        data = _merge(data, expanded)
     return _build(data, source)
 
 
@@ -64,8 +68,14 @@ def style_to_dict(style: Style) -> dict[str, Any]:
 
 
 def dump_style(style: Style) -> str:
-    """*style* as a complete YAML style template."""
-    return yaml.safe_dump(style_to_dict(style), sort_keys=False, allow_unicode=True)
+    """*style* as a complete, self-contained YAML style template.
+
+    Every setting is written out, so the template extends nothing: ``extends``
+    names a file relative to the one that holds it, which a dump written
+    elsewhere (``--print-style > house.yaml``) could not find again."""
+    data = style_to_dict(style)
+    data.pop("extends", None)
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
 # ---------------------------------------------------------------------------
@@ -73,29 +83,38 @@ def dump_style(style: Style) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _load_chain(spec: str | Path, *, seen: tuple[str, ...], relative_to: Path | None = None) -> tuple[dict, str]:
-    """The merged raw mapping for *spec* and every template it extends."""
-    raw, source, folder = _read(spec, relative_to)
-    if source in seen:
-        chain = " -> ".join((*seen, source))
+def _load_chain(
+    spec: str | Path, *, seen: tuple[tuple[str, str], ...], relative_to: Path | None = None
+) -> tuple[dict, str]:
+    """The merged raw mapping for *spec* and every template it extends.
+
+    *seen* holds the (identity, label) of each template on the chain so far.
+    A file's identity is its resolved path, so ``../dir/a.yaml`` and
+    ``a.yaml`` — or a symbolic link — are one template and a cycle through
+    them is found."""
+    raw, source, folder, identity = _read(spec, relative_to)
+    if any(identity == earlier for earlier, _ in seen):
+        chain = " -> ".join((*(label for _, label in seen), source))
         raise StyleError(source, [f"extends: circular chain {chain}"])
+    here = (*seen, (identity, source))
     parent = raw.get("extends")
     if parent is None:
         if source == "'default'":
             # Start from every built-in default, so that a partial mapping —
             # one heading level's alignment, say — merges field by field.
             return _merge(style_to_dict(Style()), raw), source
-        base, _ = _load_chain("default", seen=(*seen, source))
+        base, _ = _load_chain("default", seen=here)
     elif isinstance(parent, str) and parent:
-        base, _ = _load_chain(parent, seen=(*seen, source), relative_to=folder)
+        base, _ = _load_chain(parent, seen=here, relative_to=folder)
     else:
         raise StyleError(source, ["extends: must be a style name or a path"])
     return _merge(base, raw), source
 
 
-def _read(spec: str | Path, relative_to: Path | None) -> tuple[dict, str, Path | None]:
-    """The raw mapping in *spec*, a label for messages, and the folder that
-    relative ``extends`` paths are resolved against."""
+def _read(spec: str | Path, relative_to: Path | None) -> tuple[dict, str, Path | None, str]:
+    """The raw mapping in *spec*, a label for messages, the folder that
+    relative ``extends`` paths are resolved against, and the template's
+    identity (its resolved path, or the quoted name of a built-in)."""
     name = str(spec)
     is_path = isinstance(spec, Path) or name.endswith((".yaml", ".yml")) or "/" in name or "\\" in name
     if not is_path:
@@ -104,7 +123,7 @@ def _read(spec: str | Path, relative_to: Path | None) -> tuple[dict, str, Path |
             raise StyleError(f"'{name}'", [f"no built-in style named '{name}' (built-in: {known}); "
                                            f"to load a file, give a path ending in .yaml"])
         text = resources.files(__package__).joinpath("builtin", f"{name}.yaml").read_text("utf-8")
-        return _parse(text, f"'{name}'"), f"'{name}'", None
+        return _parse(text, f"'{name}'"), f"'{name}'", None, f"'{name}'"
     path = Path(spec)
     if relative_to is not None and not path.is_absolute():
         path = relative_to / path
@@ -117,7 +136,16 @@ def _read(spec: str | Path, relative_to: Path | None) -> tuple[dict, str, Path |
                                      f"at offset {error.start})"]) from None
     raw = _parse(text, str(path))
     raw.setdefault("name", path.stem)
-    return raw, str(path), path.parent
+    return raw, str(path), path.parent, _identity(path)
+
+
+def _identity(path: Path) -> str:
+    """*path* made absolute, with ``..`` and symbolic links followed, so two
+    spellings of one file compare equal."""
+    try:
+        return str(path.resolve())
+    except (OSError, RuntimeError):  # a symbolic link loop
+        return os.path.abspath(path)
 
 
 def _parse(text: str, source: str) -> dict:
@@ -167,6 +195,23 @@ def _expand_dotted(overrides: Mapping[str, Any]) -> dict:
     return expanded
 
 
+#: Top-level settings that describe the template file, not how a document
+#: looks; a job's overrides cannot change them.
+_META_KEYS = {
+    "version": "the style format version belongs to the template file",
+    "extends": "choose the template with --style (or RenderOptions.style) instead",
+}
+
+
+def _refuse_meta_overrides(expanded: Mapping) -> None:
+    """Overrides are applied after the ``extends`` chain is resolved and the
+    version checked, so an override of either would be silently ignored — or,
+    for ``--print-style``, written into a style that no longer loads."""
+    problems = [f"{key}: cannot be overridden; {reason}" for key, reason in _META_KEYS.items() if key in expanded]
+    if problems:
+        raise StyleError("overrides", problems)
+
+
 def _copy(value: Any) -> Any:
     """A deep copy of *value* with every mapping made a plain dict."""
     if isinstance(value, Mapping):
@@ -184,7 +229,8 @@ def parse_override(key: str, text: str) -> Any:
     keep quotation marks around a value, wrap it in the other kind
     (``'"{designation}"'``). Other settings read it as YAML, so that
     ``true``, ``2``, or ``[...]`` mean what they say. ``null`` clears a
-    setting that may be unset, such as ``locale``.
+    setting that may be unset, such as ``locale``. A value that is not valid
+    YAML raises :class:`StyleError`, naming *key* and the YAML problem.
     """
     hint = _hint_for(key.split("."))
     if hint is not None and _is_text(hint):
@@ -197,8 +243,19 @@ def parse_override(key: str, text: str) -> Any:
         return text
     try:
         return yaml.safe_load(text) if text.strip() else ""
-    except yaml.YAMLError:
-        return text
+    except yaml.YAMLError as error:
+        raise StyleError("overrides", [f"{key}: the value is not valid YAML: {_yaml_problem(error)}"]) from None
+
+
+def _yaml_problem(error: yaml.YAMLError) -> str:
+    """What is wrong in a YAML text, on one line: the problem and where it is."""
+    problem = getattr(error, "problem", None)
+    if not problem:
+        return " ".join(str(error).split())
+    context = getattr(error, "context", None)
+    mark = getattr(error, "problem_mark", None)
+    where = f" (line {mark.line + 1}, column {mark.column + 1})" if mark is not None else ""
+    return f"{context}, {problem}{where}" if context else f"{problem}{where}"
 
 
 def _hint_for(parts: list[str]) -> Any:
@@ -234,12 +291,35 @@ def _is_text(hint: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
+#: ``{name}`` as the resolver's ``fill`` and label substitution read it.
+_FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
 def _build(data: Mapping, source: str) -> Style:
     problems: list[str] = []
     style = _convert(data, Style, "", problems)
+    problems.extend(_template_problems(style))
     if problems:
         raise StyleError(source, problems)
     return style
+
+
+def _template_problems(style: Style) -> list[str]:
+    """What is wrong with the ``{field}`` names in the style's text templates
+    (:func:`~.model.template_settings`): an identifier-shaped field the
+    setting does not accept (a typo would be shown literally), or a required
+    field it leaves out (``labels.condition`` without ``{condition}`` would
+    hide the condition, which §15.8 requires to be shown)."""
+    problems = []
+    for key, template, fields in template_settings(style):
+        found = set(_FIELD_RE.findall(template))
+        accepted = ", ".join(f"{{{name}}}" for name in sorted(fields.accepted))
+        for name in sorted(found - fields.accepted):
+            takes = f"accepts {accepted}" if accepted else "takes no fields"
+            problems.append(f"{key}: unknown field {{{name}}}; this setting {takes}")
+        for name in sorted(fields.required - found):
+            problems.append(f"{key}: must contain {{{name}}}" + (f" — {fields.why}" if fields.why else ""))
+    return problems
 
 
 def _convert(value: Any, hint: Any, path: str, problems: list[str]) -> Any:

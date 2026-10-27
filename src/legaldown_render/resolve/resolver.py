@@ -661,7 +661,9 @@ class Resolver:
         prompt = ""
         if self.style.placeholders.show_prompt and isinstance(declared, dict):
             prompt = str(declared.get("prompt") or "")
-        return Blank(placeholder_id, self.style.placeholders.blank, prompt)
+        # §13.5 rule 6: a style whose blank is empty offers no visual blank.
+        blank = self.style.placeholders.blank
+        return Blank(placeholder_id, blank if blank.strip() else f"[TBD: {placeholder_id}]", prompt)
 
     def _attach(self, directive: Directive, attachment_id: str) -> Inline:
         title = self.result.index.attachment_lookup.get(attachment_id)
