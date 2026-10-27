@@ -160,11 +160,14 @@ CYCLE = ('# A\n\nUsed first: {{term: ca}} and {{term: cb}}.\n\n'
          '"Alpha {{term: cb}}" {{def: ca}}\n\n"Beta {{term: ca}}" {{def: cb}}\n')
 
 
-def test_a_term_reference_reads_as_its_definition_in_a_cycle() -> None:
-    lines = text(CYCLE).splitlines()
-    used = next(line for line in lines if line.startswith("Used first:"))
-    site = next(line for line in lines if line.startswith("Beta "))
-    assert used.endswith(f"and {site}.")
+def test_a_term_reference_in_a_cycle_does_not_depend_on_the_order_of_use() -> None:
+    # WP12: a term shown by {{term:}} is its text with that term open (a reference back to it
+    # shows its id), whichever term is used first. (The definition site renders with no term
+    # open, so it can read longer: "Beta Alpha Beta ca" there, "Beta Alpha cb" in a reference.)
+    ca_first = text(CYCLE)
+    cb_first = text(CYCLE.replace("{{term: ca}} and {{term: cb}}", "{{term: cb}} and {{term: ca}}"))
+    assert "Used first: Alpha Beta ca and Beta Alpha cb." in ca_first
+    assert "Used first: Beta Alpha cb and Alpha Beta ca." in cb_first
 
 
 def _chain(n: int, *, cycle: bool, heading: bool = False) -> str:

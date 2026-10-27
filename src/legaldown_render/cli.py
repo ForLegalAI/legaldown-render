@@ -24,6 +24,7 @@ from . import __version__
 from .api import RenderOptions, render
 from .errors import DocumentError, InternalError, RenderRefused, StyleError
 from .style import builtin_styles, dump_style, load_style, parse_override
+from .urls import printable
 from .writers import FORMATS, file_extension, format_for_path
 
 #: Extensions (:func:`file_extension`, so no dot) of document formats this
@@ -179,10 +180,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except RenderRefused as error:
         _report(name, error.diagnostics, quiet=args.quiet)
-        print(f"legaldown-render: {error}", file=sys.stderr)
+        print(f"legaldown-render: {printable(str(error))}", file=sys.stderr)
         return 1
     except DocumentError as error:
-        print(f"{name}: error: {error}", file=sys.stderr)
+        print(f"{printable(name)}: error: {printable(str(error))}", file=sys.stderr)
         return 1
     except InternalError as error:
         print(f"legaldown-render: internal error: {error}", file=sys.stderr)
@@ -205,8 +206,10 @@ def _report(name: str, diagnostics: list, *, quiet: bool) -> None:
         return
     for diagnostic in diagnostics:
         # As the validator's CLI prints them: the line when the finding has one.
-        where = f"{name}:{diagnostic.line}" if diagnostic.line else name
-        print(f"{where}: {diagnostic.level}: [{diagnostic.rule}] {diagnostic.message}", file=sys.stderr)
+        # The message quotes the document (an id, a path, a term), and a terminal
+        # obeys the control characters in it, so both parts are made printable.
+        where = f"{printable(name)}:{diagnostic.line}" if diagnostic.line else printable(name)
+        print(f"{where}: {diagnostic.level}: [{diagnostic.rule}] {printable(diagnostic.message)}", file=sys.stderr)
 
 
 if __name__ == "__main__":

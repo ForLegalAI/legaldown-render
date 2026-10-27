@@ -106,7 +106,7 @@ format (`OptionsError`), an unreadable document (`DocumentError`), strict mode, 
 cannot be assembled with its answers (`RenderRefused`) do. All of them are `RenderError`s, and
 `StyleError` and `OptionsError` are also `ValueError`s. They can be pickled, so they cross process
 boundaries (`multiprocessing`, `concurrent.futures`) intact. `overrides=` takes dotted settings and
-may not contain `version` or `extends`, so `overrides=style_to_dict(style)` must drop those two keys.
+may not contain `version` or `extends`, so `overrides=legaldown_render.style.style_to_dict(style)` must drop those two keys.
 
 ## Styles and preferences
 
