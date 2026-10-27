@@ -84,7 +84,7 @@ from ..tree import (
     plain_text,
     unlinked,
 )
-from ..urls import is_relative_path
+from ..urls import is_empty_path, is_relative_path
 from .numbering import RENUMBERED, extend, fill, format_counter, heading_levels
 from .values import DURATION_UNITS, Formatter
 
@@ -538,6 +538,10 @@ class Resolver:
                                title=self._resolve_inlines(_attribute_text(title)))
             case Image(src=src, children=children, title=title):
                 alt = self._resolve_inlines(_attribute_text(children))
+                if is_empty_path(src):
+                    # No path, no picture: <img src=""> would request the page
+                    # itself. §2.3 says nothing of an empty path, so no rule fires.
+                    return alt
                 if not is_relative_path(src):
                     # §2.3: an image path is relative and has no URI scheme, so a
                     # remote or absolute image is never fetched or embedded. Its

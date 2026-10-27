@@ -214,3 +214,13 @@ def test_a_link_text_that_differs_from_its_url_shows_both_in_text() -> None:
 def test_a_link_around_a_picture_keeps_the_picture_not_its_url() -> None:
     output = html("# A\n\n[![](img/p.png)](https://example.com)\n")
     assert '<a href="https://example.com"><img src="img/p.png" alt=""></a>' in output
+
+
+@pytest.mark.parametrize("empty", ["", "  ", "%20"])
+def test_an_image_with_no_path_is_its_alt_text(empty: str) -> None:
+    for fmt in ("html", "text"):
+        result = render(FRONT + f"# A\n\nBefore ![the logo](<{empty}>) after.\n", format=fmt, strict=True)
+        assert "<img" not in result.output
+        assert 'src=""' not in result.output
+        assert "Before the logo after." in result.output
+        assert not [d for d in result.diagnostics if d.level == "error"]

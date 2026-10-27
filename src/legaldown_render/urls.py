@@ -11,12 +11,12 @@ import re
 from urllib.parse import unquote
 
 #: Schemes whose links are never made: script (``javascript:``, ``vbscript:``),
-#: local files (``file:``), and ``data:``. markdown-it refuses the same
-#: schemes while parsing (``validateLink``, which lets some ``data:`` images
-#: through; a link may not); this list is the second line, for a URL that
-#: reaches a writer by another way. Every other scheme (``ftp:``, ``sip:``,
-#: ``urn:``, ...) is a hyperlink, since §8.7 requires links to be rendered as
-#: hyperlinks.
+#: local files (``file:``), and ``data:``. This list is the gate: markdown-it's
+#: own ``validateLink`` is turned off in the builder, so that the resolver can
+#: see and report an image path that is not relative (§2.3), and the HTML
+#: writer applies this list to every ``href`` and ``src`` it emits (a link, an
+#: image, a value's link). Every other scheme (``ftp:``, ``sip:``, ``urn:``,
+#: ...) is a hyperlink, since §8.7 requires links to be rendered as hyperlinks.
 DENIED_SCHEMES = frozenset({"javascript", "vbscript", "file", "data"})
 
 _SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
@@ -48,6 +48,12 @@ def is_link_target(href: str) -> bool:
     """True if a link to *href* is made: it names something, and is safe.
     An empty destination would be a link to the page itself."""
     return bool(_as_read(href)) and is_safe_href(href)
+
+
+def is_empty_path(path: str) -> bool:
+    """True if *path* names nothing: empty, or only what a browser ignores. As
+    an image's source it would request the page itself."""
+    return not _as_read(unquote(path))
 
 
 def is_relative_path(path: str) -> bool:

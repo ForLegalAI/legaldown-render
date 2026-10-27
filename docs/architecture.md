@@ -249,14 +249,16 @@ line public (`Document.line_of`, U2).
   linked. A link that is not made renders as its text alone, in HTML and in text alike. The
   builder keeps such links as nodes (it turns off markdown-it-py's own `validateLink`, which
   would leave them as literal Markdown), so the writers' check is the one that applies;
-  `is_safe_href` stays as defence in depth for a tree built another way. A link with no text shows
-  its URL; the text writer leaves out ` <url>` when the URL, less a `mailto:` or `tel:` prefix,
-  is the text.
+  that deny-list is the gate for every `href` and `src` the HTML writer emits (links, images,
+  value links), and markdown-it-py's check is off so that the resolver can report §2.3 paths.
+  A link with no text shows its URL; the text writer leaves out ` <url>` when the URL, less a
+  `mailto:` or `tel:` prefix, is the text.
 - An image path must be relative with no URI scheme (§2.3), so a remote resource is never fetched
   or embedded. Resolution, not a writer, enforces it: an image whose path has a scheme (`https:`,
   `file:`, `data:`, a Windows drive such as `C:\x`) or starts with `/` or `\` (`//host`) is
   replaced by its alt text and reported as the Core Error `path-not-relative`, which `--strict`
-  refuses. `../` stays allowed: §2.3 defines no default document root. The writers' image check
+  refuses. An image with an empty path shows its alt text too, with no diagnostic (§2.3 has no
+  rule for it). `../` stays allowed: §2.3 defines no default document root. The writers' image check
   is a second line.
 - At Rendering level, the only files read are the document, the style template, and the answers
   file the CLI reads with `--answers` (the Python API takes answers as a mapping). Attachment

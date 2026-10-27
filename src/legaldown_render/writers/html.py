@@ -12,7 +12,8 @@ HTML from the source never reaches this writer (§8.7), and a link whose URL
 is empty or uses a script, ``file:``, or ``data:`` scheme
 (:data:`~legaldown_render.urls.DENIED_SCHEMES`, judged as a browser reads the
 URL) renders as its text alone. Every other scheme is a hyperlink (§8.7).
-markdown-it refuses such URLs first, while parsing; this is the second line.
+This check is the gate for every ``href`` and ``src`` the writer emits (a link,
+an image, a value's link): the builder turns markdown-it's own check off.
 An image path that is not relative (§2.3) never gets here: resolution has
 replaced the image with its alt text and reported it.
 """
