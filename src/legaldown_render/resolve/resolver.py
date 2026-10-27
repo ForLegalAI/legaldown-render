@@ -25,7 +25,7 @@ the validator does not check yet.
 
 Every one of them names the file and the line it is at (§16.9): the first line
 of the block, list item or heading being resolved, or the line of a frontmatter
-key (``diagnostics.key_line``), tracked in :attr:`Resolver.line`. A finding in
+key (``diagnostics.KeyLines``), tracked in :attr:`Resolver.line`. A finding in
 a term's text is at the term's definition, since that is where the text is
 worked out whatever reference asked for it first.
 """
@@ -57,7 +57,7 @@ from legaldown.grammar import (
 from legaldown.syntax import Directive
 
 from ..build import plain_inlines
-from ..diagnostics import covered_by, key_line, repeats
+from ..diagnostics import KeyLines, covered_by, repeats
 from ..style import Style, effective_labels
 from ..style.model import LevelFormat
 from ..tree import (
@@ -195,6 +195,8 @@ class Resolver:
         # The line (§16.9) of what is being resolved, which a diagnostic
         # names: see _at.
         self.line: int | None = None
+        # The lines of frontmatter keys (once the document is checked against its source).
+        self.key_line = KeyLines(document)
         # A definition id -> the line of its first {{def:}} in the body (see
         # _survey), where its term's text is worked out.
         self.term_lines: dict[str, int | None] = {}
@@ -251,9 +253,9 @@ class Resolver:
         preamble = tuple(self._resolve_block(block) for block in preamble)
         sections = tuple(self._resolve_section(section) for section in sections)
         attachments = tuple(self._resolve_attachment(index, a) for index, a in enumerate(attachments))
-        with self._at(key_line(self.document, "title")):
+        with self._at(self.key_line("title")):
             title = resolve(self.tree.title)
-        with self._at(key_line(self.document, "subtitle")):
+        with self._at(self.key_line("subtitle")):
             subtitle = resolve(self.tree.subtitle)
         resolved = replace(
             self.tree,
@@ -294,7 +296,7 @@ class Resolver:
             )
 
     def _resolve_attachment(self, index: int, attachment: AttachmentPart) -> AttachmentPart:
-        with self._at(key_line(self.document, "attachments", index, "title")):
+        with self._at(self.key_line("attachments", index, "title")):
             return replace(attachment, title=self._resolve_inlines(attachment.title))
 
     def _contents(
@@ -1004,7 +1006,7 @@ class Resolver:
         in the body): what it reports is at that key, not where it is shown."""
         if "{{" not in text:
             return text
-        with self._at(key_line(self.document, *key)) if key else nullcontext():
+        with self._at(self.key_line(*key)) if key else nullcontext():
             return plain_text(self._resolve_inlines(plain_inlines(text)))
 
     def _frontmatter(self, text: str) -> tuple[Inline, ...]:
@@ -1014,10 +1016,10 @@ class Resolver:
         rows: list[tuple[str, tuple[Inline, ...]]] = []
         metadata = self.metadata
         if self.style.title_block.effective_date and metadata.effective_date:
-            with self._at(key_line(self.document, "effective_date")):
+            with self._at(self.key_line("effective_date")):
                 rows.append((self.labels.effective_date or "", self._date_or_text(metadata.effective_date)))
         if self.style.title_block.version and metadata.version:
-            with self._at(key_line(self.document, "version")):
+            with self._at(self.key_line("version")):
                 rows.append((self.labels.version or "", self._frontmatter(metadata.version)))
         return tuple(rows)
 
@@ -1032,12 +1034,12 @@ class Resolver:
             parties = tuple(self._party_info(side_index, party_index, party)
                             for party_index, party in enumerate(side.parties))
             label = self.result.index.side_lookup.get(side.name) or side.label or side.name
-            with self._at(key_line(self.document, "sides", side_index, "label")):
+            with self._at(self.key_line("sides", side_index, "label")):
                 sides.append(SideInfo(self._frontmatter(label), parties))
         return tuple(sides)
 
     def _party_info(self, side_index: int, party_index: int, party: Party) -> PartyInfo:
-        with self._at(key_line(self.document, "sides", side_index, "parties", party_index)):
+        with self._at(self.key_line("sides", side_index, "parties", party_index)):
             details: list[tuple[str, tuple[Inline, ...]]] = []
             if party.identification_number:
                 details.append((self.labels.identification_number or "", self._frontmatter(party.identification_number)))
@@ -1081,10 +1083,10 @@ class Resolver:
             return ()
         blocks: list[SignatureParty] = []
         for side_index, side in enumerate(self.metadata.sides):
-            with self._at(key_line(self.document, "sides", side_index, "label")):
+            with self._at(self.key_line("sides", side_index, "label")):
                 label = self._frontmatter(self.result.index.side_lookup.get(side.name) or side.label or side.name)
             for party_index, party in enumerate(side.parties):
-                with self._at(key_line(self.document, "sides", side_index, "parties", party_index)):
+                with self._at(self.key_line("sides", side_index, "parties", party_index)):
                     # Where signature blocks are generated, legal_name MUST appear (§3.6).
                     blocks.append(SignatureParty(
                         side=label,

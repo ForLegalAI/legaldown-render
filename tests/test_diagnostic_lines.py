@@ -456,3 +456,96 @@ def test_strict_prints_the_lines_it_refuses_with(tmp_path: Path, capsys: pytest.
     assert main([str(path), "--strict"]) == 1
     err = capsys.readouterr().err
     assert f"{path}:{at(REFS, 'See')}: error: [path-not-relative] " in err
+
+
+# -- The cost of lines ---------------------------------------------------------------------
+
+RICH = HEAD + """
+Preamble one.
+
+- pre item
+  - pre nested
+
+# One {#one}
+
+Para.
+
+1. first
+   - nested a
+     - deeper
+   - nested b
+
+     second block of nested b
+2. second
+
+> quote
+>
+> - in a quote
+
+| a | b |
+|---|---|
+| x | y |
+
+```
+code
+```
+
+---
+
+## Two
+
+- x
+- y
+  1. z
+"""
+
+
+def test_the_builders_lines_are_those_of_line_of() -> None:
+    from legaldown import parse, validate
+    from legaldown.models import LIST_KINDS
+
+    from legaldown_render.build import build_tree
+
+    document = parse(RICH)
+    tree = build_tree(document, validate(document))
+
+    def items(block):  # type: ignore[no-untyped-def]
+        for item in block.items:
+            yield item
+            for child in item.blocks:
+                if hasattr(child, "items"):
+                    yield from items(child)
+
+    for section_index, (blocks, built) in enumerate(
+            [(document.preamble, tree.preamble)] + [(s.blocks, t.blocks) for s, t in
+                                                    zip(document.sections, tree.sections, strict=True)]):
+        owner = None if section_index == 0 else section_index - 1
+        if owner is not None:
+            assert tree.sections[owner].line == document.line_of(owner)
+        assert len(blocks) == len(built)
+        for index, (block, node) in enumerate(zip(blocks, built, strict=True)):
+            if block.kind in LIST_KINDS:
+                found = [item.line for item in items(node)]
+                assert found == [document.line_of(owner, index, n) for n in range(len(found))]
+            elif block.kind != "rule":  # a rule has no line: nothing reports on it
+                assert node.line == document.line_of(owner, index), (owner, index, block.kind)
+
+
+def test_a_render_checks_the_document_against_its_source_a_constant_number_of_times(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # Document.line_of and SourceMap.key each re-read the whole document's shape
+    # (positions.document_shape) to see it still fits its source, so asking for
+    # every block's line, or every party's key, one by one is quadratic.
+    import legaldown.positions as positions
+
+    calls = []
+    real = positions.document_shape
+    monkeypatch.setattr(positions, "document_shape", lambda document: (calls.append(1), real(document))[1])
+    front = ("---\ntitle: T\nsides:\n  - name: a\n    parties:\n      - name: p\n        legal_name: P\n"
+             "        type: legal_entity\n  - name: b\n    parties:\n      - name: q\n        legal_name: Q\n"
+             "        type: legal_entity\nattachments:\n  - id: x\n    title: X\n---\n")
+    body = "# A\n\n" + "\n\n".join(f"Paragraph {i}." for i in range(2000))
+    body += "\n\n- one\n- two\n  - three\n\n" + " ".join("{{party: p}} {{side: b}} {{attach: x}}" for _ in range(500))
+    result = render(front + body + "\n", format="text")
+    assert result.output
+    assert len(calls) <= 3, len(calls)

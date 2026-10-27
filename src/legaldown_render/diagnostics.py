@@ -17,17 +17,30 @@ from typing import Any
 from legaldown import Diagnostic, Document
 
 
+class KeyLines:
+    """The lines of a document's frontmatter keys: ``KeyLines(document)(*path)``
+    is the line in the document's file of the value at *path*
+    (``("attachments", 0, "file")``), or of the nearest key above it that is
+    written, as ``SourceMap.key`` says; None when the document has no source to
+    name a line of (it was built from a dict, or changed since it was parsed)
+    or has no frontmatter.
+
+    Whether the document still fits its source map is worked out once, when
+    this is made (``SourceMap.fits`` reads the whole document), so a renderer
+    keeps one for the document it renders and asks it for every reference."""
+
+    def __init__(self, document: Document) -> None:
+        source_map = document.source_map
+        self._map = source_map if source_map is not None and source_map.fits(document) else None
+
+    def __call__(self, *path: Any) -> int | None:
+        line = self._map.key(*path) if self._map is not None else None
+        return line if isinstance(line, int) else None
+
+
 def key_line(document: Document, *path: Any) -> int | None:
-    """The line in the document's file of the frontmatter value at *path*
-    (``key_line(document, "attachments", 0, "file")``), or of the nearest key
-    above it that is written, as ``SourceMap.key`` says; None when the document
-    has no source to name a line of (it was built from a dict, or changed since
-    it was parsed) or has no frontmatter."""
-    source_map = document.source_map
-    if source_map is None or not source_map.fits(document):
-        return None
-    line = source_map.key(*path)
-    return line if isinstance(line, int) else None
+    """``KeyLines(document)(*path)``, for a single lookup."""
+    return KeyLines(document)(*path)
 
 
 def repeats(found: Diagnostic, known: Iterable[Diagnostic]) -> bool:

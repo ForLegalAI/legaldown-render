@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from functools import cache
 from itertools import count
+from typing import Any
 from urllib.parse import unquote
 
 from legaldown import Block as ModelBlock
@@ -205,6 +206,14 @@ class _Builder:
         # it takes the line of the quote or the item.
         self.at: tuple[int | None, int] | None = None
         self.line: int | None = None
+        # The lines of the parts of the document, read once: ``Document.line_of``
+        # checks the whole document against its source on every call. None
+        # without a source, or when the document no longer fits it.
+        self.layout = document.layout()
+        # The lines of the items of the top-level list being built, in the
+        # pre-order the validator numbers them (see list()); None for a list
+        # whose items are not addressable.
+        self.item_lines: list[int] | None = None
         nonce = secrets.token_hex(8)
         # A sentinel with its wrappers; only a complete one matches, so a
         # wrapper character in the source is never taken.
@@ -378,7 +387,7 @@ class _Builder:
             placed = self.placed.get((section, index), []) if markers else []
             if markers:
                 self.at = (section, index)
-                self.line = self.document.line_of(section, index)
+                self.line = self._block_line(section, index)
             built = self.block(block, placed, top_level=top_level)
             if built is not None:
                 out.append(built)
@@ -425,7 +434,37 @@ class _Builder:
         number among all the list's items, as the validator numbers them.
         None for a list whose every item is only a comment."""
         markers = {marker.item: marker for marker in placed}
-        return self._list(block, markers, count())
+        outer = self.item_lines
+        self.item_lines = self._item_lines(*self.at) if self.at else None
+        try:
+            return self._list(block, markers, count())
+        finally:
+            self.item_lines = outer
+
+    # -- lines (§16.9) --------------------------------------------------------
+
+    def _block_line(self, section: int | None, index: int) -> int | None:
+        """The first line of top-level block *index* of the preamble (*section*
+        None) or of a section: what ``Document.line_of`` gives."""
+        if self.layout is None:
+            return None
+        spans = self.layout.preamble if section is None else self.layout.sections[section].blocks
+        return spans[index].start
+
+    def _item_lines(self, section: int | None, index: int) -> list[int] | None:
+        """The marker lines of the items of top-level list *index*, nested items
+        included, in pre-order as ``Document.line_of`` numbers them."""
+        if self.layout is None:
+            return None
+        spans = self.layout.preamble if section is None else self.layout.sections[section].blocks
+
+        def walk(items: Iterable[Any]) -> Iterator[int]:
+            for item in items:
+                yield item.start
+                for inner in item.blocks:
+                    yield from walk(inner.items)
+
+        return list(walk(spans[index].items))
 
     def _list(self, block: ModelBlock, markers: dict[int | None, PlacedMarker], numbers: Iterator[int]) -> List | None:
         """*block*'s items, numbered from *numbers* in pre-order, to find the
@@ -452,7 +491,7 @@ class _Builder:
                 blocks: list[Block] = []
                 outer = self.line
                 # The item's marker line; in a quote an item is not addressable.
-                item_line = self.document.line_of(*self.at, number) if self.at else outer
+                item_line = self.item_lines[number] if self.item_lines is not None else outer
                 self.line = item_line
                 try:
                     for child in children:
@@ -520,7 +559,7 @@ class _Builder:
                 identifier=self.result.index.sections[index].identifier,
                 condition=section.condition,
                 blocks=self.blocks(section.blocks, index),
-                line=document.line_of(index),
+                line=None if self.layout is None else self.layout.sections[index].heading.start,
             )
             for index, section in enumerate(document.sections)
         )
