@@ -140,7 +140,7 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 | Directive | Resolves to | Failure markers |
 |---|---|---|
 | `{{ref:}}` | `CrossRef(designation, anchor)` (§13.3). A ref to an unnumbered item or paragraph falls back to its section's designation, with `ref-not-enumerated` | `[BROKEN REF: id]` |
-| `{{term:}}` | `TermRef(label or the definition's rendered term text, def anchor)` (§7.3, §13.4); the text is collected in `Resolver._survey` | `[UNDEFINED: id]` |
+| `{{term:}}` | `TermRef(label or the definition's rendered term text, def anchor)` (§7.3, §13.4); the text is the first definition's term resolved as at the definition, worked out on first use by `Resolver._term_text` (`_survey` only records which definition is first) | `[UNDEFINED: id]` |
 | `"Term" {{def:}}` | `DefinedTerm` without quotation marks, anchored at `def:<id>` (§7.2) | n/a |
 | `{{date:}}` `{{money:}}` `{{duration:}}` | `Value`, formatted for the locale by Babel (ADR 0005): amounts and durations keep every written digit, and a duration without a pattern in the locale falls back to another length, the language alone, then English with `render-locale-fallback` | `[INVALID DATE: …]`, `[INVALID AMOUNT: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION: …]`, `[INVALID DURATION UNIT: …]` |
 | `{{party:}}` `{{side:}}` | `Value(label or display name)` (§3.6) | `[INVALID PARTY: …]`, `[UNKNOWN PARTY: …]`, and the side forms |

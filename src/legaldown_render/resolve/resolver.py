@@ -151,13 +151,18 @@ class Resolver:
         questions = self.metadata.questions
         self.questions: dict[str, Any] = questions if isinstance(questions, dict) else {}
         self.inconsistent_placeholders: set[str] = set()
-        # A definition id -> the plain text of its term as rendered (Markdown
-        # resolved), from the first definition in the body (see _survey).
+        # A definition id -> the first {{def:}} of it in the body (see _survey),
+        # and -> the plain text of its term as rendered there, worked out the
+        # first time a {{term:}} needs it (see _term_text).
+        self.term_sources: dict[str, DefinitionSource] = {}
         self.term_texts: dict[str, str] = {}
         # The definitions whose term text is being worked out, so that a
         # {{term:}} inside a term, directly or through other terms, cannot
         # send the computation round in a circle.
         self._terms_open: list[str] = []
+        # False until every target is registered and the placeholder types are
+        # known (run() sets it just before the inlines are resolved).
+        self._targets_known = False
         self.attachment_anchors: dict[str, str | None] = {}
         self.section_presences: list[Presence] = []
 
@@ -172,6 +177,7 @@ class Resolver:
             replace(section, blocks=self._structure_section(section, presence))
             for section, presence in zip(sections, self.section_presences, strict=True)
         )
+        self._targets_known = True
         resolve = self._resolve_inlines
         # In document order, so that the first of several definitions of a
         # term is the one that keeps its anchor.
@@ -249,22 +255,15 @@ class Resolver:
 
     def _survey(self) -> None:
         """One pass over the tree before resolving: which placeholder ids
-        are used with conflicting types (§10.7), and what each defined term
-        reads as, for ``{{term:}}`` (§7.3)."""
+        are used with conflicting types (§10.7), and which definition each
+        defined term reads as, for ``{{term:}}`` (§7.3): the term's own text is worked out
+        later, by :meth:`_term_text`, when its references can be resolved."""
         types: dict[str, set[str]] = {}
         for inline in iter_tree_inlines(self.tree):
             if isinstance(inline, DefinitionSource):
                 # The first definition of an id is the one the validator's
-                # lookup and the anchor keep. The term is the text the reader
-                # sees at the definition: its Markdown is resolved, not the
-                # validator's raw ``anchor.term``.
-                identifier = self._definition_id(inline)
-                if identifier not in self.term_texts:
-                    self._terms_open.append(identifier)
-                    try:
-                        self.term_texts[identifier] = self._title_text(inline.children)
-                    finally:
-                        self._terms_open.pop()
+                # lookup and the anchor keep.
+                self.term_sources.setdefault(self._definition_id(inline), inline)
             elif isinstance(inline, DirectiveSource):
                 directive = inline.directive
                 if directive.name == "placeholder" and directive.positional and not directive.malformed:
@@ -626,10 +625,44 @@ class Resolver:
             # The term as rendered at its definition; the validator's own
             # text (an empty term reads as its id, a definition not in the
             # body) is the fallback.
-            text = label or self.term_texts.get(definition_id) or self._plain_open(definition_id, term)
+            text = label or self._term_text(definition_id) or self._plain_open(definition_id, term)
         # Settled once everything is resolved (see _settle_term_target).
         target = DEFINITION_ANCHOR_PREFIX + definition_id
         return TermRef(text, target, self.style.definitions.term_style)
+
+    def _term_text(self, definition_id: str) -> str:
+        """The plain text of the term at the first definition of *definition_id*
+        in the body, as the reader sees it there: its Markdown, references,
+        placeholders and other terms resolved exactly as at the definition
+        (§7.3), not the validator's raw ``anchor.term``. Empty when the
+        definition is not in the body.
+
+        Worked out the first time it is needed and kept, which is once every
+        target is registered and the placeholder types are known. Before that
+        (a heading read as text by the ``none`` scheme, §13.3) a text-only pass
+        stands in, which leaves references out and is not kept. Resolving the
+        term gives out no anchor: a definition inside a term keeps its place in
+        document order. The definition is open meanwhile, so a ``{{term:}}``
+        inside it, directly or through others, shows its label or id and goes
+        no further."""
+        source = self.term_sources.get(definition_id)
+        if source is None:
+            return ""
+        if definition_id in self.term_texts:
+            return self.term_texts[definition_id]
+        self._terms_open.append(definition_id)
+        try:
+            if not self._targets_known:
+                return self._title_text(source.children)
+            anchors = set(self.used_anchors)
+            try:
+                text = plain_text(self._resolve_inlines(source.children))
+            finally:
+                self.used_anchors = anchors
+        finally:
+            self._terms_open.pop()
+        self.term_texts[definition_id] = text
+        return text
 
     def _plain_open(self, definition_id: str, term: str) -> str:
         """The validator's *term* text of a definition as plain text, with

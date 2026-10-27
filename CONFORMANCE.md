@@ -68,7 +68,8 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   no content at all keeps its place (CommonMark), and so does an empty drafting note, whose label
   is the template construct (§15.6).
 - **`{{term:}}` text.** A `{{term:}}` shows the term as rendered at its first definition in the
-  body, with its Markdown resolved (`"A *b* c" {{def: abc}}` is "A b c"), not the term's raw
+  body, with its Markdown, `{{ref:}}`s and placeholders resolved as at the definition
+  (`"A *b* c" {{def: abc}}` is "A b c", `"Fee per {{ref: h}}"` is "Fee per 1"), not the term's raw
   source; `label=` overrides it. A definition not in the body (a template's other alternative)
   falls back to the validator's term text.
   A term that refers to itself, directly or through other terms (`"A {{term: a}}" {{def: a}}`), is
