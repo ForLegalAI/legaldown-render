@@ -226,7 +226,8 @@ turns into an error.
 - **Document problems** render as failure markers and are listed in `diagnostics`. `strict=True`
   raises `RenderRefused` instead, carrying the diagnostics.
 - **Configuration problems** raise before rendering, with every problem named: an invalid style,
-  setting, or locale raises `StyleError`; an unknown output format raises `OptionsError`. Both are
+  setting, or locale raises `StyleError` (this includes a `{field}` that a text template does not
+  accept or lacks, a `--set` value that is not valid YAML, and an `extends` cycle); an unknown output format raises `OptionsError`. Both are
   `RenderError`s (and `ValueError`s, as they always were). Every renderer error pickles, so it
   survives `multiprocessing`.
 - **Internal inconsistencies** raise `InternalError`, and the CLI exits with 70.

@@ -25,7 +25,8 @@ Values are layered. Each layer overrides the one before it, **field by field**:
 1. **Built-in defaults.** Every setting has one, defined in `legaldown_render/style/model.py`.
    The `default` style is exactly these defaults.
 2. **The `extends` chain.** A style names the style it builds on, which can be a built-in name or
-   a path relative to the file. Chains are resolved base first, and cycles are rejected.
+   a path relative to the file. Chains are resolved base first, and cycles are rejected, however
+   the files are spelled (`../dir/a.yaml`, a symbolic link).
 3. **The chosen style**: `--style NAME|PATH`, or `RenderOptions(style=...)`.
 4. **Per-job overrides**: `--set numbering.scheme=mixed` or `overrides={"numbering.scheme": "mixed"}`,
    plus `--locale`. On the command line, text settings take the value as written
@@ -34,7 +35,9 @@ Values are layered. Each layer overrides the one before it, **field by field**:
    or `C:\new` stay exactly as written. To keep quotation marks
    around a value, wrap it in the other kind (`--set 'references.format="{designation}"'`
    gives `{designation}`, and `--set "references.format='\"{designation}\"'"` gives
-   `"{designation}"`). Other settings are read as YAML (`true`, `2`, `[...]`).
+   `"{designation}"`). Other settings are read as YAML (`true`, `2`, `[...]`); a value that is not
+   valid YAML is an error naming the setting and the YAML problem. `version` and `extends` belong
+   to the template file and cannot be overridden: choose the template with `--style`.
 
 Mappings merge field by field, so `headings: {1: {align: center}}` keeps level 1's size and
 weight. Lists, such as `enumeration.levels`, replace the list they override.
@@ -51,7 +54,8 @@ legaldown-render: Invalid style 'default':
 
 To see the effective style, with every setting after all layers are applied, use
 `legaldown-render --print-style --style continental --set locale=cs-CZ`. The output is itself a
-valid style file.
+valid style file, and a self-contained one: every setting is written out and there is no `extends`,
+so it loads from any directory.
 
 ## Built-in styles
 
@@ -100,7 +104,7 @@ values:
   duration: long             # long (12 months) | short | narrow
 
 placeholders:
-  blank: "[_____]"
+  blank: "[_____]"           # empty or whitespace only: renders [TBD: id] (§13.5 rule 6)
   show_prompt: false         # show the question's prompt next to the blank (§15.8)
 
 title_block: { parties: true, effective_date: true, version: false }
@@ -151,6 +155,33 @@ example, decimal headings use `label: "{path}"` and `ref: ".{n}"`. Legal enumera
 `label: "({n})"` and `ref: "({n})"`, so the second item of Section 2.3 is shown as "(b)" and
 referenced as "2.3(b)". Under the `none` scheme, designations are heading text, and item pieces
 are set off by a space ("Termination (a)", §13.3).
+
+### Text templates and their fields
+
+A text setting that holds `{field}` names is checked when the style is loaded. A field is a name
+in braces that is an identifier (`{n}`, `{designation}`); any other braces (`{}`, `{1}`, `{a b}`)
+are literal text. An identifier the setting does not accept is an error naming the setting (a
+typo would otherwise be shown literally), and so is a missing required field.
+
+| Setting | Accepted fields | Required |
+|---|---|---|
+| `numbering.levels[].label` | `{n}`, `{path}` | none |
+| `numbering.levels[].ref` | `{n}` | `{n}` |
+| `enumeration.levels[].label`, `paragraphs.format.label` | `{n}`, `{path}`, `{section}` | none |
+| `enumeration.levels[].ref`, `paragraphs.format.ref` | `{n}`, `{section}` | `{n}` |
+| `references.format` | `{designation}` | `{designation}`, or every reference reads the same |
+| `labels.condition` | `{condition}` | `{condition}`, as §15.8 requires the condition to be shown; an empty value is allowed and shows the bare condition |
+| `labels.attachment_file` | `{file}` | none |
+| every other label | none | none |
+
+```
+$ legaldown-render contract.lgd --set references.format=nope
+legaldown-render: Invalid style 'default':
+  - references.format: must contain {designation} — every reference would read the same (§13.3)
+```
+
+A `ref` is one piece of a designation, so it cannot show the whole `{path}`. A label left unset
+takes the built-in one for the document language, which always passes.
 
 ### Built-in labels
 

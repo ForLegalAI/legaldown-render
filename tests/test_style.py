@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,8 @@ def test_dump_round_trips(tmp_path: Path) -> None:
     style = load_style("continental", overrides={"locale": "de-DE"})
     path = tmp_path / "dumped.yaml"
     path.write_text(dump_style(style))
-    assert load_style(path) == style
+    # The dump is flattened (S8): the same style, without the record of what it extended.
+    assert load_style(path) == replace(style, extends=None)
 
 
 def test_command_line_values_are_typed_by_their_setting() -> None:
