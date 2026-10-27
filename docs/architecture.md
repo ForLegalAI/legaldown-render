@@ -239,7 +239,7 @@ turns into an error.
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
 `ref-not-enumerated` and `path-not-relative` (an Error for an image path that is not relative, §2.3,
 reported here because validator 0.4 does not check image paths), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), and `render-ref-ambiguous`. The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), and `render-ref-ambiguous`. The validator's
 diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
 have none yet: they are about a directive within a block, and the validator makes only a block's
 line public (`Document.line_of`, U2).
@@ -248,15 +248,27 @@ line public (`Document.line_of`, U2).
 
 - Raw HTML in the source is never emitted (§8.7).
 - Every text node and attribute is escaped.
-- A link is a hyperlink (§8.7) unless its URL is empty or its scheme is `javascript`, `vbscript`,
-  `file`, or `data` (a deny-list, `urls.DENIED_SCHEMES`, judged as a browser reads the URL: tabs,
-  newlines, controls, and case are ignored). Every other scheme (`ftp:`, `sip:`, `urn:`, ...) is
-  linked. A link that is not made renders as its text alone, in HTML and in text alike. The
-  builder turns off markdown-it-py's own `validateLink` (which would leave such links as literal
-  Markdown) and keeps them as nodes, so that the resolver can report §2.3 paths and the writers'
-  deny-list is the one gate for every `href` and `src` the HTML writer emits (links, images,
-  value links). A link with no text shows its URL; the text writer leaves out ` <url>` when the URL, less a
+- A link is a hyperlink (§8.7) only if its URL is relative (no scheme, a fragment) or its scheme
+  is one of `urls.LINK_SCHEMES`: `http`, `https`, `mailto`, `tel`, `ftp`, `ftps`, `sftp`, `sip`,
+  `sips`, `sms`, `urn`, `geo`, `news`. It is an allow-list, because a renderer reads documents it
+  did not write (principle 6 in concepts.md): protocol handlers (`ms-msdt:`, `ms-word:`,
+  `search-ms:`, `vscode:`, `intent:`, `blob:`, `jar:`, ...) and pseudo-schemes (`C:\x`,
+  `localhost:8080`) are not links, nor are `javascript:`, `file:`, `data:`. The scheme is read as
+  a browser reads the URL (tabs, newlines, controls, and case are ignored). One predicate,
+  `urls.is_link_target`, serves both writers and the resolver. A link that is not made renders as
+  its text alone, in HTML and in text alike, and the resolver reports a non-empty one as the
+  Warning `render-link-refused` (the writers emit no diagnostics, ADR 0003); an empty URL is
+  text with no diagnostic. The builder turns off markdown-it-py's own `validateLink` (which would
+  leave such links as literal Markdown) and keeps them as nodes, so that the resolver can report
+  §2.3 paths and the allow-list is the one gate for every `href` and `src` the HTML writer emits
+  (links, images, value links). A link with no text shows its URL as written (percent-encoding
+  undone; the `href` stays encoded); the text writer leaves out ` <url>` when the URL, less a
   `mailto:` or `tel:` prefix, is the text.
+- A diagnostic never carries a raw control character from the document: a path or URL quoted in a
+  message (`path-not-relative`, `render-link-refused`) goes through `urls.printable`, which writes
+  every C0/C1 control, DEL, Unicode format character (bidi controls, zero-width), and U+2028/9 as
+  `\xNN` or `\uNNNN`, so a crafted URL cannot move the cursor, set a terminal title, or forge a
+  line on stderr.
 - An image path must be relative with no URI scheme (§2.3), so a remote resource is never fetched
   or embedded. Resolution, not a writer, enforces it: an image whose path has a scheme (`https:`,
   `file:`, `data:`, a Windows drive such as `C:\x`) or starts with `/` or `\` (`//host`) is

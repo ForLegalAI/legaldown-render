@@ -215,8 +215,6 @@ def test_a_typo_in_a_field_is_named() -> None:
 @pytest.mark.parametrize(("setting", "value"), [
     ("labels.condition", "Only if {condition} {n}"),
     ("labels.attachment_file", "{condition}"),
-    ("labels.drafting_note", "{note}"),
-    ("labels.colon", "{n}"),
     ("references.format", "{n}{designation}"),
     ("numbering.levels", [{"label": "{n}", "ref": "{path}"}]),
     ("numbering.levels", [{"label": "{section}", "ref": "{n}"}]),
@@ -227,7 +225,8 @@ def test_a_typo_in_a_field_is_named() -> None:
     ("paragraphs.format", {"label": "{n}", "ref": "{section}"}),
 ])
 def test_invalid_templates_are_refused(setting: str, value: object) -> None:
-    problems = _problems({setting: value})
+    # A paragraph's ref is read only where paragraphs are numbered.
+    problems = _problems({setting: value, "paragraphs.numbered": True})
     assert any(p.startswith(setting) for p in problems), problems
 
 
@@ -270,7 +269,7 @@ def test_an_empty_template_without_a_fallback_still_lacks_its_field() -> None:
     for setting in ("references.format", "numbering.levels", "paragraphs.format"):
         value: object = {"label": "{n}", "ref": ""} if setting == "paragraphs.format" else (
             [{"ref": ""}] if setting == "numbering.levels" else "")
-        assert any(p.startswith(setting) for p in _problems({setting: value}))
+        assert any(p.startswith(setting) for p in _problems({setting: value, "paragraphs.numbered": True}))
 
 
 def test_unset_labels_are_not_checked() -> None:

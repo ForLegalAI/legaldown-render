@@ -39,11 +39,11 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments (see "Text after a comment", below) |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
-| Links (§8.7) | ✅ Every link is a hyperlink in HTML and shows `text <url>` in plain text, whatever its scheme (`ftp:`, `sip:`, `urn:`, ...), except one whose URL is empty or uses `javascript:`, `vbscript:`, `file:`, or `data:`, which shows its text alone. A link with no text shows its URL; the text writer omits `<url>` for an autolink |
+| Links (§8.7) | ✅ A link is a hyperlink in HTML and shows `text <url>` in plain text when its URL is relative, a fragment, or has one of the schemes `http`, `https`, `mailto`, `tel`, `ftp`, `ftps`, `sftp`, `sip`, `sips`, `sms`, `urn`, `geo`, `news` (an allow-list, judged as a browser reads the URL). Any other scheme (`javascript:`, `file:`, `data:`, protocol handlers such as `ms-msdt:`, `vscode:`, `search-ms:`, and pseudo-schemes such as `C:\x` or `localhost:8080`), or an empty URL, is not a link: its text is shown alone, and the Warning `render-link-refused` is reported for a non-empty URL. A link with no text shows its URL as written; the text writer omits `<url>` for an autolink |
 | Images and file-reference paths (§8.7, §2.3) | ✅ A relative path (`../` included, as §2.3 defines no default document root) renders `<img>` in HTML and its alt text in plain text. A path with a URI scheme (`data:` too), an absolute one (`/`, `\`, `//host`), or a Windows drive path is never fetched or embedded: the alt text is shown and the Error `path-not-relative` is reported, which `--strict` refuses. An empty path shows the alt text with no diagnostic |
 | Plain-text layout (§13.6, optional) | ✅ `attachments.separator` (§13.8): `none` prints no `---`; `rule` and `page-break` both print one before the attachments heading and between consecutive attachments, so the heading stays with the first (text has no pages). One quote stays one quote (blank lines keep the `>`), and the blocks of a list item are set apart by blank lines and indented under the item's label, whatever its condition label. A pipe in a table cell is backslash-escaped, and the separator row marks column alignment (`:---`, `:---:`, `---:`). A label a style blanks drops its `label: ` prefix in the title block, party details and signature blocks (a signature row with neither label nor value is omitted); HTML keeps an empty `<dt>` so its grid layout and the `<dl>` stay valid |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML table is dropped with the Warning |
-| Visual blank for a placeholder (§13.5 rule 6) | ✅ `placeholders.blank`; a blank that is empty or only whitespace renders `[TBD: id]` |
+| Visual blank for a placeholder (§13.5 rule 6) | ✅ `placeholders.blank`; a blank that is empty, or only whitespace or invisible format characters (U+200B, U+FEFF), renders `[TBD: id]` |
 | Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
 | Final check (§15.9, SHOULD) | ✅ `--final` / `final=True`: the validator's `placeholder-unfilled` and `template-construct-present` Errors; with `--strict`, the document is refused |
 
@@ -53,7 +53,8 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   files, or `translations` is refused when rendered with answers, as §17.6 requires below Full.
   A template with Errors is refused too, since §15.7.2 defines no output for one.
 - **Line numbers.** The validator's diagnostics name their line, and the CLI prints it. The
-  renderer's own (`render-ref-ambiguous`, `ref-not-enumerated`, `render-not-processed`) do not
+  renderer's own (`render-ref-ambiguous`, `ref-not-enumerated`, `render-not-processed`,
+  `render-link-refused`) do not
   yet ([validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93)).
 - **`path-not-relative` for images.** The renderer reports the Core rule `path-not-relative`
   (§2.3, §16.2) for an image path, because the validator (0.4) does not check image paths; it

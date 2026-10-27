@@ -185,7 +185,7 @@ class _Builder:
         # prose. The builder keeps the node instead: the resolver reports an
         # image path that is not relative (§2.3) and replaces the image with
         # its alt text, and the writers show a refused link as its text
-        # (`urls.DENIED_SCHEMES`), which is the safety markdown-it was for.
+        # (`urls.LINK_SCHEMES`), which is the safety markdown-it was for.
         self.md.validateLink = lambda url: True
         self.env: dict = {}
         self.payloads: list[_Payload] = []

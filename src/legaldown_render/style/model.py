@@ -16,7 +16,7 @@ every key and value against these dataclasses.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from typing import Literal
 
 Counter = Literal["decimal", "lower-alpha", "upper-alpha", "lower-roman", "upper-roman"]
@@ -332,19 +332,39 @@ LABEL_FIELDS: dict[str, TemplateFields] = {
 }
 
 
+def _unused(fields: TemplateFields) -> TemplateFields:
+    """*fields* for a setting the style does not use: a typo is still a typo,
+    but nothing is missing from a setting nothing reads."""
+    return replace(fields, required=frozenset(), why="")
+
+
 def template_settings(style: Style) -> Iterator[tuple[str, str, TemplateFields]]:
-    """Every text template setting of *style* that has been set, as
-    ``(key path, template, fields)``. A label left unset (``None``) takes a
-    built-in one, which is correct by construction."""
-    for name, kind_label, kind_ref in (("numbering", HEADING_LABEL, HEADING_REF),
-                                       ("enumeration", ITEM_LABEL, ITEM_REF)):
+    """Every text template setting of *style* that has been set and substitutes
+    fields, as ``(key path, template, fields)``. A label left unset (``None``)
+    takes a built-in one, which is correct by construction. A plain label
+    (``labels.*`` but ``condition`` and ``attachment_file``) substitutes
+    nothing, so braces in it are text and it is not listed.
+
+    A ``ref`` that is not in use does not have to tell its units apart: the
+    heading levels' under ``numbering.scheme: none`` (a reference shows the
+    heading text, §13.3), the item levels' when lists are not enumerated
+    (``enumeration.enabled: false`` and ``ordered: renumber``), the
+    paragraph's unless ``paragraphs.numbered``. Their fields are still checked
+    for typos."""
+    numbered = style.numbering.scheme != "none"
+    enumerated = style.enumeration.enabled or style.enumeration.ordered == "enumerate"
+    for name, kind_label, kind_ref, in_use in (
+        ("numbering", HEADING_LABEL, HEADING_REF, numbered),
+        ("enumeration", ITEM_LABEL, ITEM_REF, enumerated),
+    ):
         for index, level in enumerate(getattr(style, name).levels):
             yield f"{name}.levels[{index}].label", level.label, kind_label
-            yield f"{name}.levels[{index}].ref", level.ref, kind_ref
+            yield f"{name}.levels[{index}].ref", level.ref, kind_ref if in_use else _unused(kind_ref)
     yield "paragraphs.format.label", style.paragraphs.format.label, ITEM_LABEL
-    yield "paragraphs.format.ref", style.paragraphs.format.ref, ITEM_REF
+    yield ("paragraphs.format.ref", style.paragraphs.format.ref,
+           ITEM_REF if style.paragraphs.numbered else _unused(ITEM_REF))
     yield "references.format", style.references.format, REFERENCE_FORMAT
     for item in fields(Labels):
         template = getattr(style.labels, item.name)
-        if template is not None:
-            yield f"labels.{item.name}", template, LABEL_FIELDS.get(item.name, TemplateFields())
+        if template is not None and item.name in LABEL_FIELDS:
+            yield f"labels.{item.name}", template, LABEL_FIELDS[item.name]

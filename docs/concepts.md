@@ -83,8 +83,10 @@ no random ids, stable anchor names, stable ordering. This makes golden-file test
 lets rendered output be diffed in Git just like the source.
 
 **6. It is safe with documents you did not write.** Raw HTML in the source is never emitted
-(§8.7). All text is escaped for the target format. A link whose URL is empty or uses a script,
-`file:`, or `data:` scheme is shown as its text, and an image whose path is not relative is shown as
+(§8.7). All text is escaped for the target format. A link is made only for a relative URL or
+one of a short list of schemes (`http`, `https`, `mailto`, `tel`, `ftp`, ...); any other
+(`javascript:`, `file:`, `data:`, protocol handlers such as `ms-msdt:`) is shown as its text and
+reported, and an image whose path is not relative is shown as
 its alt text and reported (§2.3). At Rendering level the renderer reads no files other than the document, the chosen
 style template, and the answers file the CLI is given with `--answers`.
 

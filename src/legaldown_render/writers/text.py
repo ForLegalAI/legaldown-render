@@ -41,7 +41,7 @@ from ..tree import (
     Text,
     Value,
 )
-from ..urls import is_link_target
+from ..urls import displayed_url, is_link_target
 
 _INDENT = "    "
 _ADDRESS_SCHEMES = ("mailto:", "tel:")
@@ -54,7 +54,7 @@ def _link_text(href: str, text: str) -> str:
     text alone, and one with no text shows its URL."""
     if not is_link_target(href):
         return text
-    url = href.strip()
+    url = displayed_url(href)
     if not text.strip():
         return url
     address = url

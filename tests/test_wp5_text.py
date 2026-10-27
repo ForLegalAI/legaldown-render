@@ -147,7 +147,7 @@ def test_a_blanked_title_block_label_drops_its_prefix() -> None:
 
 def test_a_label_still_prefixes_its_value() -> None:
     output = text("# A\n\nBody.\n")
-    assert "Registration No.: DE-1" in output
+    assert "Identification No.: DE-1" in output
     assert "Effective date: June 1, 2026" in output
 
 

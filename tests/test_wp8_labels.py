@@ -28,8 +28,8 @@ sides:
 @pytest.mark.parametrize(("language", "identifier", "represented_by"), [
     ("cs", "Identifikační číslo", "Zastoupení"),
     ("sk", "Identifikačné číslo", "Zastúpenie"),
-    ("fr", "N° d'immatriculation", "Représenté(e) par"),
-    ("pl", "Nr rejestrowy", "Reprezentacja"),
+    ("fr", "Numéro d'identification", "Représenté(e) par"),
+    ("pl", "Numer identyfikacyjny", "Reprezentacja"),
 ])
 def test_party_labels_in_each_language(language: str, identifier: str, represented_by: str) -> None:
     colon = BUILTIN_LABELS[language].colon
