@@ -19,7 +19,9 @@ style template or a renderer: ``ref-not-enumerated``, ``render-ref-ambiguous``,
 and ``render-not-processed`` for constructs beyond the Rendering level (§17.5),
 ``render-link-refused`` for a link whose URL scheme is not one links may use
 (§8.7), ``render-term-too-long`` for a term whose text is longer than a
-``{{term:}}`` may show, ``render-term-limit`` for terms that refer to each other too deeply or too often,
+``{{term:}}`` may show, ``render-term-limit`` for terms that refer to each other too deeply or too often
+(or are nested too deeply inside one another's formatting), ``render-designation-cycle`` and
+``render-designation-limit`` for headings that cannot be designated in full under the ``none`` scheme (§13.3),
 and the two file-reference rules of §2.3, which the validator does not check yet:
 ``path-not-relative`` for a path with a URI scheme or an absolute one, and
 ``path-outside-root`` for one that leaves the document root, when a root is

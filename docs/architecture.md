@@ -137,7 +137,7 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
    validator's `exclusive()`). It then labels
    list items by depth and top-level paragraphs, and allocates output anchors. Every anchor
    target is registered with its **designation**: "4.2", "4.2(b)(ii)", or "Termination (a)"
-   under the `none` scheme.
+   under the `none` scheme, where it is worked out from the headings (see below).
 3. **Inlines.** It replaces every source inline with a resolved one:
 
 | Directive | Resolves to | Failure markers |
@@ -170,9 +170,42 @@ so ids stay unique. A definition's anchor is given out in one place, when its de
 resolved. Terms in titles or alt text get none. After everything is resolved, one pass drops the
 link of any `{{term:}}` whose definition got no anchor, so term links always have a target.
 
-Under the `none` scheme, a section's designation is its heading text, computed by a text-only
-pass that gives out no anchors and leaves references out. Headings are numbered with their level
-clamped to 1–5, as the validator numbers them.
+Headings are numbered with their level clamped to 1–5, as the validator numbers them.
+
+**Designations under the `none` scheme (§13.3).** A section's designation is its heading as
+rendered, as plain text with white space collapsed: the `{{ref:}}`s and `{{term:}}`s in it are
+resolved (a reference shows `references.format` applied to its target's designation, so
+`# About {{ref: ov}}` is "About Overview"), a broken reference shows its marker. An item's or
+paragraph's designation is its section's with the item pieces after it ("Termination (a)"). A
+heading can refer to a heading, item or paragraph anywhere, so designations are worked out in
+four steps, only when a heading, or a term a heading uses, holds a `{{ref:}}` (otherwise the first
+step's text is final):
+
+1. Every section, item and paragraph is numbered on a **provisional** designation: the heading's
+   text-only reading (`Resolver._title_text`, which leaves references out). Each target records
+   its section and the pieces after it (`_Target.section_index`, `parts`).
+2. `Resolver._designate` works out every section's designation once, by a depth-first walk in
+   document order that memoises: a reference reads the designation of its target (an item's or
+   paragraph's is its pieces put together again on its section's, `_compose`), which is worked out
+   on the spot if it is not known yet. The walk reads headings with `_title_text`, so it gives out
+   no anchor, and reports nothing itself (what it resolves is read again in its place, where a
+   diagnostic about a heading is made once); its term texts have a cache of their own, apart from the
+   later pass's.
+3. Where any designation differs from the provisional one, the numbering of step 1 is done again on the
+   final designations (labels, designations, `render-ref-ambiguous` slots). Anchors are given out
+   in the same order and so come out the same.
+4. The inlines are resolved as for every scheme, now with every designation known.
+
+A heading that reads itself again (directly, through other headings or terms, or through its own
+item) reads as its provisional text where the circle closes, with the Warning
+`render-designation-cycle`. A walk through more than 32 headings, a designation longer than 1,000
+characters once its references are resolved (a chain of headings that each cite the next twice would
+ask for 2^n), or inline levels nested past 60 while headings and terms are read through each other,
+also give the heading's provisional text, with `render-designation-limit` (so does a term the walk
+cut by the term limits); a `{{ref:}}` never shows more than the first 1,000 characters of a
+designation. So a heading in a cycle or past a cap, or one whose terms reach into one, may read
+differently from the designation references show; the Warning says so. Every other heading reads
+exactly as its designation.
 
 ### 5. Write (`writers/`)
 
@@ -242,7 +275,7 @@ Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can ev
 `ref-not-enumerated`, `path-not-relative` and `path-outside-root` (Errors for a file reference that is
 not relative, or that leaves the document root, §2.3; reported here because validator 0.4 checks
 neither), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, or 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), a `{{term:}}` shows its id), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters under the `none` scheme, or a reference to a heading longer than that), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
 diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
 `file:line:`.
 
@@ -353,6 +386,7 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_numbering.py` | Counter formats, label templates and the preamble's `{section}` |
 | `tests/test_build.py` | Building the tree: comment-only items and quotes, emphasis next to a directive, spacing where an inline comment was dropped |
 | `tests/test_terms.py` | What `{{term:}}` shows, references inside terms, terms that name themselves or each other, the cap on a term text |
+| `tests/test_none_designations.py` | Designations under the `none` scheme: references and terms in headings, items and paragraphs under them, ambiguity on the final designations, cycles, the depth, length and nesting limits, the lines of the Warnings, work bounds, invariants on random documents |
 | `tests/test_terms_budget.py` | Reuse of worked-out term texts, the work budget and depth limit for terms that name each other. Bounds the work by counting resolved directives, never by timing |
 | `tests/test_diagnostic_lines.py` | The line and file of every renderer diagnostic: in each kind of block (paragraph, list item, nested item, table, quote, heading, preamble) and at frontmatter keys, the repeats left out, the tree nodes' lines, and `file:line:` on the command line |
 | `tests/test_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme allow-list, empty URLs and empty link text, and how a refusal is reported |

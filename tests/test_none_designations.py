@@ -4,6 +4,7 @@ headings that refer to each other in a circle, too deeply, or at too great a len
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import pytest
 from conftest import FRONT, text
@@ -414,3 +415,16 @@ def test_a_preamble_list_is_numbered_the_same_on_every_pass() -> None:
     body = "- pre {#p}\n\n# A {{ref: b}} {#a}\n\n- one {#i}\n\n# B {#b}\n\nSee {{ref: i}}.\n"
     out = text(body, overrides=NONE)
     assert "See A B (a)." in out
+
+
+def test_file_reference_findings_are_reported_once_whatever_designates_them(tmp_path: Path) -> None:
+    # A frontmatter path, and an image and an include in a heading that other headings refer to.
+    source = ("---\ntitle: T\nattachments:\n  - id: annex\n    title: Annex\n    file: /etc/annex.lgd\n---\n\n"
+              "# A ![logo](../../logo.png) {{include: ../../part.lgd}} {#a}\n\n# B {{ref: a}} {#b}\n\n"
+              "# C {{ref: b}} {#c}\n\nSee {{ref: c}}.\n")
+    result = render(source, format="text", overrides=NONE, document_root=tmp_path)
+    found = [(d.rule, d.line) for d in result.diagnostics if d.rule.startswith("path-")]
+    assert sorted(found) == sorted([("path-not-relative", _line(source, "file: /etc")),
+                                    ("path-outside-root", _line(source, "# A ")),
+                                    ("path-outside-root", _line(source, "# A "))])
+    assert [d.line for d in result.diagnostics if d.rule == "render-not-processed"] == [_line(source, "# A ")]
