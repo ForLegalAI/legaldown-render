@@ -239,7 +239,7 @@ turns into an error.
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
 `ref-not-enumerated` and `path-not-relative` (an Error for an image path that is not relative, §2.3,
 reported here because validator 0.4 does not check image paths), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested or 2,000 computed term texts a `{{term:}}` shows its id), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, or 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), a `{{term:}}` shows its id), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
 diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
 have none yet: they are about a directive within a block, and the validator makes only a block's
 line public (`Document.line_of`, U2).
@@ -264,7 +264,9 @@ line public (`Document.line_of`, U2).
   (links, images, value links). A link with no text shows its URL as written (percent-encoding
   undone; the `href` stays encoded); the text writer leaves out ` <url>` when the URL, less a
   `mailto:` or `tel:` prefix, is the text.
-- What the CLI prints on stderr never carries a raw control character from the document: `cli._report`
+- What the CLI prints on stderr never carries a raw control character from the document or the command
+  line: every error line and every argparse error goes through `cli._safe` (`urls.printable` per line), so
+  an input, answers, output or style name, a locale or a `--set` key echoed in one is escaped, and `cli._report`
   passes the file name and every diagnostic message (the renderer's and the validator's, which quote
   ids, paths and terms as written) through `urls.printable`, which writes every C0/C1 control, DEL,
   Unicode format character (bidi controls, zero-width), and U+2028/9 as `\xNN` or `\uNNNN`, so a

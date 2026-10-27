@@ -101,9 +101,11 @@ It is checked against the specification's own examples and fixtures corpus (`tes
   worked out inside a cycle depends on which terms are open, so it is kept with the open terms it
   depends on and reused only where those are open; a text with no cycle is worked out once per term,
   also in a heading read before the targets are known (§13.3). Terms that name each other can still
-  ask for more different texts than any cache holds, so the work is bounded: past 2,000 texts worked
-  out in one document, or 32 terms open inside one another, a `{{term:}}` shows its `label=` or
-  definition id and the Warning `render-term-limit` is reported, once. A term text is capped at 1,000 characters
+  ask for more different texts than any cache holds, so the extra work is bounded: a term's first text
+  is free, and past 200,000 inline nodes resolved inside later texts of the same term (nested ones
+  included), or 32 terms open inside one another, a `{{term:}}` shows its `label=` or definition id
+  and the Warning `render-term-limit` is reported, once. Any number of terms that do not name each
+  other resolve in full and never reach the limit. A term text is capped at 1,000 characters
   of plain text, checked as it is built (no real defined term comes near it; a chain of terms that each
   read the next twice would otherwise ask for a text of 2^n words): a longer one is shown by its
   definition id in `{{term:}}` (a `label=` still wins), and the Warning `render-term-too-long` names the
