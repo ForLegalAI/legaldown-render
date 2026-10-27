@@ -226,7 +226,7 @@ with `RenderOptions(untrusted=True, document_root=...)` (`legaldown-render --unt
   Functions (`calc()`, `var()`, `min()`), `!important` and anything else are refused. The same grammar
   holds for a `Style` object and for overrides.
 - `html.extra_css` must be empty.
-- YAML text is at most 64 KiB and may not use aliases.
+- YAML text is at most 64 KiB and may not use aliases. (A style, trusted or not, nests 32 levels at most.)
 - An error names the setting and the problem and never quotes the style, a key or a path, so it can
   be shown to whoever sent the style.
 - The built-in styles and the examples in this document all pass.

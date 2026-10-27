@@ -385,8 +385,9 @@ out when the validator reported the same path at the same line, or at none (`dia
   `_convert` for a mapping and, through `style_to_dict`, for a `Style` object and for settings
   objects given as overrides. The grammars allow no function, no variable and no `!important`, so
   `calc(1em + 2px)` and `var(--x)` are refused. `html.extra_css` must be empty. YAML text is at most
-  64 KiB (UTF-8 bytes) and may not use aliases (the "billion laughs" shape; a nesting that exhausts
-  the stack is a `StyleError` too). A message names the setting and the problem, and never quotes
+  64 KiB (UTF-8 bytes) and may not use aliases (the "billion laughs" shape). Every style, trusted or
+  not, may nest 32 levels at most, in YAML text (refused by the scanner, `style/loader.py:_StyleLoader`,
+  before anything is built, as PyYAML's cost is quadratic in the depth) and in a mapping. A message names the setting and the problem, and never quotes
   the style, a key, a template field or a path (a YAML error gives the line and column only), so it
   can be shown to the user who sent it. `RenderOptions.untrusted` also requires a `document_root`
   (§2.3: a renderer for documents it does not control SHOULD set one): without it `render` raises an

@@ -10,12 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 from conftest import DOCUMENTS, FEATURES, FRONT
 
 from legaldown_render import OptionsError, RenderOptions, StyleError, builtin_styles, load_style, render
 from legaldown_render.cli import main
 from legaldown_render.style import HeadingStyle, Style, Typography, style_to_dict
-from legaldown_render.style.loader import MAX_UNTRUSTED_STYLE_BYTES
+from legaldown_render.style.loader import MAX_STYLE_DEPTH, MAX_UNTRUSTED_STYLE_BYTES
 
 SECRET = "hunter2-correct-horse"
 DOC = FRONT + "\n# One {#one}\n\nText {{ref: one}}.\n"
@@ -253,15 +254,74 @@ def test_a_trusted_text_has_no_cap() -> None:
     assert load_style(_text_of(MAX_UNTRUSTED_STYLE_BYTES + 1000)) == Style()
 
 
-def test_a_deeply_nested_style_is_refused_not_a_crash() -> None:
-    assert "nested too deeply" in str(refused("a: " + "[" * 20000 + "\n" + "]" * 20000 + "\n"))
+def _flow(depth: int) -> str:
+    return "a: " + "[" * depth + "\n" + "]" * depth + "\n"
+
+
+def _block(depth: int) -> str:
+    return "".join(" " * level + "a:\n" for level in range(depth)) + " " * depth + "b: 1\n"
+
+
+@pytest.mark.parametrize("trusted", [True, False])
+def test_the_nesting_limit_is_exact(trusted: bool) -> None:
+    """A style is read to a fixed depth, in flow and in block form: the limit
+    that keeps the scanner's cost linear in the size of the text."""
+    limit = MAX_STYLE_DEPTH
+    for make in (_flow, _block):
+        assert "nested too deeply" in str(_loaded(make(limit + 1), trusted)), make
+        assert "nested too deeply" not in str(_loaded(make(limit - 1), trusted)), make
+    mixed = "a: " + "[" * (limit - 1) + "]" * (limit - 1) + "\n"
+    assert "nested too deeply" not in str(_loaded(mixed, trusted))
+
+
+def _loaded(text: str, trusted: bool) -> object:
+    try:
+        load_style(text, trusted=trusted)
+    except StyleError as error:
+        return error
+    return ""
+
+
+def test_a_deeply_nested_text_is_refused_after_a_bounded_amount_of_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Counted, not timed: the scanner opens at most MAX_STYLE_DEPTH + 1 levels
+    however deep the text goes, so the cost is linear in its size (PyYAML's
+    is quadratic in the depth it is allowed to reach)."""
+    from legaldown_render.style import loader
+
+    opened = []
+    for name in ("fetch_flow_collection_start", "add_indent"):
+        original = getattr(yaml.SafeLoader, name)
+        monkeypatch.setattr(yaml.SafeLoader, name, lambda self, *args, _o=original: opened.append(1) or _o(self, *args))
+    for text, trusted in ((_flow(20000), False), (_block(300), False), ("- " * 30000 + "x\n", False),
+                          (_flow(200000), True)):  # a style file has no size cap
+        opened.clear()
+        error = _loaded(text, trusted)
+        assert "the text is nested too deeply" in str(error)
+        assert len(opened) <= 2 * (loader.MAX_STYLE_DEPTH + 1)
+
+
+def test_a_deeply_nested_mapping_is_refused_not_a_crash() -> None:
     deep: dict = {}
     node = deep
     for _ in range(5000):
         node["a"] = {}
         node = node["a"]
-    assert "nested too deeply" in str(refused(deep))
-    assert "nested too deeply" in str(refused({"typography": deep}))
+    for trusted in (True, False):
+        assert "nested too deeply" in str(_loaded_mapping(deep, trusted))
+        assert "nested too deeply" in str(_loaded_mapping({"typography": deep}, trusted))
+    nested: list = []
+    for _ in range(5000):
+        nested = [nested]
+    assert "nested too deeply" in str(_loaded_mapping({"enumeration": {"levels": nested}}, False))
+    assert "nested too deeply" in str(refused("default", {"enumeration": {"levels": nested}}))
+
+
+def _loaded_mapping(style: dict, trusted: bool) -> object:
+    try:
+        load_style(style, trusted=trusted)
+    except StyleError as error:
+        return error
+    return ""
 
 
 def test_a_non_mapping_and_a_wrong_version_are_refused_without_the_value() -> None:

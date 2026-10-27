@@ -41,9 +41,42 @@ STYLE_FORMAT_VERSION = 1
 #: The longest YAML text an untrusted style may be (bytes of UTF-8).
 MAX_UNTRUSTED_STYLE_BYTES = 64 * 1024
 
+#: How deep a style may nest, in YAML text and in a mapping. A style nests five
+#: levels at most (``headings.1.size``); the limit is what keeps the cost of
+#: reading one linear in its size, since PyYAML's scanner is quadratic in the
+#: nesting depth of what it reads.
+MAX_STYLE_DEPTH = 32
+
 #: How an untrusted style is named in a message, instead of its own name (which
 #: is source text) or a path.
 _UNTRUSTED_SOURCE = "'untrusted style'"
+
+
+class _StyleLoader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` that refuses a text nested more than
+    :data:`MAX_STYLE_DEPTH` levels, as the scanner reads it: before any
+    structure is built, and before the quadratic cost of a deep one is paid."""
+
+    def _check_depth(self) -> None:
+        if self.flow_level + len(self.indents) >= MAX_STYLE_DEPTH:
+            raise yaml.scanner.ScannerError(None, None, "the text is nested too deeply", self.get_mark())
+
+    def fetch_flow_collection_start(self, TokenClass: Any) -> None:  # noqa: N803
+        self._check_depth()
+        super().fetch_flow_collection_start(TokenClass)
+
+    def add_indent(self, column: int) -> bool:
+        if self.indent < column:
+            self._check_depth()
+        return super().add_indent(column)
+
+
+def _load_yaml(text: str) -> Any:
+    return yaml.load(text, Loader=_StyleLoader)  # noqa: S506 - a SafeLoader
+
+
+class _TooDeep(Exception):
+    """A mapping nested more than :data:`MAX_STYLE_DEPTH` levels."""
 
 
 def builtin_styles() -> list[str]:
@@ -81,10 +114,9 @@ def load_style(
     """
     try:
         return _load(style, overrides, trusted)
-    except RecursionError:
-        if trusted:
-            raise
-        raise StyleError(_UNTRUSTED_SOURCE, ["the style is nested too deeply"]) from None
+    except (_TooDeep, RecursionError):  # the second only as a last resort
+        raise StyleError(_UNTRUSTED_SOURCE if not trusted else "'(style)'",
+                         ["the style is nested too deeply"]) from None
 
 
 def _load(style: Any, overrides: Mapping[str, Any] | None, trusted: bool) -> Style:
@@ -216,7 +248,7 @@ def _parse(text: str, source: str, trusted: bool = True) -> dict:
     if not trusted:
         _check_untrusted_text(text)
     try:
-        raw = yaml.safe_load(text)
+        raw = _load_yaml(text)
     except yaml.YAMLError as error:
         # PyYAML's message quotes the source around the problem, which for a
         # style from elsewhere would show a reader whatever the text holds.
@@ -243,7 +275,7 @@ def _check_untrusted_text(text: str) -> None:
     if len(text.encode("utf-8", "replace")) > MAX_UNTRUSTED_STYLE_BYTES:
         raise StyleError(_UNTRUSTED_SOURCE, [f"the style text is larger than {MAX_UNTRUSTED_STYLE_BYTES // 1024} KiB"])
     try:
-        for event in yaml.parse(text, Loader=yaml.SafeLoader):
+        for event in yaml.parse(text, Loader=_StyleLoader):
             if isinstance(event, yaml.AliasEvent):
                 raise StyleError(_UNTRUSTED_SOURCE, [f"YAML aliases are not allowed (line {event.start_mark.line + 1})"])
     except yaml.YAMLError:
@@ -315,10 +347,17 @@ def _refuse_meta_overrides(expanded: Mapping) -> None:
         raise StyleError("overrides", problems)
 
 
-def _copy(value: Any) -> Any:
-    """A deep copy of *value* with every mapping made a plain dict."""
+def _copy(value: Any, depth: int = 0) -> Any:
+    """A deep copy of *value* with every mapping made a plain dict. A value
+    nested more than :data:`MAX_STYLE_DEPTH` levels raises :class:`_TooDeep`."""
+    if depth > MAX_STYLE_DEPTH:
+        raise _TooDeep
     if isinstance(value, Mapping):
-        return {str(key): _copy(item) for key, item in value.items()}
+        return {str(key): _copy(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copy(item, depth + 1) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_copy(item, depth + 1) for item in value)
     return copy.deepcopy(value)
 
 
@@ -345,7 +384,7 @@ def parse_override(key: str, text: str) -> Any:
             return stripped[1:-1]
         return text
     try:
-        return yaml.safe_load(text) if text.strip() else ""
+        return _load_yaml(text) if text.strip() else ""
     except yaml.YAMLError as error:
         raise StyleError("overrides", [f"{key}: the value is not valid YAML: {_yaml_problem(error)}"]) from None
 
