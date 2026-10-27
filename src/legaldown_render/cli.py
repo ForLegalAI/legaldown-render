@@ -3,7 +3,7 @@
 Exit codes: 0 — rendered (document errors, if any, are shown as markers and
 listed on stderr); 1 — not rendered: refused under ``--strict``, or the
 document cannot be read (including input that is not UTF-8) or the output cannot
-be written; 2 — a usage or style problem; 70 — an internal error (a bug to
+be written; 2 — a usage, style or document-root problem; 70 — an internal error (a bug to
 report).
 
 Documents and output are always UTF-8 (the HTML says ``<meta charset="utf-8">``),
@@ -22,7 +22,7 @@ from legaldown import AnswersError, load_answers
 
 from . import __version__
 from .api import RenderOptions, render
-from .errors import DocumentError, InternalError, RenderRefused, StyleError
+from .errors import DocumentError, InternalError, OptionsError, RenderRefused, StyleError
 from .style import builtin_styles, dump_style, load_style, parse_override
 from .urls import printable
 from .writers import FORMATS, file_extension, format_for_path
@@ -89,6 +89,11 @@ def _parser() -> argparse.ArgumentParser:
                              "written; one pair of matching outer quotes is removed (wrap the value in the "
                              "other kind of quote to keep quotation marks). Others read it as YAML, e.g. true or 2")
     parser.add_argument("--locale", help="formatting locale, e.g. en-US or cs-CZ (default: the style's, else the document language)")
+    parser.add_argument("--root", metavar="DIR",
+                        help="the document root (§2.3): a file reference (an include, an attachment, amends, "
+                             "supersedes, a translation, an image) that leaves DIR is an error "
+                             "(path-outside-root), and the file is not used. The document must be inside DIR "
+                             "(standard input counts as at DIR itself). Without it, ../ is allowed")
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
     parser.add_argument("--answers", metavar="FILE",
@@ -193,10 +198,11 @@ def main(argv: list[str] | None = None) -> int:
 
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,
                             strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment,
-                            filename="" if args.input == "-" else Path(args.input).name)
+                            filename="" if args.input == "-" else Path(args.input).name,
+                            document_root=args.root, document_path=None if args.input == "-" else args.input)
     try:
         result = render(source, options)
-    except StyleError as error:
+    except (StyleError, OptionsError) as error:
         _complain(f"legaldown-render: {error}")
         return 2
     except RenderRefused as error:

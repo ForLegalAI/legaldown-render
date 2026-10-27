@@ -12,9 +12,10 @@ Preferences are split in two, on purpose:
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 import yaml
@@ -66,6 +67,23 @@ class RenderOptions:
     #: With ``answers``, the lines of the diagnostics are those of the
     #: assembled document (§15.8), not of the template file.
     filename: str = ""
+    #: The document root (§2.3): a boundary directory that no file reference of
+    #: the document (an ``{{include:}}``, ``attachments[].file``,
+    #: ``amends.file``, ``supersedes.file``, a ``translations`` value, an image)
+    #: may leave. A path that does is reported as ``path-outside-root``, an
+    #: Error, and never used. None (the default) configures no root, as §2.3
+    #: defines none: ``../`` is then valid, only a path that is not relative is
+    #: reported. A renderer for documents it does not control SHOULD set one
+    #: (§2.3). The check is lexical: nothing is read or resolved, and a symbolic
+    #: link is not followed.
+    document_root: str | Path | None = None
+    #: Where the document is, to say where in the root it sits: the base of a
+    #: path is the document's directory. Used only with ``document_root``,
+    #: and without it the document is at the root, as text given to :func:`render`
+    #: is. ``render_file`` and the command line set it from the path they read,
+    #: and it names the file of the diagnostics when ``filename`` is empty. A
+    #: document outside the root is an :class:`OptionsError`.
+    document_path: str | Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,8 +113,8 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
 
     Problems in the document never raise: they render as failure markers and
     are listed in ``diagnostics``. Raises :class:`StyleError` for an invalid
-    style or setting, :class:`OptionsError` for an unknown output format,
-    :class:`DocumentError` for a document that cannot be
+    style or setting, :class:`OptionsError` for an unknown output format or a
+    document outside its document root, :class:`DocumentError` for a document that cannot be
     read, and :class:`RenderRefused` in strict mode when the document has
     errors, or when a template cannot be assembled with ``answers``.
     """
@@ -106,6 +124,9 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
         raise TypeError("pass either a RenderOptions or keyword settings, not both")
     if options.format not in FORMATS:
         raise OptionsError(f"unknown output format '{options.format}' (known: {', '.join(FORMATS)})")
+    base = _document_base(options)
+    if options.document_path is not None and not options.filename:
+        options = replace(options, filename=PurePath(options.document_path).name)
     overrides = dict(options.overrides)
     if options.locale:
         overrides["locale"] = options.locale
@@ -121,7 +142,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
-    tree, extra = _resolve(document, result, style)
+    tree, extra = _resolve(document, result, style, base)
     # The renderer's findings that the validator's or the assembly's already
     # name (the same rule, level and message), wherever they are, are not repeated.
     diagnostics += [d for d in extra if not repeats(d, diagnostics)]
@@ -149,7 +170,36 @@ def render_file(path: str | Path, options: RenderOptions | None = None, /, **set
         settings = {}
     if not options.filename and not settings:
         options = replace(options, filename=Path(path).name)
+    if options.document_path is None and not settings:
+        options = replace(options, document_path=path)
     return render(source, options, **settings)
+
+
+def _document_base(options: RenderOptions) -> str | None:
+    """The directory of the document relative to the document root, ``/``-separated
+    (``"."`` at the root), or None when no root is configured (§2.3). Lexical:
+    the paths are made absolute against the working directory and compared as
+    text, with no file system access. Raises OptionsError for an empty root or
+    path, and for a document that is not inside the root (or, on Windows, is on
+    another drive)."""
+    if options.document_root is None:
+        return None
+    if os.fspath(options.document_root) == "":
+        raise OptionsError("document_root is empty: name the directory file references may not leave")
+    if options.document_path is not None and os.fspath(options.document_path) == "":
+        raise OptionsError("document_path is empty: name the document's file, or leave it out")
+    root = os.path.abspath(options.document_root)
+    directory = root if options.document_path is None else os.path.dirname(os.path.abspath(options.document_path))
+    try:
+        relative = os.path.relpath(directory, root)
+    except ValueError:  # Windows: another drive
+        raise OptionsError(f"the document {options.document_path} is outside the document root "
+                           f"{options.document_root}: it is on another drive") from None
+    parts = PurePath(relative).parts
+    if parts and parts[0] == "..":
+        raise OptionsError(f"the document {options.document_path} is outside the document root "
+                           f"{options.document_root}: the root must contain the document")
+    return "/".join(parts) or "."
 
 
 def _assemble(source: str, answers: Mapping[str, Any], filename: str = "") -> tuple[str, list[Diagnostic]]:
@@ -184,7 +234,8 @@ def _parse(source: str, filename: str = "") -> Document:
         raise DocumentError(f"The document cannot be read: {error}") from error
 
 
-def _resolve(document: Document, result: ValidationResult, style: Style) -> tuple[RenderTree, list[Diagnostic]]:
+def _resolve(document: Document, result: ValidationResult, style: Style,
+             base: str | None) -> tuple[RenderTree, list[Diagnostic]]:
     diagnostics: list[Diagnostic] = []
     # Raw HTML is never emitted; the validator reports it (raw-html, §8.7).
     tree = build_tree(document, result)
@@ -207,7 +258,7 @@ def _resolve(document: Document, result: ValidationResult, style: Style) -> tupl
             ))
             locale = parse_locale("en")
     assert locale is not None
-    resolved, found = resolve_tree(tree, document, result, style, Formatter(locale, style.values))
+    resolved, found = resolve_tree(tree, document, result, style, Formatter(locale, style.values), base)
     return resolved, diagnostics + found
 
 
