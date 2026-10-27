@@ -439,8 +439,11 @@ class _Builder:
                         continue  # never emitted (§8.6, §8.7)
                     elif (built := self.block(child, [], top_level=False)) is not None:
                         blocks.append(built)
-                if item.blocks and all(child.kind == "html" for child in item.blocks):
-                    continue  # only a comment: the item is removed
+                # Only a comment: the item is removed. Defensive: an item a
+                # marker belongs to (an anchor or a condition) never vanishes.
+                if item.blocks and all(child.kind == "html" for child in item.blocks) \
+                        and not identifier and not condition:
+                    continue
                 items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition))
         finally:
             self.depth -= 1

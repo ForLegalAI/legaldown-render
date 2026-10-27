@@ -281,3 +281,21 @@ def test_a_cycle_through_a_reference_site_inside_another_terms_definition() -> N
             '"C {{term: b}}" {{def: c}} z.\n\nSee {{term: b}}.\n')
     assert "See B A and" in text(body)
     assert "B A and" in html(body)
+
+
+def test_a_comment_only_item_with_a_marker_is_kept() -> None:
+    # Defensive (B2): an item a marker belongs to never vanishes. The
+    # validator does not place a marker on a comment-only item, so a marker
+    # is made up here to drive the builder's guard.
+    from legaldown import PlacedMarker
+
+    from legaldown_render.build import _Builder
+
+    document = parse(FRONT + "# A\n\n- <!-- c -->\n- b\n")
+    result = validate(document)
+    marker = PlacedMarker(section=0, block=0, fragment=0, offset=0, source="<!-- c -->",
+                          identifier="x", condition="", item=0)
+    out = _Builder(document, result).list(document.sections[0].blocks[0], [marker])
+    assert out is not None and [item.anchor_id for item in out.items] == ["x", ""]
+    plain = _Builder(document, result).list(document.sections[0].blocks[0], [])
+    assert plain is not None and len(plain.items) == 1
