@@ -170,11 +170,14 @@ _TERM_TEXTS_PER_TERM = 32
 #: which is where the Python stack can run out: the builder allows 100 levels in
 #: one block (``build.MAX_NESTING``), but terms read inside terms, and headings
 #: read through the references in other headings, stack one block's levels on
-#: another's. A ``{{term:}}`` met inside an open term, or while designations are
-#: worked out, that is nested this deep shows its label or id
-#: (``render-term-limit``); a heading this deep stops reading others
-#: (``render-designation-limit``). A single block's nesting, up to the
-#: builder's limit, never reaches it.
+#: another's. Counted from where the outermost open term began (or from the
+#: start of the walk that works out designations, which has no block around
+#: it): the levels a block already has where its first term opens are its own.
+#: A ``{{term:}}`` met inside an open term, or while designations are worked
+#: out, that is nested this deep shows its label or id (``render-term-limit``);
+#: a heading this deep stops reading others (``render-designation-limit``).
+#: The first term of a block opens however deep the block is nested, up to the
+#: builder's limit.
 _MAX_NEST = 60
 
 #: Under the ``none`` scheme (§13.3) a section is designated by its heading with
@@ -191,8 +194,7 @@ _DESIGNATION_LIMIT = (
     f"Headings and the terms in them refer to each other too deeply or too often (more than "
     f"{_MAX_DESIGNATION_DEPTH} headings, or terms or formatting nested too far), or a heading reads longer than "
     f"{_MAX_DESIGNATION_TEXT} characters once its references are resolved; under the none scheme such a heading is "
-    f"designated by its text as written, without the references in it, and a reference shows at most its first "
-    f"{_MAX_DESIGNATION_TEXT} characters."
+    f"designated by its text as written, without the references in it."
 )
 
 #: What a reference can be resolved from: before the targets are known, only the
@@ -295,6 +297,8 @@ class Resolver:
         self._stage = _EARLY
         # Inline levels being resolved inside one another (see _MAX_NEST).
         self._nest = 0
+        # The level at which the outermost open term began (see _while_open).
+        self._nest_base = 0
         # Under the none scheme, while designations are worked out (see
         # _designate): each section's designation (None until known), its
         # text-only reading, its title, the sections open inside one another,
@@ -307,6 +311,8 @@ class Resolver:
         self._cycles: list[int] = []
         self._limited = False
         self._limited_at: int | None = None
+        # The designation of each section, once numbered (for a long one, see _cut_text).
+        self._section_texts: list[str] = []
         # The section being structured, for the targets it holds.
         self._section_index: int | None = None
         self.attachment_anchors: dict[str, str | None] = {}
@@ -332,6 +338,7 @@ class Resolver:
                 self.used_anchors = anchors
                 self.targets, self.designation_slots, self.section_presences = {}, {}, []
                 sections, preamble = self._structure_all(designations)
+        self._section_texts = [section.designation or "" for section in sections]
         self._stage = _FINAL
         resolve = self._resolve_inlines
         # In document order, so that the first of several definitions of a
@@ -392,8 +399,10 @@ class Resolver:
         """True if a section's designation may depend on a ``{{ref:}}``: one
         stands in a heading or in the text of a term the headings use,
         directly or through other terms, or in the validator's own text of
-        such a term (read where the definition is not in the body). Without
-        one, the text-only reading of a heading is its designation."""
+        such a term where its definition is not in the body (that text is
+        what the term shows then). Without one, the text-only reading of a
+        heading is its designation. A value of the frontmatter a heading
+        shows (``{{party:}}``, ``{{attach:}}``) is not read for one."""
         lookup = self.result.index.definition_lookup
         seen: set[str] = set()
         pending = [section.title for section in sections]
@@ -409,7 +418,7 @@ class Resolver:
                     source = self.term_sources.get(directive.positional)
                     if source is not None:
                         pending.append(source.children)
-                    if "{{" in (lookup.get(directive.positional) or ""):
+                    elif "{{" in (lookup.get(directive.positional) or ""):
                         return True
         return False
 
@@ -463,7 +472,11 @@ class Resolver:
         (``render-designation-limit``), which is worked out when it is next
         reached by a shorter way, or in its turn. Neither is kept. A designation
         that reads longer than :data:`_MAX_DESIGNATION_TEXT` characters once its
-        references are resolved is its text-only reading too, which is kept."""
+        references are resolved is its text-only reading too, which is kept. A
+        heading read from the text of a term that it uses itself is a circle
+        through that term: what it reads here is not kept (it is worked out
+        again where that term is not open), and ``render-designation-cycle``
+        reports it."""
         memo = self._memo[index]
         if memo is not None:
             return memo
@@ -471,17 +484,28 @@ class Resolver:
         if index in self._stack:
             self._cycles.append(index)
             return provisional
-        if len(self._stack) >= _MAX_DESIGNATION_DEPTH or self._nest >= _MAX_NEST:
+        if len(self._stack) >= _MAX_DESIGNATION_DEPTH or self._nest - self._nest_base >= _MAX_NEST:
             self._limit_hit()
             return provisional
+        # A term open around this heading (the heading is read from that term's
+        # text) is cut short wherever the heading uses it, so what the heading
+        # reads depends on where it was asked for (see _while_open).
+        around = set(self._terms_open)
+        outer_cut, self._cut = self._cut, set()
         self._stack.append(index)
         try:
             text = self._title_text(self._titles[index])
         finally:
             self._stack.pop()
+            cut, self._cut = self._cut, outer_cut | (self._cut & around)
         if len(text) > _MAX_DESIGNATION_TEXT and text != provisional:
             self._limit_hit(index)
             text = provisional
+        if cut & around:
+            # Not kept: it is worked out afresh where no such term is open. The
+            # heading reads through itself by way of the term, a circle.
+            self._cycles.append(index)
+            return text
         self._memo[index] = text
         return text
 
@@ -497,7 +521,11 @@ class Resolver:
         out: the designation of its section, with its item or paragraph pieces."""
         if target.section_index is None:
             return target.designation
-        return _compose(target.parts, self._designation(target.section_index))
+        base = self._designation(target.section_index)
+        designation = _compose(target.parts, base)
+        if len(designation) > _MAX_DESIGNATION_TEXT:
+            designation = _compose(target.parts, self._cut_text(base))
+        return designation
 
     def _resolve_section(self, section: Section) -> Section:
         with self._at(section.line):
@@ -928,15 +956,31 @@ class Resolver:
             )
         elif target.slot is not None and (clashes := self._clashes(target.slot, target.designation)):
             self._warn("render-ref-ambiguous", self._ambiguity_message(target_id, target, clashes))
-        return CrossRef(self._reference_text(target.designation), target.anchor or "")
+        designation = target.designation
+        if len(designation) > _MAX_DESIGNATION_TEXT:
+            if self.textual and target.section_index is not None:
+                designation = _compose(target.parts, self._cut_text(self._section_texts[target.section_index]))
+            else:
+                designation = self._cut_text(designation)
+        return CrossRef(self._reference_text(designation), target.anchor or "")
+
+    def _cut_text(self, text: str) -> str:
+        """*text*, a heading's designation, as a reference shows it: at most
+        its first :data:`_MAX_DESIGNATION_TEXT` characters, so that a heading
+        that is long as written cannot be pasted unbounded by thousands of
+        references. An item or paragraph keeps its own piece after it."""
+        if len(text) <= _MAX_DESIGNATION_TEXT:
+            return text
+        self._warn(
+            "render-designation-limit",
+            f"A reference to the heading '{printable(text[:40])}...' shows only its first "
+            f"{_MAX_DESIGNATION_TEXT} characters: under the none scheme it refers to the heading's text, "
+            f"which is longer.",
+        )
+        return text[:_MAX_DESIGNATION_TEXT].rstrip() + "\u2026"
 
     def _reference_text(self, designation: str) -> str:
-        """What a reference shows for *designation*: at most its first
-        :data:`_MAX_DESIGNATION_TEXT` characters, so that a heading that is long
-        as written cannot be pasted unbounded by thousands of references."""
-        if len(designation) > _MAX_DESIGNATION_TEXT:
-            self._warn("render-designation-limit", _DESIGNATION_LIMIT)
-            designation = designation[:_MAX_DESIGNATION_TEXT].rstrip() + "\u2026"
+        """What a reference shows for *designation*, formatted as the style asks."""
         return self.style.references.format.replace("{designation}", designation)
 
     def _record(self, designation: str, slot: _Slot) -> None:
@@ -1077,7 +1121,8 @@ class Resolver:
         resolved inside a repeat, nested ones included, are counted; first
         texts are free. Past :data:`_MAX_TERM_WORK` such nodes, with
         :data:`_MAX_TERM_DEPTH` terms open at once, or inside an open term (or
-        while designations are worked out) at :data:`_MAX_NEST` levels, the
+        while designations are worked out) at :data:`_MAX_NEST` levels (counted
+        from the outermost open term), the
         result is ``None`` (the reference shows its label or id), and the
         Warning ``render-term-limit`` says so, once. While designations are
         worked out nothing is reported there: the walk notes it
@@ -1091,7 +1136,7 @@ class Resolver:
                 self._cut |= kept.cut
                 return kept.text
         repeat = bool(cache.get(key))
-        too_nested = self._nest >= _MAX_NEST and (self._terms_open or self._stage == _DESIGNATING)
+        too_nested = self._nest - self._nest_base >= _MAX_NEST and (self._terms_open or self._stage == _DESIGNATING)
         if len(self._terms_open) >= _MAX_TERM_DEPTH or too_nested or (repeat and self._term_work >= _MAX_TERM_WORK):
             # Terms that refer to each other this deeply or this often are
             # not resolved further: like a cut, the reference shows its label
@@ -1106,6 +1151,10 @@ class Resolver:
                 )
             return None
         self._repeating += repeat
+        outermost = not self._terms_open
+        outer_base = self._nest_base
+        if outermost:
+            self._nest_base = self._nest
         self._terms_open.append(definition_id)
         outer = self._seen, self._cut
         self._seen, self._cut = set(), set()
@@ -1117,6 +1166,7 @@ class Resolver:
         finally:
             self._repeating -= repeat
             self._terms_open.pop()
+            self._nest_base = outer_base
             self._seen = outer[0] | self._seen
             self._cut = outer[1] | (self._cut & around)
         return text
