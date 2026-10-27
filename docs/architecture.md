@@ -176,7 +176,7 @@ clamped to 1–5, as the validator numbers them.
 
 | Writer | Notes |
 |---|---|
-| `TextWriter` | Plain text (§13.6). A soft line break inside a paragraph is a space, a hard break a new line, and lists are indented with their labels. It is the **test oracle** for resolution |
+| `TextWriter` | Plain text (§13.6). A soft line break inside a paragraph is a space, a hard break a new line, and lists are indented with their labels, one quote stays one quote, and tables keep escaped cells and alignment. It takes the style's `attachments.separator` (default `page-break`; `rule` and `page-break` both print `---` before each attachment). It is the **test oracle** for resolution |
 | `HtmlWriter` | A self-contained HTML5 page, or with `standalone=False` just the `<article>`. Semantic markup, with labels as real text rather than CSS counters, and a stylesheet generated from the style's presentation settings, including print rules |
 | DOCX, PDF | Planned ([ADR 0004](decisions/0004-html-first.md)) |
 

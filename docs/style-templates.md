@@ -110,7 +110,7 @@ placeholders:
 title_block: { parties: true, effective_date: true, version: false }
 contents: { enabled: false, depth: 2, attachments: true }     # table of contents after the title block; depth 1-5
                                                               # counts number levels ("2.1" is 2); attachments listed last
-attachments: { render: placeholder, separator: page-break }   # placeholder | omit; page-break | rule | none
+attachments: { render: placeholder, separator: page-break }   # placeholder | omit; page-break | rule | none (plain text: `---` before each attachment unless none)
 signatures: { enabled: true }                                 # the document's include_signatures: false wins
 template_view: { choice_separator: " / ", empty_choice: "" }
 

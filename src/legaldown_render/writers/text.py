@@ -4,6 +4,12 @@ It prints numbers, designations, and display text with no layout noise, so it
 doubles as the test oracle for resolution (docs/architecture.md, Testing).
 Line breaks inside a paragraph are joined, so output does not depend on how
 the source was wrapped.
+
+Structure survives the plain layout: one quote stays one quote (every line of
+it, blank ones included, carries the ``>`` marker), the blocks of a list item
+are set apart by blank lines and indented under the item's label, and a table
+is a pipe table whose cells escape ``|`` and whose separator row carries the
+column alignment.
 """
 from __future__ import annotations
 
@@ -59,6 +65,12 @@ def _link_text(href: str, text: str) -> str:
     return text if url.startswith("#") or text in (url, address) else f"{text} <{url}>"
 
 
+def _labelled(label: str, colon: str, value: str) -> str:
+    """A ``label: value`` row. A style that blanks the label (§13.5) leaves the
+    value alone rather than a bare ``: value``."""
+    return f"{label}{colon}{value}" if label else value
+
+
 def inline_text(inlines: tuple[Inline, ...]) -> str:
     parts: list[str] = []
     for inline in inlines:
@@ -84,10 +96,19 @@ def inline_text(inlines: tuple[Inline, ...]) -> str:
 
 
 class TextWriter:
-    """Writes a resolved tree as plain text."""
+    """Writes a resolved tree as plain text.
+
+    *attachment_separator* is the style's ``attachments.separator`` (§13.8):
+    ``none`` prints nothing between attachments; ``rule`` and ``page-break``
+    both print a ``---`` line before each attachment, as plain text has no
+    pages to break. The default is the default style's value.
+    """
 
     extension = "txt"
     media_type = "text/plain"
+
+    def __init__(self, attachment_separator: str = "page-break") -> None:
+        self.attachment_separator = attachment_separator
 
     def write(self, tree: RenderTree) -> str:
         chunks: list[str] = []
@@ -98,12 +119,12 @@ class TextWriter:
         if subtitle:
             chunks.append(subtitle)
         if tree.header:
-            chunks.append("\n".join(f"{label}{tree.colon}{inline_text(value)}" for label, value in tree.header))
+            chunks.append("\n".join(_labelled(label, tree.colon, inline_text(value)) for label, value in tree.header))
         for side in tree.sides:
             lines = [inline_text(side.label)]
             for party in side.parties:
                 lines.append(_INDENT + inline_text(party.name))
-                lines += [f"{_INDENT}{label}{tree.colon}{inline_text(value)}" for label, value in party.details]
+                lines += [_INDENT + _labelled(label, tree.colon, inline_text(value)) for label, value in party.details]
             chunks.append("\n".join(lines))
         if tree.contents:
             lines = [tree.contents_label] if tree.contents_label else []
@@ -121,9 +142,10 @@ class TextWriter:
                 chunks.append(f"[{section.condition_label}]")
             chunks += [self.block(block) for block in section.blocks]
         if tree.attachments:
-            chunks.append("---")
             chunks.append(tree.attachments_label)
             for attachment in tree.attachments:
+                if self.attachment_separator != "none":
+                    chunks.append("---")
                 lines = [inline_text(attachment.title)]
                 if attachment.condition_label:
                     lines.append(f"[{attachment.condition_label}]")
@@ -159,38 +181,46 @@ class TextWriter:
 
     def list(self, block: List, indent: str) -> list[str]:
         """The lines of *block*, each item's label at *indent*. Everything
-        else in an item, a nested list included, lines up with its text."""
+        else in an item, a nested list included, lines up with its text, which
+        starts one column after the item's own label (or bullet): a condition
+        label (§15.8) does not move it. Blocks of an item are set apart by a
+        blank line, except that a nested list stays tight under the paragraph
+        or list it follows."""
         lines: list[str] = []
         for item in block.items:
-            marker = item.label if item.label else "-"
-            if item.condition_label:
-                marker = f"{marker} [{item.condition_label}]"
-            content = indent + " " * (len(marker) + 1)
-            first = True
+            label = item.label if item.label else "-"
+            marker = f"{label} [{item.condition_label}]" if item.condition_label else label
+            content = indent + " " * (len(label) + 1)
+            previous: Block | None = None
             for child in item.blocks:
+                if previous is not None and not (isinstance(child, List) and isinstance(previous, Paragraph | List)):
+                    lines.append("")
                 if isinstance(child, List):
-                    if first:
+                    if previous is None:
                         # The item opens with a nested list: its own label
                         # still comes first, on a line of its own.
                         lines.append(indent + marker)
-                        first = False
                     lines += self.list(child, content)
-                    continue
-                text = self.block(child)
-                if first:
-                    lines.append(_prefix(f"{marker} {text}", indent, hanging=" " * (len(marker) + 1)))
-                    first = False
+                elif previous is None:
+                    lines.append(_prefix(f"{marker} {self.block(child)}", indent, hanging=" " * (len(label) + 1)))
                 else:
-                    lines.append(_prefix(text, content))
-            if first:
+                    lines.append(_prefix(self.block(child), content))
+                previous = child
+            if previous is None:
                 lines.append(indent + marker)
         return lines
 
     def table(self, table: Table) -> str:
-        header = [inline_text(cell) for cell in table.header]
-        rows = [[inline_text(cell) for cell in row] for row in table.rows]
-        lines = ["| " + " | ".join(header) + " |", "|" + "|".join("---" for _ in header) + "|"]
-        lines += ["| " + " | ".join(row) + " |" for row in rows]
+        """A pipe table, unpadded. ``|`` in a cell is escaped so a cell stays
+        a cell; the separator row marks each column's alignment."""
+        def cell(inlines: tuple[Inline, ...]) -> str:
+            return inline_text(inlines).replace("|", "\\|")
+
+        rule = {"left": ":---", "center": ":---:", "right": "---:"}
+        align = table.align + ("",) * (len(table.header) - len(table.align))
+        lines = ["| " + " | ".join(cell(c) for c in table.header) + " |",
+                 "|" + "|".join(rule.get(a, "---") for a in align) + "|"]
+        lines += ["| " + " | ".join(cell(c) for c in row) + " |" for row in table.rows]
         return "\n".join(lines)
 
     def signature(self, signature: SignatureParty, labels: dict[str, str], colon: str) -> str:
@@ -209,7 +239,9 @@ class TextWriter:
 
 def _prefix(text: str, prefix: str, *, hanging: str | None = None) -> str:
     """Every line of *text* prefixed; with *hanging*, lines after the first
-    get *prefix* plus *hanging* instead."""
+    get *prefix* plus *hanging* instead. A blank line gets the prefix with its
+    trailing space trimmed: ``>`` keeps a quote one quote, an indent leaves the
+    line empty."""
     lines = text.split("\n")
     rest = prefix + hanging if hanging is not None else prefix
-    return "\n".join([prefix + lines[0]] + [(rest + line) if line else line for line in lines[1:]])
+    return "\n".join([prefix + lines[0]] + [(rest + line) if line else rest.rstrip() for line in lines[1:]])

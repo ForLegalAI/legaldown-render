@@ -194,7 +194,7 @@ def _resolve(document: Document, result: ValidationResult, style: Style) -> tupl
 
 def _writer(options: RenderOptions, style: Style) -> HtmlWriter | TextWriter:
     if options.format == "text":
-        return TextWriter()
+        return TextWriter(style.attachments.separator)
     from . import __version__
 
     return HtmlWriter(style, standalone=options.standalone, generator=f"legaldown-render {__version__}")
