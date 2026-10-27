@@ -1,6 +1,6 @@
 """Reading URLs the way the renderer needs to: which schemes a link may use
-(§8.7), whether an image path is a relative one (§2.3), and how to quote one in
-a message.
+(§8.7), whether a file reference is a relative path within the document root
+(§2.3), and how to quote one in a message.
 
 The checks are syntactic, like the validator's (§2.3). They are shared by the
 resolver, which decides what an image is, and by both writers, which decide
@@ -93,13 +93,55 @@ def is_empty_path(path: str) -> bool:
     return not _as_read(unquote(path))
 
 
+def file_reference_problem(path: str, *, base: str | None = None, url: bool = False) -> str | None:
+    """What is wrong with *path* as a file reference (§2.3), or None:
+
+    * ``"not-relative"`` (``path-not-relative``): it has a URI scheme
+      (``https://``, ``file://``, ``data:``), which includes a Windows drive
+      path (``C:\\x``, ``C:/x``, a scheme as far as a parser can tell), or
+      starts with ``/`` or ``\\`` (so also ``//host``);
+    * ``"outside-root"`` (``path-outside-root``): there is a document root
+      (*base* is not None) and the path leaves it.
+
+    *base* is the directory of the document relative to the root, ``/``-separated
+    (``"."`` for a document at the root, ``"contracts/2025"``), or None where no
+    root is configured: §2.3 defines no default root, so ``../shared/a.lgd`` is
+    then valid. Both checks are lexical, as §2.3 says: nothing is resolved or
+    read, so a symbolic link is not followed, and a path that does not exist is
+    as good as any. An empty path names nothing and has no problem.
+
+    How the path is read: a backslash is a separator (the renderer's reading,
+    so that a path that goes up on Windows is not missed; it matters only with a
+    root, a leading one is already not relative), and so are ``.. `` and ``. ``
+    with trailing spaces, which Windows reads as ``..`` and ``.``. What a
+    browser ignores before the scheme (tabs, newlines, control characters and
+    spaces at either end) is ignored. *url* says the path is consumed as a URL
+    (an image's source, a link's target), where percent-encoding counts as the
+    character it encodes (``%2e%2e`` is ``..``, ``%2f`` a separator), once; a
+    path from frontmatter or an ``{{include:}}`` is a file name and is read as
+    written, in which ``%2e%2e`` is a directory with that name."""
+    read = _as_read(unquote(path) if url else path)
+    if not read:
+        return None
+    if _SCHEME_RE.match(read) or read[0] in "/\\":
+        return "not-relative"
+    if base is None:
+        return None
+    depth = 0 if base == "." else len([part for part in base.split("/") if part])
+    for part in read.replace("\\", "/").split("/"):
+        part = part.rstrip(" ")
+        if part == "..":
+            depth -= 1
+            if depth < 0:
+                return "outside-root"
+        elif part not in ("", "."):
+            depth += 1
+    return None
+
+
 def is_relative_path(path: str) -> bool:
-    """True if *path*, an image's, is a relative path (§2.3). Not relative: a
-    path with a URI scheme (``https://``, ``file://``, ``data:``), which
-    includes a Windows drive path (``C:\\x``, ``C:/x``, a scheme as far as a
-    parser can tell), and one that starts with ``/`` or ``\\`` (so also
-    ``//host``). A leading ``../`` is relative: §2.3 defines no default
-    document root. A percent-encoded character counts as the character, since
-    a path may be encoded by the time it is read."""
-    read = _as_read(unquote(path))
-    return not read or (_SCHEME_RE.match(read) is None and read[0] not in "/\\")
+    """True if *path*, an image's, is a relative path (§2.3): see
+    :func:`file_reference_problem`, which also reads a path as a URL. A leading
+    ``../`` is relative here: it is the containment rule, with a document root
+    configured, that keeps a path within it."""
+    return file_reference_problem(path, url=True) != "not-relative"
