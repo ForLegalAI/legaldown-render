@@ -170,7 +170,7 @@ typo would otherwise be shown literally), and so is a missing required field.
 | `enumeration.levels[].label`, `paragraphs.format.label` | `{n}`, `{path}`, `{section}` | none |
 | `enumeration.levels[].ref`, `paragraphs.format.ref` | `{n}`, `{section}` | `{n}` |
 | `references.format` | `{designation}` | `{designation}`, or every reference reads the same |
-| `labels.condition` | `{condition}` | `{condition}`, as §15.8 requires the condition to be shown |
+| `labels.condition` | `{condition}` | `{condition}`, as §15.8 requires the condition to be shown; an empty value is allowed and shows the bare condition |
 | `labels.attachment_file` | `{file}` | none |
 | every other label | none | none |
 

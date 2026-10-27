@@ -298,11 +298,15 @@ class TemplateFields:
     Only identifier-shaped braces (``{n}``, ``{designation}``) are fields; any
     other braces (``{}``, ``{1}``, ``{a b}``) are literal text, as the
     resolver keeps them. ``why`` says what a required field is for, in the
-    message about a template that leaves it out."""
+    message about a template that leaves it out. ``empty_falls_back`` marks
+    a setting the resolver replaces with the bare field when it is empty
+    (``labels.condition or "{condition}"``), so an empty template is not
+    missing its required field: it shows the condition as written."""
 
     accepted: frozenset[str] = frozenset()
     required: frozenset[str] = frozenset()
     why: str = ""
+    empty_falls_back: bool = False
 
 
 #: The designation-building settings are read in :mod:`..resolve.numbering`
@@ -320,9 +324,11 @@ REFERENCE_FORMAT = TemplateFields(
 #: Labels are plain words, except for the two that carry a value.
 LABEL_FIELDS: dict[str, TemplateFields] = {
     "condition": TemplateFields(
-        frozenset({"condition"}), frozenset({"condition"}), "a conditional unit's condition must be shown (§15.8)"
+        frozenset({"condition"}), frozenset({"condition"}), "a conditional unit's condition must be shown (§15.8)",
+        empty_falls_back=True,  # Resolver._condition: ``self.labels.condition or "{condition}"``
     ),
-    "attachment_file": TemplateFields(frozenset({"file"})),
+    # Resolver: ``self.labels.attachment_file or "{file}"``; it requires nothing, so the fallback is moot.
+    "attachment_file": TemplateFields(frozenset({"file"}), empty_falls_back=True),
 }
 
 

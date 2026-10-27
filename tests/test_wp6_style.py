@@ -257,6 +257,22 @@ def test_valid_templates_are_accepted(setting: str, value: object) -> None:
     load_style("default", overrides={setting: value})
 
 
+def test_an_empty_condition_label_keeps_its_render_time_fallback() -> None:
+    """The resolver shows the bare condition for an empty ``labels.condition``
+    (§15.8 is met), so the style is not refused."""
+    style = load_style("default", overrides={"labels.condition": ""})
+    assert style.labels.condition == ""
+    doc = "---\nlegaldown: '0.2'\ntitle: T\n---\n\n# One {#one when=forum:courts}\n\nText.\n"
+    assert "forum:courts" in render(doc, RenderOptions(format="text", overrides={"labels.condition": ""})).output
+
+
+def test_an_empty_template_without_a_fallback_still_lacks_its_field() -> None:
+    for setting in ("references.format", "numbering.levels", "paragraphs.format"):
+        value: object = {"label": "{n}", "ref": ""} if setting == "paragraphs.format" else (
+            [{"ref": ""}] if setting == "numbering.levels" else "")
+        assert any(p.startswith(setting) for p in _problems({setting: value}))
+
+
 def test_unset_labels_are_not_checked() -> None:
     assert load_style("default", overrides={"labels.condition": None}).labels.condition is None
 

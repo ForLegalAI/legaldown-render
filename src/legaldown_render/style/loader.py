@@ -309,7 +309,10 @@ def _template_problems(style: Style) -> list[str]:
     (:func:`~.model.template_settings`): an identifier-shaped field the
     setting does not accept (a typo would be shown literally), or a required
     field it leaves out (``labels.condition`` without ``{condition}`` would
-    hide the condition, which §15.8 requires to be shown)."""
+    hide the condition, which §15.8 requires to be shown). An empty template
+    is exempt from the required fields where the resolver falls back to the
+    bare field for it (``labels.condition``): it already shows the condition.
+    Where there is no such fallback, an empty template lacks its fields."""
     problems = []
     for key, template, fields in template_settings(style):
         found = set(_FIELD_RE.findall(template))
@@ -317,6 +320,8 @@ def _template_problems(style: Style) -> list[str]:
         for name in sorted(found - fields.accepted):
             takes = f"accepts {accepted}" if accepted else "takes no fields"
             problems.append(f"{key}: unknown field {{{name}}}; this setting {takes}")
+        if fields.empty_falls_back and not template:
+            continue
         for name in sorted(fields.required - found):
             problems.append(f"{key}: must contain {{{name}}}" + (f" — {fields.why}" if fields.why else ""))
     return problems
