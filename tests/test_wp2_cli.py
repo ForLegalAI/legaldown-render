@@ -18,6 +18,7 @@ from legaldown import Diagnostic
 import legaldown_render
 import legaldown_render.cli as cli
 from legaldown_render import (
+    DocumentError,
     OptionsError,
     RenderError,
     RenderOptions,
@@ -25,6 +26,7 @@ from legaldown_render import (
     StyleError,
     load_style,
     render,
+    render_file,
 )
 from legaldown_render.cli import main
 
@@ -120,6 +122,16 @@ def test_non_utf8_style_file_is_a_style_error(tmp_path: Path, capsys: pytest.Cap
     err = capsys.readouterr().err
     assert "not valid UTF-8" in err
     assert "Traceback" not in err
+
+
+def test_render_file_raises_document_error_for_non_utf8(tmp_path: Path) -> None:
+    path = tmp_path / "latin1.lgd"
+    path.write_bytes(b"# Caf\xe9\n")
+    with pytest.raises(DocumentError, match=r"not valid UTF-8 \(byte 0xe9 at offset 5\)"):
+        render_file(path)
+    good = tmp_path / "good.lgd"
+    good.write_bytes(CZECH.encode("utf-8"))
+    assert "Příloha" in render_file(good, format="text").output
 
 
 # --- S5: unwritable output -------------------------------------------------------------------

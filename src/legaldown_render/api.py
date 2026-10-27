@@ -123,8 +123,17 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
 
 
 def render_file(path: str | Path, options: RenderOptions | None = None, /, **settings: Any) -> RenderResult:
-    """Render the LegalDown file at *path* (see :func:`render`)."""
-    return render(Path(path).read_text(encoding="utf-8"), options, **settings)
+    """Render the LegalDown file at *path* (see :func:`render`). Raises
+    :class:`DocumentError` when the file is not valid UTF-8, as for any
+    document that cannot be read at all; an unreadable file raises
+    :class:`OSError`."""
+    data = Path(path).read_bytes()
+    try:
+        source = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise DocumentError(f"The document cannot be read: {path} is not valid UTF-8 "
+                            f"(byte 0x{data[error.start]:02x} at offset {error.start})") from None
+    return render(source, options, **settings)
 
 
 def _assemble(source: str, answers: Mapping[str, Any]) -> tuple[str, list[Diagnostic]]:
