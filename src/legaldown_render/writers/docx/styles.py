@@ -59,17 +59,19 @@ _CONDITION_FILL, _CONDITION_TEXT = "EFE9FB", "5B3FA0"
 _NOTE_FILL, _NOTE_RULE = "FFF8E1", "D9A400"
 _CODE_FILL = "F5F5F5"
 
-_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8}){0,3}$")
+_LANGUAGE_RE = re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8}){0,3}")
 
 
 def language_tag(*candidates: str | None) -> str:
     """The first of *candidates* that is a language tag (``en``, ``cs-CZ``), else ``en-US``:
     the document's ``language`` is free text to the renderer, and ``w:lang`` is read by Word's proofing."""
-    return next((tag for tag in candidates if tag and _LANGUAGE_RE.match(tag)), "en-US")
+    return next((tag for tag in candidates if tag and _LANGUAGE_RE.fullmatch(tag)), "en-US")
 
 
 def _fonts(name: str) -> ET.Element:
-    return el("rFonts", {"ascii": name, "hAnsi": name, "cs": name, "eastAsia": name})
+    """The Latin font. The complex-script and East Asian fonts stay unset, for Word to choose by
+    script: they are not the Latin font's to give."""
+    return el("rFonts", {"ascii": name, "hAnsi": name})
 
 
 def _size(half_points: int) -> list[ET.Element]:
@@ -136,7 +138,7 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
         "docDefaults",
         None,
         el("rPrDefault", None, rpr(_fonts(settings.font), _size(settings.half_points),
-                                   el("lang", {"val": language, "eastAsia": language, "bidi": language}))),
+                                   el("lang", {"val": language}))),
         el("pPrDefault"),
     )
 
@@ -193,7 +195,7 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                       el("spacing", {"before": em(0.4), "after": em(0.4)}), el("ind", {"left": 227, "right": 113})]),
         _style(CODE, "Code", based_on=NORMAL, priority=31, custom=True,
                props=[_shade(_CODE_FILL), el("spacing", {"before": 0, "after": 0, "line": 240, "lineRule": "auto"}),
-                      el("ind", {"left": 113, "right": 113})],
+                     el("ind", {"left": 113, "right": 113}), el("jc", {"val": "left"})],
                run=[_fonts(_MONOSPACE), _size(half_points(0.9))]),
         _style(TABLE_GRID, "Table Grid", kind="table", based_on="TableNormal", priority=39,
                table=el("tblPr", None, el("tblBorders", None, *(_border(side, _RULE, 4)

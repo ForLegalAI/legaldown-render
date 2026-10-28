@@ -86,6 +86,12 @@ jobs:
       LEGALDOWN_REQUIRE_DOCX_TOOLS: "1"
     steps:
       - uses: actions/checkout@v7
+      - name: Check out the LegalDown specification (its documents are validated too)
+        uses: actions/checkout@v7
+        with:
+          repository: ForLegalAI/LegalDown
+          ref: ${{ env.LEGALDOWN_SPEC_REF }}
+          path: .legaldown-spec
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -94,8 +100,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libreoffice-writer python3-uno
       - run: pip install -e ".[dev]"
-      - run: python tests/schemas/fetch.py
+      - name: Cache the OOXML schemas
+        id: schemas
+        uses: actions/cache@v4
+        with:
+          path: tests/schemas/ooxml
+          key: ooxml-schemas-${{ hashFiles('tests/schemas/fetch.py') }}
+      - if: steps.schemas.outputs.cache-hit != 'true'
+        run: python tests/schemas/fetch.py
       - run: pytest -q -m ooxml_schema
+        env:
+          LEGALDOWN_SPEC_DIR: .legaldown-spec
       - run: pytest -q -m libreoffice
 
   validator-main:

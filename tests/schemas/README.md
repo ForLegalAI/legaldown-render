@@ -38,8 +38,9 @@ Committing them would need a licence that allows redistribution. None is clear, 
   ISO/IEC, whose webstore terms apply to that copy. Both are copyrighted standards texts. Ecma's general
   practice is to allow copying with the notice retained, but that was not confirmed here for these files, and
   the ISO/IEC terms differ.
-* A copy of the same schemas was available in this environment under `/mnt/skills/public/docx/`. It is part of
-  a skill whose licence forbids copying and distributing it, so it was neither used nor copied.
+* Another copy of the same schemas, bundled with a third-party tool whose licence forbids copying and
+  distributing it, was available to the author. It was neither used nor copied: only the files fetched from
+  the publishers are used.
 
 If the maintainers clear the licence (for example by asking Ecma), the files can be committed here and
 `fetch.py` dropped; nothing else depends on where they live.

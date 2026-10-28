@@ -68,9 +68,15 @@ Also decided here, because every later part rests on them:
 - **Safety.** One sanitiser is applied to every text, attribute, field instruction, bookmark
   name, relationship and property value. It drops the characters XML cannot carry. Without it
   `xml.etree` writes a control character raw and a lone surrogate as a character reference, and Word
-  reports the file as unreadable. The untrusted mode and its style caps apply unchanged.
+  reports the file as unreadable. The untrusted mode and its style caps apply unchanged. A hyperlink
+  relationship is made only for the schemes links may use (no relative target, no `//host`, no
+  backslash), because Word follows what a relationship says.
 - **Deterministic output.** Fixed part order, relationship ids by order of use, fixed ZIP times,
-  attributes and compression, no timestamps in the properties.
+  attributes and compression, no timestamps in the properties, and prefixes from the writer's own table,
+  not from `xml.etree`'s global registry (which another library may change). The ZIP is
+  deterministic **for a given zlib**: a different zlib may compress the same parts to different,
+  equivalent bytes. The parts themselves, uncompressed, are the same everywhere, and the tests pin
+  them by SHA-256.
 
 ### Cross-references
 

@@ -4,6 +4,7 @@ style template, determinism, and the builders later work reuses. Schema validity
 test_docx_validation.py, LibreOffice in test_docx_libreoffice.py; this module needs neither."""
 from __future__ import annotations
 
+import hashlib
 import io
 import sys
 import xml.etree.ElementTree as ET
@@ -17,6 +18,7 @@ from docx_support import W_NS, parts, texts
 from legaldown_render import RenderOptions, render, render_file
 from legaldown_render.cli import main
 from legaldown_render.errors import InternalError
+from legaldown_render.tree import plain_text
 from legaldown_render.writers import FORMATS, DocxWriter, format_for_path
 from legaldown_render.writers.docx import ooxml, package, styles
 from legaldown_render.writers.docx.headers import template_runs
@@ -96,7 +98,7 @@ def test_the_zip_is_deterministic_and_has_no_timestamps_or_platform_bits() -> No
         for info in archive.infolist():
             assert info.date_time == (1980, 1, 1, 0, 0, 0)
             assert info.compress_type == zipfile.ZIP_DEFLATED
-            assert (info.create_system, info.external_attr >> 16, info.extra, info.comment) == (3, 0o644, b"", b"")
+            assert (info.create_system, info.external_attr >> 16, info.extra, info.comment) == (3, 0o100644, b"", b"")
 
 
 def test_a_different_document_is_a_different_file() -> None:
@@ -211,9 +213,10 @@ def test_doc_defaults_have_the_language_and_the_first_font_family() -> None:
     root = xml(docx()["word/styles.xml"])
     run = root.find(f"{W}docDefaults/{W}rPrDefault/{W}rPr")
     fonts = run.find(f"{W}rFonts")
-    assert {key.removeprefix(W): value for key, value in fonts.attrib.items()} == {
-        "ascii": "Georgia", "hAnsi": "Georgia", "cs": "Georgia", "eastAsia": "Georgia"}
-    assert run.find(f"{W}lang").get(f"{W}val") == "cs"  # the document's language
+    # Only the Latin font: complex-script and East Asian fonts are not the Latin font's to give.
+    assert {key.removeprefix(W): value for key, value in fonts.attrib.items()} == {"ascii": "Georgia", "hAnsi": "Georgia"}
+    lang = run.find(f"{W}lang")
+    assert {key.removeprefix(W): value for key, value in lang.attrib.items()} == {"val": "cs"}  # the document's language
     english = xml(docx(FRONT + "# A\n")["word/styles.xml"]).find(f"{W}docDefaults/{W}rPrDefault/{W}rPr/{W}lang")
     assert english.get(f"{W}val") == "en"
 
@@ -337,10 +340,31 @@ def test_the_date_follows_the_style_and_the_locale() -> None:
     assert texts(footer) == ["04.03.26"]
 
 
-def test_a_version_or_date_that_holds_directives_is_left_out() -> None:
-    source = "---\ntitle: T\nversion: '{{placeholder: v}}'\n---\n# A\n"
-    footer = xml(docx(source, overrides={"page.footer.center": "[{version}]"})["word/footer1.xml"])
-    assert texts(footer) == ["[]"]
+def test_a_version_or_date_that_holds_directives_reads_as_the_title_block_shows_it() -> None:
+    source = "---\ntitle: T\nversion: 'v {{date: 2026-03-04}} {{placeholder: v}}'\neffective_date: '{{date: 2026-01-02}}'\n---\n# A\n"
+    overrides = {"page.footer.center": "[{version}|{date}]", "title_block.version": True}
+    result = render(source, format="docx", overrides=overrides)
+    footer = xml(parts(result.binary)["word/footer1.xml"])
+    assert texts(footer) == ["[v March 4, 2026 [_____]|January 2, 2026]"]
+    shown = {label: plain_text(value) for label, value in result.tree.header}
+    assert shown["Version"] == "v March 4, 2026 [_____]"  # the same text the title block has
+
+
+def test_the_tree_carries_version_and_date_whether_or_not_the_title_block_shows_them() -> None:
+    tree = render(SOURCE, format="text", overrides={"title_block.version": False,
+                                                    "title_block.effective_date": False}).tree
+    assert (tree.version, tree.effective_date, tree.header) == ("2.1", "4. března 2026", ())
+    bare = render(FRONT + "# A\n", format="text").tree
+    assert (bare.version, bare.effective_date) == ("", "")
+
+
+def test_the_title_is_the_same_text_in_the_body_the_properties_and_the_footer() -> None:
+    source = "---\ntitle: '  A {{date: 2026-03-04}} B  '\n---\n# A\n"
+    contents = docx(source, overrides={"page.footer.center": "{title}"})
+    expected = "A March 4, 2026 B"
+    assert texts(xml(contents["word/document.xml"]))[0] == expected
+    assert texts(xml(contents["word/footer1.xml"])) == [expected]
+    assert xml(contents["docProps/core.xml"])[0].text == expected
 
 
 def test_a_field_name_the_writer_does_not_know_stays_as_written() -> None:
@@ -510,14 +534,41 @@ def test_hyperlinks_are_internal_by_anchor_or_external_by_relationship() -> None
     ("https://example.com/a b", "https://example.com/a%20b"),
     ("https://example.com/%20already", "https://example.com/%20already"),
     ("https://example.com/ž", "https://example.com/%C5%BE"),
-    ('https://example.com/"<>\\^`{|}', "https://example.com/%22%3C%3E%5C%5E%60%7B%7C%7D"),
+    ('https://example.com/"<>^`{|}', "https://example.com/%22%3C%3E%5E%60%7B%7C%7D"),
+    ("https://e/a\\b", "https://e/a%5Cb"),
     ("  https://example.com  ", "https://example.com"),
     ("", None), ("   ", None), ("https://e/\x01", None), ("https://e/\x7f", None), ("https://e/a\nb", None),
     ("https://e/\ud800", None),
 ])
 def test_a_relationship_target_is_a_valid_uri_or_none(url: str, expected: str | None) -> None:
     assert package.external_target(url) == expected
-    assert package.Relationships().add_external(url) == (None if expected is None else "rId1")
+    if "\\" not in url:
+        assert package.Relationships().add_external(url) == (None if expected is None else "rId1")
+
+
+@pytest.mark.parametrize("url", [
+    "javascript:alert(1)", "JaVaScRiPt:alert(1)", "java\tscript:alert(1)", "file:///etc/passwd", "ms-msdt:/id PCWDiagnostic",
+    "ms-word:ofe|u|https://x/a.docx", "data:text/html,x", "vbscript:x", "//evil.example/x", "///x", "\\\\host\\share",
+    "\\host", "https://e/a\\b", "relative/path", "../up", "#fragment", "?q=1", "C:\\x", "localhost:8080", "",
+])
+def test_a_hyperlink_relationship_is_refused_for_what_is_not_a_link(url: str) -> None:
+    """The HTML writer's rule (is_link_target), and more: no relative target and no //host,
+    since Word follows a relationship without a base to read it against."""
+    assert package.Relationships().add_external(url) is None
+
+
+@pytest.mark.parametrize("url", ["https://example.com", "http://e/x", "mailto:a@example.com", "tel:+420123456789",
+                                 "ftp://e/f", "urn:isbn:0451450523", "sms:+1555"])
+def test_a_hyperlink_relationship_is_made_for_a_link_scheme(url: str) -> None:
+    assert package.Relationships().add_external(url) == "rId1"
+
+
+def test_relationships_are_found_in_constant_time_and_keep_their_order() -> None:
+    relationships = package.Relationships()
+    ids = [relationships.add_external(f"https://example.com/{n}") for n in range(2000)]
+    assert ids == [f"rId{n + 1}" for n in range(2000)]
+    assert relationships.add_external("https://example.com/1999") == "rId2000"
+    assert relationships.add(package.REL_STYLES, "styles.xml") == "rId2001"
 
 
 def test_a_relationship_value_is_escaped_in_the_part() -> None:
@@ -558,9 +609,21 @@ def test_render_file_renders_docx(tmp_path: Path) -> None:
     assert render_file(source, format="docx").binary == render(SOURCE, format="docx").binary
 
 
-def test_diagnostics_are_the_same_as_for_the_other_formats() -> None:
+def test_diagnostics_are_the_other_formats_plus_the_interim_warning() -> None:
     document = (DOCUMENTS / "features.lgd").read_text(encoding="utf-8")
-    assert render(document, format="docx").diagnostics == render(document, format="text").diagnostics
+    docx_result = render(document, format="docx").diagnostics
+    assert docx_result[:-1] == render(document, format="text").diagnostics
+    warning = docx_result[-1]
+    assert (warning.rule, warning.level, warning.file) == ("render-docx-interim", "warning", "")
+    assert warning.message.startswith("DOCX output is incomplete in this version:")
+
+
+def test_the_interim_warning_is_one_warning_that_does_not_refuse_under_strict() -> None:
+    result = render(FRONT + "# A\n", format="docx", strict=True, filename="d.lgd")
+    assert [(d.rule, d.file) for d in result.diagnostics if d.rule.startswith("render-")] == [
+        ("render-docx-interim", "d.lgd")]
+    assert result.ok
+    assert not [d for d in render(FRONT + "# A\n", format="html").diagnostics if d.rule == "render-docx-interim"]
 
 
 def test_the_docx_writer_can_be_used_directly() -> None:
@@ -587,19 +650,49 @@ def test_an_uppercase_extension_selects_docx(tmp_path: Path) -> None:
     assert target.read_bytes().startswith(b"PK")
 
 
-def test_docx_to_standard_output_needs_dash_and_writes_bytes() -> None:
+def test_docx_to_standard_output_with_dash_writes_bytes() -> None:
+    expected = render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), format="docx").binary
     done = run_cli(FEATURES, "-q", "-f", "docx", "-o", "-")
     assert done.returncode == 0 and done.stderr == b""
+    assert done.stdout.startswith(b"PK") and done.stdout == expected
+
+
+def test_docx_without_output_goes_to_standard_output_when_that_is_not_a_terminal() -> None:
+    done = run_cli(FEATURES, "-q", "-f", "docx")  # the test's standard output is a pipe
+    assert done.returncode == 0 and done.stderr == b""
     assert done.stdout.startswith(b"PK")
-    assert done.stdout == render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), format="docx").binary
-    from_extension = run_cli(FEATURES, "-q", "-f", "docx", "-o", "-")
-    assert from_extension.stdout == done.stdout
+    assert done.stdout == run_cli(FEATURES, "-q", "-f", "docx", "-o", "-").stdout
 
 
-def test_docx_without_output_is_a_usage_error_not_a_stream_of_bytes() -> None:
-    done = run_cli(FEATURES, "-q", "-f", "docx")
-    assert done.returncode == 2 and done.stdout == b""
-    assert b"-o FILE.docx" in done.stderr and b"-o -" in done.stderr
+def test_fragment_is_a_usage_error_for_docx(tmp_path: Path) -> None:
+    done = run_cli(FEATURES, "-q", "-f", "docx", "--fragment", "-o", str(tmp_path / "x.docx"))
+    assert done.returncode == 2 and b"--fragment applies to HTML only" in done.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_docx_without_output_is_refused_on_a_terminal(monkeypatch: pytest.MonkeyPatch,
+                                                      capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    with pytest.raises(SystemExit) as exit_info:
+        main([FEATURES, "-q", "-f", "docx"])
+    assert exit_info.value.code == 2
+    assert "refusing to write a DOCX file to a terminal" in capsys.readouterr().err
+
+
+def test_a_standard_output_without_isatty_is_not_a_terminal(monkeypatch: pytest.MonkeyPatch,
+                                                            capsysbinary: pytest.CaptureFixture[bytes]) -> None:
+    class Plain:  # no isatty, no reconfigure: some embedders replace the stream so
+        buffer = io.BytesIO()
+
+        def write(self, text: str) -> int:
+            return len(text)
+
+        def flush(self) -> None:
+            pass
+
+    monkeypatch.setattr(sys, "stdout", Plain())
+    assert main([FEATURES, "-q", "-f", "docx"]) == 0
+    assert Plain.buffer.getvalue().startswith(b"PK")
 
 
 def test_docx_is_not_written_to_a_terminal(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -633,3 +726,95 @@ def test_text_and_html_to_standard_output_with_dash_still_work_and_name_no_file(
 def test_an_untrusted_render_makes_a_docx_too(tmp_path: Path) -> None:
     result = render(SOURCE, format="docx", untrusted=True, document_root=tmp_path)
     assert result.binary is not None and result.ok
+
+
+# -- Output that does not depend on anything outside the writer -------------------------------------
+
+
+def test_the_output_does_not_depend_on_the_global_namespace_registry() -> None:
+    expected = render(SOURCE, format="docx").binary
+    saved = dict(ET._namespace_map)  # type: ignore[attr-defined]
+    try:
+        for uri in (W_NS, "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                    "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
+                    "http://purl.org/dc/elements/1.1/", "http://www.w3.org/XML/1998/namespace"):
+            ET.register_namespace("host", uri)  # another library's registration
+        assert render(SOURCE, format="docx").binary == expected
+    finally:
+        ET._namespace_map.clear()  # type: ignore[attr-defined]
+        ET._namespace_map.update(saved)  # type: ignore[attr-defined]
+
+
+def test_importing_the_writer_registers_no_namespace() -> None:
+    code = ("import xml.etree.ElementTree as ET\nbefore = dict(ET._namespace_map)\n"
+            "import legaldown_render.writers.docx\nassert ET._namespace_map == before\n")
+    assert run_python(code).returncode == 0
+
+
+def run_python(code: str):  # noqa: ANN201 - a test helper
+    import os
+    import subprocess
+
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, env=env, check=False)
+
+
+def test_the_serialiser_sanitises_whoever_built_the_element() -> None:
+    root = ET.Element(f"{W}t", {f"{W}val": "a\x01b\n\"<&>", "plain": "x"})
+    root.text = "a\x00b\ud800c&<>\t"
+    data = ooxml.serialize(root).decode("utf-8")
+    assert data.endswith('<w:t xmlns:w="' + W_NS + '" w:val="ab &quot;&lt;&amp;&gt;" plain="x">abc&amp;&lt;&gt;\t</w:t>')
+    with pytest.raises(InternalError):
+        ooxml.serialize(ET.Element("{urn:other}x"))
+
+
+def test_a_text_passed_as_a_child_is_a_bug_not_a_recursion_error() -> None:
+    for bad in ("text", b"bytes", ["ok", ooxml.el("x")]):
+        with pytest.raises(InternalError):
+            ooxml.el("p", None, bad)
+    assert [c.tag for c in ooxml.el("p", None, [None, False, [ooxml.el("x")]])] == [f"{W}x"]
+    assert ooxml.p(style="").find(f"{W}pPr") is None
+
+
+def test_names_and_languages_must_match_in_full() -> None:
+    bookmarks = ooxml.Bookmarks()
+    with pytest.raises(InternalError):
+        bookmarks.pair("ld_x\n")
+    assert styles.language_tag("cs\n", "en") == "en"
+    assert styles.language_tag("cs-CZ\n", None) == "en-US"
+
+
+def test_code_is_left_aligned_even_when_the_body_is_justified() -> None:
+    by_id = style_map(docx(overrides={"typography.justify": True}))
+    assert by_id["Normal"].find(f"{W}pPr/{W}jc").get(f"{W}val") == "both"
+    assert by_id["Code"].find(f"{W}pPr/{W}jc").get(f"{W}val") == "left"
+
+
+#: SHA-256 of each part of the fixed document below, uncompressed. The ZIP's own bytes depend on the
+#: zlib that compressed them (a different zlib may write different, equivalent, bytes); these do not.
+#: When a part changes on purpose, run this test, review the change, and replace the digest.
+GOLDEN = {
+    '[Content_Types].xml': '0edc3b54ddf02325a53d17a23256a46b50f782562ff0319d5c48b73ceb50d29b',
+    '_rels/.rels': 'd6f21829c0081670bdb417d3e3f644b81134a121e074fb153c7686faaa8b167b',
+    'docProps/core.xml': '159ed0e537106ab29739fd357a5f6d89a2c0b0154daefd4c13d878bd16dff47e',
+    'docProps/app.xml': 'b285204d159fd58da80b6a0242cef523448f9c3a598b357b15faf4627160dcc3',
+    'word/document.xml': 'd84c7bc463bf0a89b6022fb8b39ca15601d8c722f951e8f8fb1c023da173172a',
+    'word/_rels/document.xml.rels': 'ada136c2e7d05a317579c9503c1f0dd8dfaa8f0cce687df86fe59e36d5fa5d57',
+    'word/styles.xml': '83adf799de91eac3e9bf1e658b8c2f53586c700be35df179e1b2f1765f189dfc',
+    'word/numbering.xml': '8d1f7769c35af16db98942ba09882646b45ba404e83686d4ce7a376c6a911f0f',
+    'word/settings.xml': 'b3c72bc5720862c1a9c1449d89903673777f30df6ff38ceb23da73e21cad22e1',
+    'word/footer1.xml': 'e693781f92e5a7ccf747fd2ed3facb627e448f389b021882cac589d746aa709b',
+}
+
+
+def part_digests() -> dict[str, str]:
+    from legaldown_render.style import load_style
+
+    tree = render(SOURCE, format="text").tree
+    data = DocxWriter(load_style("default"), generator="golden").write(tree)
+    return {name: hashlib.sha256(content).hexdigest() for name, content in parts(data).items()}
+
+
+def test_the_parts_of_a_fixed_document_are_what_they_were() -> None:
+    digests = part_digests()
+    assert digests == GOLDEN, "\n".join(f"    {name!r}: {digest!r}," for name, digest in digests.items())

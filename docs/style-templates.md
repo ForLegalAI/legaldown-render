@@ -216,12 +216,13 @@ may use these fields, and any other `{name}` in braces is refused when the style
 | `{version}` | the frontmatter's `version`; empty when the document has none |
 | `{date}` | the frontmatter's `effective_date`, formatted as `values.date` says for the formatting locale; empty when the document has none |
 
-A `version` or `effective_date` that holds a directive (`{{placeholder: ...}}`) is empty in a header or
-footer: directives are resolved where the document shows them. A text that is empty everywhere (the
-header by default) writes no header at all.
+`{version}` and `{date}` are the same text the title block shows for them (directives in them resolved
+the same way, a valid date formatted as `values.date` says), whether or not `title_block` shows them
+there. A text that is empty everywhere (the header by default) writes no header at all.
 
 **Where it applies.** The **DOCX** writer writes them: `{page}` and `{pages}` are `PAGE` and `NUMPAGES`
-fields that Word and LibreOffice count while laying out the pages, and the other three fields are text.
+fields that Word and LibreOffice count while laying out the pages (a viewer that lays out no pages shows
+the cached "1", so the default footer reads "1 / 1" there), and the other three fields are text.
 A single text is aligned; two or three are separated by tab stops at the middle and the right margin.
 The **HTML** and plain-text writers do not read them yet; the PDF writer will (v0.6).
 
@@ -243,7 +244,7 @@ keeps accepting the same style.
 | `page.size` | the paper size of the page: `A3` to `A5`, `B4`, `B5`, `letter`, `legal`, `ledger`, with `landscape` or `portrait`; or one or two lengths; `auto` and an orientation alone are A4 |
 | `page.margin` | one to four lengths (top, right, bottom, left, as in CSS); the header and footer sit half a margin from the edge, at most 1.27 cm |
 | `typography.font_family` | the **first** family: `Georgia` for `'Georgia, "Times New Roman", serif'`; `serif`, `sans-serif` and `monospace` alone are Times New Roman, Arial and Courier New. Word falls back to its own substitute when the font is not installed |
-| `typography.font_size`, `headings.N.size` | half-points, between 1 pt and 1638 pt |
+| `typography.font_size`, `headings.N.size` | half-points (Word's unit for a font size, so a size is rounded to the nearest half-point: `11.3pt` is 11.5 pt); `headings.N.size` between 1 pt and 1638 pt, and `typography.font_size` between 1 pt and 1023 pt, because the title is 1.6 times the body |
 | `typography.line_height` | a number is that many lines (`1.5`), `normal` is one line, a length is the least height of a line |
 | `typography.color`, `typography.link_color` | `#rgb`, `#rrggbb` (an alpha part is dropped), `rgb()`, `hsl()`, or one of `black silver gray white maroon red purple fuchsia green lime olive yellow navy blue teal aqua orange`; any other colour name is an error, so write it as `#rrggbb` |
 | `headings.N.weight` | bold from 600 up (`bold`, `bolder`), otherwise regular |
@@ -252,7 +253,10 @@ Lengths: `mm`, `cm`, `in`, `pt`, `pc` and `px` (96 to the inch) are absolute. **
 relative to `typography.font_size`, which is itself relative to 12 pt when it is written in them, as in a
 browser. **`%`, `ch` and `ex`** depend on a layout or a font that Word does not give the renderer, so
 each is an error for DOCX: `page.margin: 5%` raises "page.margin: uses '%', which a Word document cannot
-express". `html.max_width` and `html.extra_css` are never read.
+express". Units are not case-sensitive (`25MM`). Word's limits are enforced too, as style errors that never
+quote the value: a page edge of 7.2 pt to 1584 pt (22 inches), a margin of 0 to 1584 pt, margins that leave
+at least 36 pt (0.5 inch) of text in each direction, a line height of at most 1584 pt (or 100 lines), and a
+number of more than 32 digits is no length at all. `html.max_width` and `html.extra_css` are never read.
 
 The writer generates Word styles from the template (`Normal`, `heading 1` to `heading 5`, `Title`,
 `Subtitle`, `Quote`, `toc 1` to `toc 5`, `Hyperlink`, `Table Grid`, and styles of its own for drafting

@@ -9,7 +9,7 @@ report).
 Documents and output are always UTF-8 (the HTML says ``<meta charset="utf-8">``),
 never the console's or the locale's encoding, and output has LF line endings on
 every platform. A DOCX file is bytes: it is written to a file, or to standard output's
-binary interface with ``-o -``, never to a terminal.
+binary interface (``-o -``, or no ``-o`` when standard output is not a terminal), never to a terminal.
 """
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("input", nargs="?", help="the .lgd file to render, or - for standard input")
     parser.add_argument("-o", "--output", help="output file (default: standard output, except for DOCX, which "
-                        "is binary and needs a file or -o -). Without --format, .html/.htm write HTML, "
+                        "is binary and is refused on a terminal). Without --format, .html/.htm write HTML, "
                         ".txt/.text plain text and .docx a Word document; any other name, with or without an "
                         "extension, writes HTML, except the extension of a format not written (.doc, "
                         ".odt, .rtf, .pdf, .md, .markdown, .epub, .tex), which needs --format. -o - writes "
@@ -187,10 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     output_format = output_format or "html"
     to_stdout = not args.output or args.output == _STDOUT
     if output_format == "docx":
-        if not args.output:
-            parser.error("a DOCX file is binary: name it with -o FILE.docx, or write it to standard output "
-                         "with -o -")
-        if to_stdout and sys.stdout.isatty():
+        if args.fragment:
+            parser.error("--fragment applies to HTML only: a DOCX file is always the whole document")
+        if to_stdout and getattr(sys.stdout, "isatty", lambda: False)():
             parser.error("refusing to write a DOCX file to a terminal; redirect standard output or name a file "
                          "with -o FILE.docx")
     name = "<stdin>" if args.input == "-" else args.input
@@ -253,9 +252,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _write_binary(data: bytes, output: str) -> int:
-    """Write *data*, a rendered binary file, to the file *output*, or with ``-`` to standard
-    output's bytes (never through its text encoding)."""
-    if output == _STDOUT:
+    """Write *data*, a rendered binary file, to the file *output*, or (with ``-``, or no
+    output at all) to standard output's bytes, never through its text encoding."""
+    if not output or output == _STDOUT:
         buffer = getattr(sys.stdout, "buffer", None)
         if buffer is None:
             _complain("legaldown-render: cannot write to standard output: it has no binary interface")

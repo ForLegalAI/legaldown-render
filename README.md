@@ -131,8 +131,8 @@ may not contain `version` or `extends`, so `overrides=legaldown_render.style.sty
 ## DOCX (in progress)
 
 `-o contract.docx` (or `--format docx`, or `render(text, format="docx")`) writes a Word document. The
-file is bytes: the command writes it to a file or, with `-o -`, to standard output, and refuses to write
-it to a terminal; `render()` returns it as `result.binary` (`result.output` is empty). The writer needs no
+file is bytes: the command writes it to a file or, with `-o -` (or no `-o` when standard output is not a
+terminal), to standard output, and refuses to write it to a terminal; `--fragment` is a usage error for it; `render()` returns it as `result.binary` (`result.output` is empty). The writer needs no
 dependency beyond the base package.
 
 The design is that **in the Word file every number, cross-reference, the table of contents and the page
@@ -148,7 +148,8 @@ and margins, a running header and footer from `page.header` and `page.footer` (t
 as live page fields), the document's title and language, `w:updateFields` so Word refreshes fields when it
 opens the file (`docx.update_fields_on_open`), and deterministic output. **The body is interim:** the title,
 the headings as Word headings, and every other block as plain text, with **no numbers, references, contents,
-title block, attachments or signature blocks yet**. Do not send such a file as a contract. Settings Word
+title block, attachments or signature blocks yet**, and every render reports the Warning
+`render-docx-interim` to say so. Do not send such a file as a contract. Settings Word
 cannot express (a `%` length, say) are an error for DOCX only. See
 [Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#docx)
 and the [roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md).

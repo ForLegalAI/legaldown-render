@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 
@@ -28,8 +29,9 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 W = f"{{{W_NS}}}"
 
 
-def _missing(reason: str) -> None:
-    """Skip, or fail when the environment promises the tools (CI)."""
+def tool_missing(reason: str) -> None:
+    """Skip, or fail when the environment promises the tools (CI): a job that sets
+    ``LEGALDOWN_REQUIRE_DOCX_TOOLS`` must not pass by skipping what it exists to run."""
     if os.environ.get("LEGALDOWN_REQUIRE_DOCX_TOOLS"):
         pytest.fail(f"required tool missing: {reason}")
     pytest.skip(reason)
@@ -84,9 +86,12 @@ def _schemas() -> dict[str, object]:
 
 def require_schemas() -> None:
     """Skip (or fail in CI) unless lxml and the schemas are there."""
-    pytest.importorskip("lxml", reason="lxml is a test dependency: pip install -e '.[dev]'")
+    try:
+        import lxml  # noqa: F401
+    except ImportError:
+        tool_missing("lxml is not installed (a test dependency: pip install -e '.[dev]')")
     if schema_directory() is None:
-        _missing("the OOXML schemas are not fetched (python tests/schemas/fetch.py)")
+        tool_missing("the OOXML schemas are not fetched (python tests/schemas/fetch.py)")
 
 
 def schema_for(name: str) -> str | None:
@@ -183,10 +188,10 @@ def system_python() -> str | None:
 def require_libreoffice() -> str:
     """The Python to run the UNO script with, or skip (fail in CI) when LibreOffice or its Python bindings are missing."""
     if shutil.which("soffice") is None:
-        _missing("LibreOffice (soffice) is not installed")
+        tool_missing("LibreOffice (soffice) is not installed")
     python = system_python()
     if python is None:
-        _missing("no Python with the uno module (python3-uno) was found")
+        tool_missing("no Python with the uno module (python3-uno) was found")
     assert python is not None
     return python
 
@@ -203,6 +208,16 @@ class Exported:
     @property
     def lines(self) -> list[str]:
         return self.text.splitlines()
+
+
+def repackage(data: bytes, name: str, change: Callable[[str], str]) -> bytes:
+    """The package *data* with the text of the part *name* changed by *change*: for a test that
+    the checks catch what they are meant to."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for part, content in parts(data).items():
+            archive.writestr(part, change(content.decode("utf-8")).encode("utf-8") if part == name else content)
+    return buffer.getvalue()
 
 
 def libreoffice_export(documents: dict[str, bytes]) -> dict[str, Exported]:

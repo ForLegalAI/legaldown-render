@@ -102,6 +102,11 @@ values appear only as the cached results of fields. Decided in
   mode 15, `w:updateFields`), page setup, running headers and footers with `PAGE`/`NUMPAGES` fields,
   document properties, deterministic output. `RenderResult.binary`, `-o x.docx`, `-o -`. The body is
   an interim one: the title, `heading N` paragraphs and plain-text paragraphs, with no numbers yet
+- **Behaviour changes this brings.** `-o -` now writes to standard output for every format (it used to
+  create a file named `-`); `.docx` is a writable extension, and a DOCX with no `-o` goes to standard output
+  when that is not a terminal; `--fragment` with DOCX is a usage error; `RenderTree` gains `version` and
+  `effective_date` (plain text), filled whether or not the title block shows them; `.docx` renders add
+  the Warning `render-docx-interim` until the body is complete
 - **Style settings (done).** `page.header` and `page.footer` (the HTML writer ignores them for now),
   `docx.update_fields_on_open`; settings Word cannot express are a `StyleError` for DOCX
 - **Verification (done).** Every part validated against the ISO/IEC 29500 schemas (fetched in CI, not

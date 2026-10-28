@@ -14,6 +14,7 @@ import zipfile
 from urllib.parse import quote
 
 from ...errors import InternalError
+from ...urls import LINK_SCHEMES, is_link_target, url_scheme
 from .ooxml import CONTENT_TYPES, PACKAGE_RELATIONSHIPS, _t, flat_part
 
 #: Relationship types (ISO/IEC 29500-1, 11.3 and 15.2).
@@ -62,20 +63,32 @@ class Relationships:
 
     def __init__(self) -> None:
         self._items: list[tuple[str, str, bool]] = []
+        self._ids: dict[tuple[str, str, bool], str] = {}
 
     def add(self, relationship_type: str, target: str, *, external: bool = False) -> str:
         """The id of the relationship to *target* (a part name relative to the owning
         part, or with *external* an address, see :func:`external_target`), added if
         it is not there yet."""
         key = (relationship_type, target, external)
-        if key not in self._items:
+        if key not in self._ids:
             self._items.append(key)
-        return f"rId{self._items.index(key) + 1}"
+            self._ids[key] = f"rId{len(self._items)}"
+        return self._ids[key]
 
     def add_external(self, url: str) -> str | None:
-        """The id of a hyperlink relationship to *url*, or None when *url* cannot be
-        one (:func:`external_target`): the caller then shows the link's text alone."""
-        target = external_target(url)
+        """The id of a hyperlink relationship to *url*, or None when *url* is not one the
+        document may link to: the caller then shows the link's text alone. It is the
+        HTML writer's rule (:func:`~legaldown_render.urls.is_link_target`) and more, as
+        Word, unlike a browser, follows what a relationship says without asking: the URL
+        needs a scheme from :data:`~legaldown_render.urls.LINK_SCHEMES` (no relative path,
+        and no ``//host``), has no backslash, and can be written as a URI
+        (:func:`external_target`)."""
+        stripped = url.strip()
+        scheme = url_scheme(stripped)
+        if scheme is None or scheme not in LINK_SCHEMES or not is_link_target(stripped) \
+                or stripped.startswith("//") or "\\" in stripped:
+            return None
+        target = external_target(stripped)
         return None if target is None else self.add(REL_HYPERLINK, target, external=True)
 
     def __bool__(self) -> bool:
@@ -132,6 +145,6 @@ class Package:
                 info = zipfile.ZipInfo(_t(name), date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.create_system = 3
-                info.external_attr = 0o644 << 16
+                info.external_attr = 0o100644 << 16
                 archive.writestr(info, data, compresslevel=6)
         return buffer.getvalue()

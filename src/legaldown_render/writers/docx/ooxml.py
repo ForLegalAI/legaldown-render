@@ -34,9 +34,10 @@ PACKAGE_RELATIONSHIPS = "http://schemas.openxmlformats.org/package/2006/relation
 CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
 EXTENDED_PROPERTIES = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
 
+#: The prefix of each namespace in the parts written here. :func:`serialize` uses this table, not
+#: ``xml.etree``'s global registry, which any other library may change (``register_namespace``).
 _PREFIXES = {"w": W, "r": R, "cp": CP, "dc": DC, "dcterms": DCTERMS, "dcmitype": DCMITYPE, "xsi": XSI}
-for _prefix, _uri in _PREFIXES.items():
-    ET.register_namespace(_prefix, _uri)
+_PREFIX_OF = {uri: prefix for prefix, uri in {**_PREFIXES, "xml": XML}.items()}
 
 #: Characters XML 1.0 cannot carry (C0 but TAB, LF and CR), and the ones Word
 #: refuses or reads as something else: DEL and C1 (NEL included), the
@@ -99,6 +100,8 @@ def _flatten(children: Iterable[Any]) -> list[ET.Element]:
             continue
         if isinstance(child, ET.Element):
             flat.append(child)
+        elif isinstance(child, str | bytes):
+            raise InternalError("text was passed where an element belongs (a bug in the DOCX writer)")
         else:
             flat.extend(_flatten(child))
     return flat
@@ -113,11 +116,62 @@ def val(name: str, value: Any = None) -> ET.Element:
 _DECLARATION = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 
 
+def _name(tag: str) -> tuple[str, str]:
+    """The namespace and the local name of an ElementTree *tag* (``""`` for none)."""
+    if tag.startswith("{"):
+        namespace, _, local = tag[1:].partition("}")
+        return namespace, local
+    return "", tag
+
+
+def _attribute(value: str) -> str:
+    """*value* as the text of a double-quoted attribute: sanitised, and escaped so that
+    nothing, white space included, changes when a parser normalises it."""
+    return _t(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
 def serialize(root: ET.Element) -> bytes:
-    """*root* as a UTF-8 XML part with the declaration Word writes. Attributes keep
-    the order they were set in, and namespace declarations are sorted by prefix,
-    so the same tree is always the same bytes."""
-    return _DECLARATION + ET.tostring(root, encoding="utf-8")
+    """*root* as a UTF-8 XML part with the declaration Word writes. Prefixes come from this
+    module's own table, never from ``xml.etree``'s global registry, so what another library
+    registers cannot change the bytes. Attributes keep the order they were set in, the
+    namespaces are declared on the root sorted by prefix, and the same tree is always the
+    same bytes. Every text and attribute is sanitised here as well (:func:`_t`), whoever
+    built the element. Only ``text`` is written, as no part here has mixed content."""
+    namespaces: set[str] = set()
+    for element in root.iter():
+        namespaces.add(_name(element.tag)[0])
+        namespaces.update(_name(key)[0] for key in element.attrib)
+    namespaces.discard("")
+    unknown = namespaces - _PREFIX_OF.keys()
+    if unknown:
+        raise InternalError("an element is in a namespace the DOCX writer has no prefix for (a bug in the writer)")
+    declarations = "".join(f' xmlns:{prefix}="{uri}"'
+                           for prefix, uri in sorted((_PREFIX_OF[uri], uri) for uri in namespaces if uri != XML))
+
+    def qualified(tag: str) -> str:
+        namespace, local = _name(tag)
+        return f"{_PREFIX_OF[namespace]}:{local}" if namespace else local
+
+    out: list[str] = []
+    stack: list[tuple[ET.Element, bool]] = [(root, False)]
+    while stack:
+        element, closing = stack.pop()
+        name = qualified(element.tag)
+        if closing:
+            out.append(f"</{name}>")
+            continue
+        attributes = "".join(f' {qualified(key)}="{_attribute(value)}"' for key, value in element.attrib.items())
+        extra = declarations if element is root else ""
+        text = element.text
+        if text is None and len(element) == 0:
+            out.append(f"<{name}{extra}{attributes}/>")
+            continue
+        out.append(f"<{name}{extra}{attributes}>")
+        if text:
+            out.append(_t(text, breaks=True).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        stack.append((element, True))
+        stack.extend((child, False) for child in reversed(element))
+    return _DECLARATION + "".join(out).encode("utf-8")
 
 
 def flat_part(namespace: str, root: str, children: Iterable[tuple[str, Mapping[str, Any], str | None]]) -> bytes:
@@ -226,13 +280,13 @@ def tr_pr(*children: Any) -> ET.Element | None:
 def p(*content: Any, style: str | None = None, props: Iterable[Any] = ()) -> ET.Element:
     """A paragraph: *style* (a style id) and *props* (``w:pPr`` children, any
     order) first, then *content* (runs, fields, bookmarks, hyperlinks)."""
-    return el("p", None, ppr(style and val("pStyle", style), props), content)
+    return el("p", None, ppr(val("pStyle", style) if style else None, props), content)
 
 
 def r(*content: Any, style: str | None = None, props: Iterable[Any] = ()) -> ET.Element:
     """A run: *style* (a character style id) and *props* (``w:rPr`` children,
     any order) first, then *content* (``w:t``, ``w:tab``, ``w:br``, field characters)."""
-    return el("r", None, rpr(style and val("rStyle", style), props), content)
+    return el("r", None, rpr(val("rStyle", style) if style else None, props), content)
 
 
 def text_run(text: str, *, style: str | None = None, props: Iterable[Any] = ()) -> ET.Element:
@@ -282,7 +336,7 @@ def hyperlink_internal(bookmark: str, *runs: ET.Element, tooltip: str | None = N
 
 #: A bookmark name: a letter (or ``_`` for a hidden one), then letters, digits and ``_``,
 #: at most 40 characters (Word's limit).
-_BOOKMARK_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,39}$")
+_BOOKMARK_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,39}")
 
 
 class Bookmarks:
@@ -296,7 +350,7 @@ class Bookmarks:
 
     def pair(self, name: str) -> tuple[ET.Element, ET.Element]:
         """The ``w:bookmarkStart`` and ``w:bookmarkEnd`` of a new bookmark *name*."""
-        if not _BOOKMARK_RE.match(name):
+        if not _BOOKMARK_RE.fullmatch(name):
             raise InternalError("a bookmark name is not valid (a bug in the DOCX writer)")
         if name.lower() in self._names:
             raise InternalError("a bookmark name is used twice (a bug in the DOCX writer)")
