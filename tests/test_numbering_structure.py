@@ -15,6 +15,7 @@ from conftest import DOCUMENTS, FRONT, spec_root
 
 from legaldown_render import DocumentError, render
 from legaldown_render.resolve.numbering import extend, fill, format_counter
+from legaldown_render.style.model import LevelFormat
 from legaldown_render.tree import (
     CrossRef,
     DraftingNote,
@@ -30,6 +31,8 @@ from legaldown_render.tree import (
 )
 
 NONE = {"numbering.scheme": "none"}
+THREE_WAY = FRONT.replace("title: T", (
+    "title: T\nquestions:\n  q:\n    type: choice\n    choices:\n      a: A\n      b: B\n      c: C"))
 ALTERNATIVES = FRONT.replace("title: T", (
     "title: T\nquestions:\n  forum:\n    type: choice\n    choices:\n      courts: Courts\n      arb: Arbitration"))
 ATTACHED = FRONT.replace("title: T", "title: T\nattachments:\n  - id: att\n    title: Schedule\n    file: att.lgd")
@@ -231,6 +234,32 @@ def test_alternative_sections_share_a_number_and_name_the_first() -> None:
         ("s6", "2", 2, None, None)]
 
 
+def test_three_alternative_sections_all_name_the_first() -> None:
+    body = ("# D {#d when=q:a}\n\n## s\n\n# D {#d when=q:b}\n\n## s2\n\n## s3\n\n"
+            "# D {#d when=q:c}\n\n## s4\n\n## s5\n\n## s6\n")
+    tree = tree_of(body, THREE_WAY)
+    assert [(s.unit, s.designation, s.parent_unit, s.shares_number_with) for s in tree.sections] == [
+        ("s1", "1", None, None), ("s2", "1.1", "s1", None),
+        ("s3", "1", None, "s1"), ("s4", "1.1", "s3", "s2"), ("s5", "1.2", "s3", None),
+        ("s6", "1", None, "s1"), ("s7", "1.1", "s6", "s2"), ("s8", "1.2", "s6", "s5"), ("s9", "1.3", "s6", None)]
+
+
+def test_a_later_alternative_may_have_more_subsections_and_the_extra_ones_are_first_holders() -> None:
+    body = ("# D {#d when=forum:courts}\n\n## One\n\n# D {#d when=forum:arb}\n\n## One alt\n\n## Extra\n\n"
+            "### Deep\n\n# After\n")
+    tree = tree_of(body, ALTERNATIVES)
+    assert [(s.designation, s.shares_number_with) for s in tree.sections] == [
+        ("1", None), ("1.1", None), ("1", "s1"), ("1.1", "s2"), ("1.2", None), ("1.2.1", None), ("2", None)]
+    assert [s.parent_unit for s in tree.sections] == [None, "s1", None, "s3", "s3", "s5", None]
+
+
+def test_a_heading_below_level_five_is_numbered_as_level_five() -> None:
+    tree = tree_of("# A\n\n## B\n\n### C\n\n#### D\n\n##### E\n\n###### F\n\n## G\n")
+    assert [(s.level, s.number, s.parent_unit, s.designation) for s in tree.sections] == [
+        (1, 1, None, "1"), (2, 1, "s1", "1.1"), (3, 1, "s2", "1.1.1"), (4, 1, "s3", "1.1.1.1"),
+        (5, 1, "s4", "1.1.1.1.1"), (5, 2, "s4", "1.1.1.1.2"), (2, 2, "s1", "1.2")]
+
+
 def test_alternative_sections_under_the_none_scheme_share_nothing() -> None:
     body = "# Disputes {#d when=forum:courts}\n\n# Disputes {#d when=forum:arb}\n"
     tree = tree_of(body, ALTERNATIVES, overrides=NONE)
@@ -275,6 +304,20 @@ def test_nested_enumerated_items_carry_number_parent_and_family() -> None:
     assert [(f.family, f.depth, f.enumerated) for f in lists(tree)] == [
         ("enumerated", 0, True), ("enumerated", 1, True), ("enumerated", 2, True), ("renumber", 0, True)]
     assert [f.format for f in lists(tree)] == [*formats.enumerated, formats.renumber]
+
+
+def test_families_mix_by_depth_and_the_enumerated_formats_cycle() -> None:
+    body = "# A\n\n1. r1\n   - e1\n     1. r2\n        - e2\n          - e3\n            - e4\n              1. r3\n"
+    tree = tree_of(body)
+    formats = tree.formats
+    assert [(f.family, f.depth) for f in lists(tree)] == [
+        ("renumber", 0), ("enumerated", 1), ("renumber", 2), ("enumerated", 3), ("enumerated", 4),
+        ("enumerated", 5), ("renumber", 6)]
+    assert [f.format for f in lists(tree)] == [
+        formats.renumber, formats.enumerated[1], formats.renumber, formats.enumerated[0], formats.enumerated[1],
+        formats.enumerated[2], formats.renumber]
+    assert [i.label for i in items(tree)] == ["1.", "(i)", "1.", "(a)", "(i)", "(A)", "1."]
+    assert [i.parent_unit for i in items(tree)] == ["s1", "u1", "u2", "u3", "u4", "u5", "u6"]
 
 
 def test_a_list_nested_deeper_than_the_formats_goes_back_to_the_first() -> None:
@@ -351,9 +394,7 @@ def test_alternative_items_share_a_number() -> None:
 
 
 def test_three_alternatives_all_name_the_first() -> None:
-    front = FRONT.replace("title: T", "title: T\nquestions:\n  q:\n    type: choice\n    choices:\n"
-                          "      a: A\n      b: B\n      c: C")
-    tree = tree_of("# A\n\n- x\n- one {#i when=q:a}\n- two {#i when=q:b}\n- three {#i when=q:c}\n- y\n", front)
+    tree = tree_of("# A\n\n- x\n- one {#i when=q:a}\n- two {#i when=q:b}\n- three {#i when=q:c}\n- y\n", THREE_WAY)
     assert [(i.number, i.shares_number_with) for i in items(tree)] == [
         (1, None), (2, None), (2, "u2"), (2, "u2"), (3, None)]
 
@@ -366,6 +407,55 @@ def test_units_that_can_appear_together_do_not_share_a_number() -> None:
 def test_only_adjacent_alternatives_share_a_number_and_a_list_never_shares_with_the_one_before() -> None:
     body = "# A\n\n- a {#i when=forum:courts}\n\ntext\n\n- b {#i when=forum:arb}\n"
     assert [(i.number, i.shares_number_with) for i in items(tree_of(body, ALTERNATIVES))] == [(1, None), (1, None)]
+
+
+def test_sibling_lists_in_one_item_go_on_counting() -> None:
+    """Lists nested directly in one item share a counter per way of writing a designation, so no
+    designation repeats: a list's first number is items[0].number (List.start), not always 1."""
+    tree = tree_of("# A\n\n- x\n  - a\n  - b\n\n  text\n\n  - c\n  - d\n")
+    assert [(i.label, i.number, i.parent_unit) for i in items(tree)[1:]] == [
+        ("(i)", 1, "u1"), ("(ii)", 2, "u1"), ("(iii)", 3, "u1"), ("(iv)", 4, "u1")]
+    assert [(f.depth, f.start) for f in lists(tree)] == [(0, 1), (1, 1), (1, 3)]
+
+
+def test_a_sibling_list_of_another_family_with_the_same_designations_goes_on_too() -> None:
+    # A renumbered list is "(n)" in a reference, so is an enumerated one whose ref is "({n})" in decimal.
+    levels = [{"counter": "decimal", "label": "{n}.", "ref": "({n})"}] * 2
+    tree = tree_of("# A\n\n- x\n  - a\n\n  text\n\n  1. p\n  1. q\n", overrides={"enumeration.levels": levels})
+    assert [(f.family, f.start) for f in lists(tree)] == [("enumerated", 1), ("enumerated", 1), ("renumber", 2)]
+    assert [i.label for i in items(tree)[1:]] == ["1.", "2.", "3."]
+    # With other designations the lists are independent.
+    other = tree_of("# A\n\n- x\n  - a\n\n  text\n\n  1. p\n  1. q\n")
+    assert [(f.family, f.start) for f in lists(other)] == [("enumerated", 1), ("enumerated", 1), ("renumber", 1)]
+
+
+def test_top_level_lists_and_lists_in_quotes_start_at_one() -> None:
+    tree = tree_of("# A\n\n- x\n\ntext\n\n- y\n\n> - q\n\n> text\n\n> - r\n")
+    assert [f.start for f in lists(tree)] == [1, 1, 1, 1]
+
+
+def test_alternatives_never_join_across_sibling_lists() -> None:
+    body = "# A\n\n- x\n  - a {#i when=forum:courts}\n\n  text\n\n  - b {#i when=forum:arb}\n"
+    tree = tree_of(body, ALTERNATIVES)
+    assert [(i.number, i.shares_number_with) for i in items(tree)[1:]] == [(1, None), (2, None)]
+    # Within one list they do.
+    body = "# A\n\n- x\n  - a {#i when=forum:courts}\n  - b {#i when=forum:arb}\n"
+    assert [(i.number, i.shares_number_with) for i in items(tree_of(body, ALTERNATIVES))[1:]] == [(1, None), (1, "u2")]
+
+
+def test_a_list_in_a_quote_or_drafting_note_inside_an_item_is_built_on_the_section() -> None:
+    body = ("# A\n\n- x\n  > [!DRAFTING]\n  > - n1\n  > - n2\n\n  > - q1\n\n  - nested\n\n"
+            "> [!DRAFTING]\n> - top\n")
+    tree = tree_of(body)
+    assert [(i.unit, i.label, i.parent_unit) for i in items(tree)] == [
+        ("u1", "(a)", "s1"),
+        ("u2", "(i)", "s1"), ("u3", "(ii)", "s1"),  # depth 1 gives the format; the parent is the section
+        ("u4", "(i)", "s1"),
+        ("u5", "(i)", "u1"),  # a list nested in the item itself is built on it
+        ("u6", "(a)", "s1")]
+    assert [(f.depth, f.start, f.items[0].parent_unit) for f in lists(tree)] == [
+        (0, 1, "s1"), (1, 1, "s1"), (1, 1, "s1"), (1, 1, "u1"), (0, 1, "s1")]
+    assert [f.items[0].unit for f in lists(tree)] == ["u1", "u2", "u4", "u5", "u6"]  # a list has no id: its first item
 
 
 # -- Paragraphs --------------------------------------------------------------------
@@ -397,6 +487,24 @@ def test_alternative_paragraphs_share_a_number() -> None:
     tree = tree_of(body, ALTERNATIVES, overrides={"paragraphs.numbered": True})
     assert [(p.unit, p.label, p.number, p.shares_number_with) for p in paragraphs(tree)] == [
         ("u1", "1.1", 1, None), ("u2", "1.2", 2, None), ("u3", "1.2", 2, "u2"), ("u4", "1.3", 3, None)]
+
+
+def test_alternative_paragraphs_need_not_be_adjacent_blocks() -> None:
+    """Only the top-level paragraphs are counted together: a list or a table between two of them does not
+    keep them from sharing a number, and a paragraph does."""
+    body = ("# A\n\nCourts. {#p when=forum:courts}\n\n- between\n\n| a |\n|---|\n| b |\n\n"
+            "Arbitration. {#p when=forum:arb}\n\nMid.\n\nCourts again. {#q when=forum:courts}\n\n"
+            "Mid.\n\nArbitration again. {#q when=forum:arb}\n")
+    tree = tree_of(body, ALTERNATIVES, overrides={"paragraphs.numbered": True})
+    assert [(p.unit, p.number, p.shares_number_with) for p in paragraphs(tree)] == [
+        ("u1", 1, None), ("u3", 1, "u1"), ("u4", 2, None), ("u5", 3, None), ("u6", 4, None), ("u7", 5, None)]
+
+
+def test_three_alternative_paragraphs_all_name_the_first() -> None:
+    tree = tree_of("# A\n\nx {#p when=q:a}\n\n- l\n\ny {#p when=q:b}\n\nz {#p when=q:c}\n\nlast\n",
+                   THREE_WAY, overrides={"paragraphs.numbered": True})
+    assert [(p.number, p.shares_number_with) for p in paragraphs(tree)] == [
+        (1, None), (1, "u1"), (1, "u1"), (2, None)]
 
 
 def test_alternative_paragraphs_share_nothing_where_none_are_numbered() -> None:
@@ -662,6 +770,10 @@ def check(tree: RenderTree) -> None:
             first = recompute.found[node.shares_number_with].node
             assert position[node.shares_number_with] < position[unit]
             assert node.number is not None and first.number == node.number and first.shares_number_with is None
+            # An alternative stands where its first does: same kind, same parent, same label.
+            assert type(first) is type(node) and first.label == node.label, unit
+            if not isinstance(node, Section):
+                assert first.parent_unit == node.parent_unit, unit
         if isinstance(node, Section):
             assert node.label == recompute.label(unit), unit
             assert node.designation == recompute.designation(unit), unit
@@ -692,6 +804,65 @@ def check(tree: RenderTree) -> None:
         assert section == (target_found.node.unit if isinstance(target_found.node, Section)
                            else target_found.section.unit)
         assert ref.text == recompute.reference(ref), (ref.text, ref.target)
+    check_counting(tree, recompute.found)
+
+
+def _counts(group: list, found: dict[str, Found], first: int, what: str) -> None:
+    """Consecutive numbered units of *group* count up by one, or share the number of an earlier one."""
+    previous = first - 1
+    for node in group:
+        if node.number is None:
+            continue
+        shared = node.shares_number_with
+        assert node.number == previous + 1 or (shared is not None and node.number == found[shared].node.number), (
+            what, node.unit, node.number, previous)
+        previous = node.number
+
+
+def check_counting(tree: RenderTree, found: dict[str, Found]) -> None:
+    """Numbers start where they should and go on without a gap: sections of one parent, paragraphs of one
+    section, and the items of a list, which goes on from an earlier sibling list in the same item when
+    the two write their designations alike."""
+    by_parent: dict[str | None, list] = {}
+    for section in tree.sections:
+        by_parent.setdefault(section.parent_unit, []).append(section)
+    for parent, group in by_parent.items():
+        _counts(group, found, 1, f"sections under {parent}")
+    in_section: dict[str, list] = {}
+    for paragraph in paragraphs(tree):
+        in_section.setdefault(paragraph.parent_unit, []).append(paragraph)
+    for parent, group in in_section.items():
+        _counts(group, found, 1, f"paragraphs of {parent}")
+    last: dict[tuple, int] = {}  # (item, counter, ref) -> the last number of the sibling lists so far
+    for block in lists(tree):
+        if block.format is None:
+            continue
+        parent = block.items[0].parent_unit
+        under_item = parent is not None and isinstance(found[parent].node, ListItem)
+        key = (parent, block.format.counter, block.format.ref)
+        first = last.get(key, 0) + 1 if under_item else 1
+        _counts(block.items, found, first, f"items of the list at {block.items[0].unit}")
+        assert block.start == block.items[0].number
+        last[key] = block.items[-1].number
+
+
+def path_labelled(style: str, overrides: dict) -> dict:
+    """*overrides* with the label of every list level and of paragraphs written as ``{path}``, so that
+    each label is the unit's whole designation and comparing labels compares designations."""
+    formats = tree_of("# A\n", style=style, overrides=overrides).formats
+    out = dict(overrides)
+    if formats.enumerated:
+        out["enumeration.levels"] = [{"counter": f.counter, "label": "{path}", "ref": f.ref}
+                                     for f in formats.enumerated]
+    paragraph = formats.paragraphs or LevelFormat("decimal", "{section}.{n}", ".{n}")
+    out["paragraphs.numbered"] = True
+    out["paragraphs.format"] = {"counter": paragraph.counter, "label": "{path}", "ref": paragraph.ref}
+    return out
+
+
+def variants(style: str, overrides: dict) -> list[dict]:
+    """The settings to check a style under: as they are, and with designations as labels."""
+    return [overrides, path_labelled(style, overrides)]
 
 
 STYLES = [("default", {}), ("outline", {}), ("continental", {}),
@@ -705,8 +876,9 @@ STYLE_IDS = ["default", "outline", "continental", "none", "continental-none", "e
 @pytest.mark.parametrize(("style", "overrides"), STYLES, ids=STYLE_IDS)
 def test_the_corpus_of_the_tests_is_numbered_as_its_structure_says(style: str, overrides: dict) -> None:
     for name in ("features.lgd", "template.lgd"):
-        check(render((DOCUMENTS / name).read_text(encoding="utf-8"), format="text", style=style,
-                     overrides=overrides).tree)
+        for variant in variants(style, overrides):
+            check(render((DOCUMENTS / name).read_text(encoding="utf-8"), format="text", style=style,
+                         overrides=variant).tree)
 
 
 @pytest.mark.parametrize(("body", "overrides"), [
@@ -715,18 +887,26 @@ def test_the_corpus_of_the_tests_is_numbered_as_its_structure_says(style: str, o
     ("# A\n\n### B\n\n## C\n\n#### D\n\n### E\n\n- x {#x}\n\nSee {{ref: x}}.\n", {"numbering.scheme": "mixed"}),
     ("# A\n\n> - q\n\n- x\n  > - y\n", {}),
     ("- p\n\n# A\n", {}),
-], ids=["nested", "refs", "refs-paragraphs", "refs-none", "skips", "skips-mixed", "quotes", "preamble"])
+    ("# A\n\n- x\n  - a\n  - b\n\n  text\n\n  1. c\n  1. d\n\n  - e\n\n> [!DRAFTING]\n> - n\n", {}),
+    ("# A\n\n1. r\n   - e1\n     1. r2\n        - e2\n          - e3\n            - e4\n", {}),
+], ids=["nested", "refs", "refs-paragraphs", "refs-none", "skips", "skips-mixed", "quotes", "preamble",
+        "sibling-lists", "mixed-families"])
 @pytest.mark.parametrize("style", ["default", "outline", "continental"])
 def test_small_documents_are_numbered_as_their_structure_says(body: str, overrides: dict, style: str) -> None:
-    check(tree_of(body, style=style, overrides=overrides))
+    for variant in variants(style, overrides):
+        check(tree_of(body, style=style, overrides=variant))
 
 
 def test_alternatives_are_numbered_as_their_structure_says() -> None:
     body = ("# Disputes {#d when=forum:courts}\n\n## Sub one\n\n- a {#i when=forum:courts}\n- b {#i when=forum:arb}\n\n"
             "# Disputes {#d when=forum:arb}\n\n## Sub alt {#sub-alt}\n\nOne. {#p when=forum:arb}\n\n"
             "Two. {#p when=forum:courts}\n\nSee {{ref: d}}, {{ref: i}}, {{ref: p}}, {{ref: sub-alt}}.\n")
+    siblings = ("# A\n\n- x\n  - a {#i when=forum:courts}\n\n  text\n\n  - b {#i when=forum:arb}\n  - c {#i when=forum:courts}\n"
+                "  - d {#i when=forum:arb}\n")
     for style, overrides in STYLES:
-        check(tree_of(body, ALTERNATIVES, style=style, overrides={**overrides, "paragraphs.numbered": True}))
+        for variant in variants(style, {**overrides, "paragraphs.numbered": True}):
+            check(tree_of(body, ALTERNATIVES, style=style, overrides=variant))
+            check(tree_of(siblings, ALTERNATIVES, style=style, overrides=variant))
 
 
 # -- The specification's corpus ----------------------------------------------------
@@ -742,13 +922,14 @@ def test_the_specifications_corpus_is_numbered_as_its_structure_says(style: str,
     assert CORPUS, "no documents found in the specification checkout"
     rendered = 0
     for path in CORPUS:
-        try:
-            result = render(path.read_text(encoding="utf-8"), format="text", style=style, overrides=overrides)
-        except DocumentError:
-            continue
-        try:
-            check(result.tree)
-        except AssertionError as error:  # name the document
-            raise AssertionError(f"{path.relative_to(SPEC)}: {error}") from error
-        rendered += 1
-    assert rendered > 100
+        for variant in variants(style, overrides):
+            try:
+                result = render(path.read_text(encoding="utf-8"), format="text", style=style, overrides=variant)
+            except DocumentError:
+                continue
+            try:
+                check(result.tree)
+            except AssertionError as error:  # name the document
+                raise AssertionError(f"{path.relative_to(SPEC)}: {error}") from error
+            rendered += 1
+    assert rendered > 200

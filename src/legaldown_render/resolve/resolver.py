@@ -771,8 +771,9 @@ class Resolver:
             if isinstance(block, Paragraph) and block.top_level:
                 # Alternative paragraphs share a number, as sections do (§15.8).
                 own = self._own_presence(block.condition, presence)
-                number = paragraphs.next(block.anchor_id, own)
-                block = self._number_paragraph(block, section, paragraphs, number,
+                unit = self._unit()
+                number, shares = paragraphs.next(block.anchor_id, own, unit)
+                block = self._number_paragraph(block, section, paragraphs, number, unit, shares,
                                                presence if own is None else own)
             out.append(self._structure(block, section=section, depth=0, presence=presence))
         return tuple(out)
@@ -784,10 +785,9 @@ class Resolver:
         return enclosing | own if own else None
 
     def _number_paragraph(self, block: Paragraph, section: Section, counter: _Counter, number: int,
-                          presence: Presence) -> Paragraph:
+                          unit: str, shares: str | None, presence: Presence) -> Paragraph:
         numbering = self.style.paragraphs
         base = section.designation or ""
-        unit = self._unit()
         if numbering.numbered:
             fmt = numbering.format
             n = format_counter(number, fmt.counter)
@@ -800,7 +800,6 @@ class Resolver:
         else:
             label = None
             target = _Target(base, None, enumerated=False, section_index=self._section_index, unit=unit)
-        shares = counter.claim(unit)
         anchor = self._anchor(block.anchor_id)
         if block.anchor_id:
             self._register(block.anchor_id, replace(target, anchor=anchor))
@@ -831,7 +830,8 @@ class Resolver:
                 return block
 
     def _structure_list(self, block: List, *, section: Section | None, depth: int, parent: str,
-                        parent_unit: str | None, presence: Presence, counters: dict[tuple[str, str] | None, _Counter] | None = None,
+                        parent_unit: str | None, presence: Presence,
+                        counters: dict[tuple[str, str] | None, _Counter] | None = None,
                         quoted: bool = False, parts: tuple[tuple[str, str], ...] = ()) -> List:
         """*block* numbered under *parent*. Sibling lists nested in the same
         item share *counters*, one per way of writing a designation (counter
@@ -858,9 +858,8 @@ class Resolver:
             counter = counters.setdefault(key, _Counter(self._exclusive))
             counter.new_list()
         for item in block.items:
-            index = counter.next(item.anchor_id, self._own_presence(item.condition, presence))
             unit = self._unit()
-            shares = counter.claim(unit)
+            index, shares = counter.next(item.anchor_id, self._own_presence(item.condition, presence), unit)
             # An item's nested blocks are present only when the item is.
             inner = presence | self._presence(item.condition)
             if fmt is not None:
@@ -1628,17 +1627,17 @@ class _Counter:
     """Numbers sibling units in order (§13.2, §15.8). A unit joins the
     previous unit's number when it is an alternative to it: the same
     identifier, and a presence that excludes the presence of every unit
-    already holding that number (§15.4). Only adjacent units are compared,
-    as the validator does for sections."""
+    already holding that number (§15.4). Only consecutive units *of this
+    counter* are compared, as the validator does for sections: for the
+    top-level paragraphs of a section, a list or table between two of them
+    does not separate them."""
 
     def __init__(self, exclusive: Callable[[Presence, Presence], bool]) -> None:
         self.exclusive = exclusive
         self.count = 0
         self.identifier = ""
         self.holders: list[Presence] = []
-        # Whether the last unit joined the number before it, and the unit that
-        # first held the current number (see claim).
-        self.joined = False
+        # The unit that first held the current number (see next).
         self.first_unit: str | None = None
 
     def new_list(self) -> None:
@@ -1647,28 +1646,20 @@ class _Counter:
         self.identifier = ""
         self.holders = []
 
-    def next(self, identifier: str, presence: Presence | None) -> int:
-        """The number for the next unit. *presence* is None for a unit with
-        no valid condition of its own, which is never an alternative."""
-        self.joined = False
+    def next(self, identifier: str, presence: Presence | None, unit: str) -> tuple[int, str | None]:
+        """The number for the next unit, *unit*, and the unit that first held
+        it when *unit* is a later alternative, else None. *presence* is None
+        for a unit with no valid condition of its own, which is never an
+        alternative."""
         if (presence is not None and identifier and identifier == self.identifier
                 and all(self.exclusive(holder, presence) for holder in self.holders)):
             self.holders.append(presence)
-            self.joined = True
-            return self.count
+            return self.count, self.first_unit
         self.count += 1
         self.identifier = identifier if presence is not None else ""
         self.holders = [presence] if presence is not None else []
-        return self.count
-
-    def claim(self, unit: str) -> str | None:
-        """Record *unit* as the holder of the number :meth:`next` just gave:
-        None if it is the first to hold it, else the unit that was (the first
-        alternative, §15.8)."""
-        if self.joined:
-            return self.first_unit
         self.first_unit = unit
-        return None
+        return self.count, None
 
 
 class _Slot(NamedTuple):

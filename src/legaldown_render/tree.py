@@ -118,8 +118,8 @@ class CrossRef:
       the section's number is ``None`` and its title is what the designation
       starts from.
 
-    Both are ``None`` where there is no unit to name: for a copy that no longer
-    links (:func:`unlinked`, as in the table of contents). A reference that does
+    Both are ``None`` in a copy that no longer links (:func:`unlinked`, as in
+    the table of contents), which names no unit. A reference that does
     not resolve is a :class:`FailureMarker`, not a ``CrossRef``, and so is a
     ``{{ref:}}`` to an attachment id, which is a broken reference (§5.6);
     ``{{attach:}}`` is a :class:`Value` of kind ``attach``, whose ``href`` is
@@ -219,7 +219,9 @@ class Paragraph:
     #: The numbering of a top-level paragraph of a section (see Section):
     #: its unit id, counter value (None when the style does not number
     #: paragraphs), the section's unit, and the first alternative it shares
-    #: its number with. Other paragraphs are not units: all four are None.
+    #: its number with. Alternatives are the section's top-level paragraphs
+    #: only: a list or table between two of them does not separate them.
+    #: Other paragraphs are not units: all four are None.
     unit: str | None = None
     number: int | None = None
     parent_unit: str | None = None
@@ -244,7 +246,8 @@ class ListItem:
     #: a list that is not enumerated), the unit its designation is built on (the
     #: section for an item of a list that is not nested in an item; the enclosing
     #: item for a nested one; None in the preamble), and the first alternative
-    #: it shares its number with.
+    #: it shares its number with. The counter value does not always start at 1
+    #: in a list: see :class:`List`.
     unit: str | None = None
     number: int | None = None
     parent_unit: str | None = None
@@ -269,15 +272,31 @@ class List:
     #: Set by the resolve stage: which numbering the list is under. It is
     #: ``bullet`` exactly when ``enumerated`` is False.
     family: ListFamily = "bullet"
-    #: Set by the resolve stage: how deep the list is nested, from 0 for a list
-    #: that is not inside an item (a list in a quote in an item counts as one
-    #: level deeper, as its format does).
+    #: Set by the resolve stage: the nesting depth the list's format was
+    #: chosen at, from 0 for a list that is not inside an item. It selects the
+    #: format and nothing else: a list in a quote or drafting note inside an
+    #: item is one level deeper than the item, yet its items' ``parent_unit``
+    #: is the section. Where a list nests, follow ``parent_unit`` (an item, or
+    #: a section), not ``depth``.
     depth: int = 0
     #: Set by the resolve stage: the format its items are numbered in (the
     #: counter, ``label`` and ``ref`` templates of §13.2), None for ``bullet``.
     #: It is the entry of :attr:`RenderTree.formats` that the list's family
     #: and depth select, so that nobody has to select it again.
     format: LevelFormat | None = None
+
+    @property
+    def start(self) -> int | None:
+        """The number of the first item (``items[0].number``), None when the
+        list is not enumerated. It is 1 unless the list goes on from a sibling:
+        lists nested directly in one item share a counter per way of writing a
+        designation (counter style and ``ref`` template), so that a second
+        list after a paragraph, or a list of another family with the same
+        designations, continues the first's numbers ("(c)" after "(a)", "(b)")
+        and no designation is repeated. Top-level lists, and lists in quotes,
+        always start at 1. A list has no id of its own: name it by
+        ``items[0].unit``."""
+        return self.items[0].number if self.items else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,13 +370,20 @@ class Section:
       when the style does not number paragraphs.
     * ``parent_unit``: the unit whose designation this one's is built on: for a
       section the nearest section above it with a smaller ``level`` (a skipped
-      level counts as 1 and is not a unit); for an item of a list that is not
-      inside an item, and for a paragraph, the section (None in the preamble);
-      for a nested item, the item it is nested in.
+      level counts as 1 and is not a unit, yet that 1 is part of every
+      designation below it, and so of the ``{section}`` of an item or paragraph
+      there); for an item of a list that is not inside an item, and for a
+      paragraph, the section (None in the preamble); for a nested item, the
+      item it is nested in. A list in a quote or drafting note, even inside an
+      item, is built on the section.
     * ``shares_number_with``: for a later alternative that shares its number
-      (§15.8; same identifier and exclusive conditions, §15.4) the unit of the
-      **first** alternative, else None. It is set only on a numbered unit; the
-      first alternative is a unit like any other, and each alternative has a
+      (§15.8, §15.4) the unit of the **first** unit that has that number, else
+      None. Items and paragraphs share when they have the same identifier and a
+      presence that excludes that of every unit already holding the number;
+      sections share by number (the validator's): the subsections of a later
+      alternative section repeat the numbers of the earlier one's, whatever
+      their identifiers. It is set only on a numbered unit; the first
+      alternative is a unit like any other, and each alternative has a
       ``unit`` of its own.
     """
 
