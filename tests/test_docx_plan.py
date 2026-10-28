@@ -1,11 +1,14 @@
-"""The DOCX numbering plan (docs/architecture.md, "The DOCX planner"): which abstractNums and nums a document needs,
+"""The DOCX plan (docs/architecture.md, "The DOCX planner"): which abstractNums and nums a document needs,
 which (numId, ilvl) each section, list item and numbered paragraph takes, and that Word, simulated, numbers every unit
-as the resolver did, or a diagnostic says why not. Everything is checked on the plan's data; no file is written."""
+as the resolver did, or a diagnostic says why not; and, from the numbering, the fields of every cross-reference, the
+bookmarks and the table of contents. Everything is checked on the plan's data; no file is written (the LibreOffice
+round trip is in test_docx_roundtrip.py)."""
 from __future__ import annotations
 
 import functools
 import random
-from collections.abc import Iterator
+import re
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -13,12 +16,31 @@ from conftest import DOCUMENTS, FRONT, spec_root
 
 from legaldown_render import DocumentError, render
 from legaldown_render.errors import StyleError
-from legaldown_render.resolve.docx_numbering import NUM_FMT, word_counter
-from legaldown_render.resolve.docx_plan import DocxPlan, docx_style_errors, plan_docx
+from legaldown_render.resolve.docx_bookmarks import BookmarkNames
+from legaldown_render.resolve.docx_cover import Field, Title, cover, suppressed, uncovered
+from legaldown_render.resolve.docx_numbering import NUM_FMT, Count, Ghost, Lit, word_counter
+from legaldown_render.resolve.docx_plan import (
+    DocxPlan,
+    FieldSeg,
+    Literal_,
+    Segment,
+    docx_style_errors,
+    plan_docx,
+)
 from legaldown_render.resolve.numbering import format_counter, formats_of
 from legaldown_render.style import load_style
 from legaldown_render.style.docx import docx_settings
-from legaldown_render.tree import DraftingNote, List, ListItem, Paragraph, Quote, RenderTree, Section
+from legaldown_render.tree import (
+    CrossRef,
+    DraftingNote,
+    List,
+    ListItem,
+    Paragraph,
+    Quote,
+    RenderTree,
+    Section,
+    iter_tree_inlines,
+)
 
 NONE = {"numbering.scheme": "none"}
 PARAGRAPHS = {"paragraphs.numbered": True}
@@ -517,7 +539,7 @@ def test_the_same_tree_gives_an_equal_plan_and_the_plan_is_frozen() -> None:
     with pytest.raises(AttributeError):
         first[0].heading_num_id = 5  # type: ignore[misc]
     assert list(first[0].units) == [u.unit for u in units(result.tree)]
-    assert first[0].refs == {} and first[0].anchors == {} and first[0].toc == ()
+    assert first[0].refs == {} and first[0].toc == () and first[0].anchors == {"a": "ld_a"}
 
 
 def test_unit_plans_carry_the_whole_plan_for_a_unit() -> None:
@@ -873,3 +895,583 @@ def test_the_random_documents_reach_every_case_the_property_is_about() -> None:
             "render-docx-list-depth", "render-docx-shared-counter"} <= seen_rules
     assert {"restart-family", "resync", "label-fallback", "skipped-level", "clamped"} <= seen_causes
     assert depth >= 10
+
+
+# =====================================================================================================
+# Cross-references, bookmarks and the table of contents (docs/architecture.md, "The DOCX planner")
+# =====================================================================================================
+
+
+def show(plan: DocxPlan, segments: Sequence[Segment]) -> str:
+    """*segments* as one line: literal text in quotes, a field as ``REF`` and the anchor of the bookmark it points at,
+    ``\\t`` after it when it suppresses the text around the counter, ``\\h`` for the text of a heading."""
+    anchors = {name: anchor for anchor, name in plan.anchors.items()}
+    pieces = []
+    for segment in segments:
+        if isinstance(segment, Literal_):
+            pieces.append(f'"{segment.text}"')
+        else:
+            pieces.append(f"REF {anchors[segment.bookmark]}" + (" \\t" if segment.suppress_text else "")
+                          + ("" if segment.number else " \\h"))
+    return " + ".join(pieces)
+
+
+def cached(segments: Sequence[Segment]) -> str:
+    return "".join(s.text if isinstance(s, Literal_) else s.cached for s in segments)
+
+
+#: A document that has every kind of target; the references at the end are the ones the tests read.
+TARGETS = """# Alpha {#alpha}
+
+Intro paragraph one. {#p1}
+
+- first item {#i1}
+- second item {#i2}
+  - nested one {#n1}
+  - nested two {#n2}
+    - deep one {#d1}
+- third item {#i3}
+
+## Beta {#beta}
+
+### Gamma {#gamma}
+
+1. ordered one {#o1}
+2. ordered two {#o2}
+   - bullet in ordered {#b1}
+
+#### Delta {#delta}
+
+##### Epsilon {#eps}
+
+- eps item {#ei}
+
+# Second {#second}
+
+- a {#sa}
+"""
+REFERENCES = "\n" + " ".join(f"{{{{ref: {anchor}}}}}" for anchor in (
+    "alpha", "p1", "i1", "n2", "d1", "beta", "gamma", "o2", "b1", "delta", "eps", "ei", "second", "sa", "i3"))
+
+ARTICLE = {"numbering.levels": [{"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"}]}
+SECTION_SIGN = {"numbering.levels": [{"counter": "decimal", "label": "§ {n}", "ref": "{n}"}],
+                "references.format": "§ {designation}"}
+
+
+def covers(variant: str, **settings: object) -> dict[str, tuple[str, str]]:
+    """Anchor of each target to (what the renderer shows, the plan's cover), for the document of :data:`TARGETS`."""
+    result = render(FRONT + TARGETS + REFERENCES, format="text", **settings)
+    plan, _ = plan_docx(result.tree)
+    units_of = {n.unit: n for n in units(result.tree)}
+    found = {}
+    for inline in iter_tree_inlines(result.tree):
+        if isinstance(inline, CrossRef):
+            anchor = units_of[inline.target_unit].anchor
+            found[anchor] = (inline.text, show(plan, plan.refs[inline.target_unit].segments))
+    return found
+
+
+# What each style's references are made of: fields wherever Word draws the number, literal text only for the
+# delimiters between them. A field for the target alone covers a ``{path}`` label (``1.1.1``), one field per
+# level covers a ``{n}`` label (``I.A.1``).
+COVERS = [
+    # default: decimal headings, (a) (i) (A) items, 1.1.1(2) for an ordered item in a section
+    ("default", {}, "alpha", "1", "REF alpha"),
+    ("default", {}, "i1", "1(a)", "REF alpha + REF i1"),
+    ("default", {}, "d1", "1(b)(ii)(A)", "REF alpha + REF i2 + REF n2 + REF d1"),
+    ("default", {}, "gamma", "1.1.1", "REF gamma"),
+    ("default", {}, "o2", "1.1.1(2)", 'REF gamma + "(" + REF o2 + ")"'),
+    ("default", {}, "eps", "1.1.1.1.1", "REF eps"),
+    ("default", {}, "ei", "1.1.1.1.1(a)", "REF eps + REF ei"),
+    # outline: every part of the number is a counter of its own level
+    ("outline", {"style": "outline"}, "alpha", "I", "REF alpha"),
+    ("outline", {"style": "outline"}, "beta", "I.A", 'REF alpha + "." + REF beta'),
+    ("outline", {"style": "outline"}, "eps", "I.A.1.a(i)",
+     'REF alpha + "." + REF beta + "." + REF gamma + "." + REF delta + REF eps'),
+    ("outline", {"style": "outline"}, "i3", "I(c)", "REF alpha + REF i3"),
+    # mixed: 1(a)(i)
+    ("mixed", {"overrides": {"numbering.scheme": "mixed"}}, "gamma", "1(a)(i)", "REF alpha + REF beta + REF gamma"),
+    ("mixed", {"overrides": {"numbering.scheme": "mixed"}}, "o2", "1(a)(i)(2)",
+     'REF alpha + REF beta + REF gamma + "(" + REF o2 + ")"'),
+    # continental: 1.1 for an item (the number of the section is not part of the item's own level in Word yet),
+    # a(n) item nested in an item written "b)" and referred to as "(b)"
+    ("continental", {"style": "continental"}, "i1", "1.1", 'REF alpha + "." + REF i1'),
+    ("continental", {"style": "continental"}, "n2", "1.2(b)", 'REF alpha + "." + REF i2 + "(" + REF n2'),
+    ("continental", {"style": "continental"}, "p1", "1(1)", "REF alpha + REF p1"),
+    ("continental", {"style": "continental"}, "gamma", "1.1.1", "REF gamma"),
+    # the none scheme: the text of the heading, then the pieces after a space
+    ("none", {"overrides": {"numbering.scheme": "none"}}, "alpha", "Alpha", "REF alpha \\h"),
+    ("none", {"overrides": {"numbering.scheme": "none"}}, "d1", "Alpha (b) (ii) (A)",
+     'REF alpha \\h + " " + REF i2 + " " + REF n2 + " " + REF d1'),
+    ("none", {"overrides": {"numbering.scheme": "none"}}, "o2", "Gamma (2)", 'REF gamma \\h + " (" + REF o2 + ")"'),
+    # words and symbols in a label that the reference leaves out: \t drops them, the format puts them back
+    ("article", {"overrides": {**ARTICLE, "references.format": "Article {designation}"}}, "i1", "Article I(a)",
+     '"Article " + REF alpha \\t + REF i1'),
+    ("article", {"overrides": {**ARTICLE, "references.format": "Article {designation}"}}, "beta", "Article I.1",
+     '"Article " + REF beta'),
+    ("section-sign", {"overrides": SECTION_SIGN}, "d1", "§ 1(b)(ii)(A)",
+     '"§ " + REF alpha \\t + REF i2 + REF n2 + REF d1'),
+]
+
+
+@pytest.mark.parametrize(("variant", "settings", "anchor", "text", "expected"), COVERS)
+def test_a_reference_is_the_renderers_designation_covered_by_fields_and_delimiters(
+        variant: str, settings: dict, anchor: str, text: str, expected: str) -> None:
+    assert covers(variant, **settings)[anchor] == (text, expected)
+
+
+def test_a_cover_reads_as_the_renderer_does_and_a_field_is_cached_as_word_draws_it() -> None:
+    result = render(FRONT + TARGETS + REFERENCES, format="text", style="outline")
+    plan, diagnostics = plan_docx(result.tree)
+    for inline in iter_tree_inlines(result.tree):
+        if isinstance(inline, CrossRef):
+            reference = plan.refs[inline.target_unit]
+            assert reference.exact and cached(reference.segments) == inline.text
+            for segment in reference.segments:
+                if isinstance(segment, FieldSeg):
+                    assert segment.number and segment.hyperlink and not segment.suppress_text
+                    assert segment.cached_lo == segment.cached
+    # a section's own field returns its number without the period of its label
+    assert plan.units["s1"].label == "I." and plan.units["s1"].word_ref == "I"
+    assert next(s for s in plan.refs["s1"].segments if isinstance(s, FieldSeg)).cached == "I"
+    assert diagnostics and all(d.rule == "render-docx-static-restart" for d in diagnostics)
+
+
+def test_a_reference_to_an_item_in_another_section_is_built_from_the_chain_of_its_own_section() -> None:
+    body = "# One {#one}\n\n## Inner {#inner}\n\n- deep {#deep}\n  - deeper {#deeper}\n\n# Two {#two}\n\n" \
+           "See {{ref: deeper}} and {{ref: inner}}, {{ref: one}}.\n"
+    tree, plan, diagnostics = planned(body, style="outline")
+    refs = {i.text: plan.refs[i.target_unit] for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)}
+    assert [(text, show(plan, r.segments)) for text, r in refs.items()] == [
+        ("I.A(a)(i)", 'REF one + "." + REF inner + REF deep + REF deeper'),
+        ("I.A", 'REF one + "." + REF inner'), ("I", "REF one")]
+    assert all(r.exact for r in refs.values()) and not [d for d in diagnostics if "reference" in d.rule]
+
+
+def test_a_reference_to_a_unit_the_style_does_not_number_shows_the_designation_of_its_section() -> None:
+    body = "# Alpha {#alpha}\n\n## Beta {#beta}\n\n- bullet {#bullet}\n\nSee {{ref: bullet}}.\n"
+    tree, plan, diagnostics = planned(body, overrides={"enumeration.enabled": False})
+    [reference] = [i for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)]
+    assert reference.text == "1.1" and reference.target_unit != reference.section_unit
+    assert show(plan, plan.refs[reference.target_unit].segments) == "REF beta"
+    assert plan.refs[reference.target_unit].exact and cached(plan.refs[reference.target_unit].segments) == "1.1"
+    # the bullet itself is a target nobody's field points at: it keeps its own bookmark for links
+    assert plan.units[reference.target_unit].bookmarks == ("ld_bullet",)
+
+
+def test_references_format_wraps_every_occurrence_of_the_designation() -> None:
+    body = "# Alpha {#alpha}\n\n- x {#x}\n\nSee {{ref: alpha}} {{ref: x}}.\n"
+    for fmt, expected in (("Section {designation} hereof", ["Section 1 hereof", "Section 1(a) hereof"]),
+                          ("{designation} and {designation}", ["1 and 1", "1(a) and 1(a)"]),
+                          ("[{designation}]", ["[1]", "[1(a)]"])):
+        tree, plan, _ = planned(body, overrides={"references.format": fmt})
+        found = [i for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)]
+        assert [i.text for i in found] == expected
+        assert [cached(plan.refs[i.target_unit].segments) for i in found] == expected
+        assert all(plan.refs[i.target_unit].exact for i in found)
+    tree, plan, _ = planned(body, overrides={"references.format": "{designation} and {designation}"})
+    [first, second] = [plan.refs[i.target_unit] for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)]
+    assert show(plan, first.segments) == 'REF alpha + " and " + REF alpha'
+    assert show(plan, second.segments) == 'REF alpha + REF x + " and " + REF alpha + REF x'
+
+
+def test_a_reference_to_the_same_target_is_planned_once() -> None:
+    tree, plan, _ = planned("# A {#a}\n\n{{ref: a}} {{ref: a}} and again {{ref: a}}.\n")
+    assert list(plan.refs) == ["s1"]
+
+
+def test_the_fields_of_a_unit_that_is_not_a_target_have_a_bookmark_of_their_own() -> None:
+    """Every unit a field points at has a bookmark: its anchor's, or a hidden one when it has no anchor."""
+    tree, plan, _ = planned("# A\n\n- x\n  - y {#y}\n\nSee {{ref: y}}.\n")
+    assert plan.units["u2"].bookmarks == ("ld_y",)
+    assert plan.units["u1"].bookmarks == ("_Ld1",) and plan.units["s1"].bookmarks == ("ld_a",)
+    assert plan.units["s1"].bookmarks[0] in plan.anchors.values() and "_Ld1" not in plan.anchors.values()
+    [reference] = plan.refs.values()
+    assert [s.bookmark for s in reference.segments] == ["ld_a", "_Ld1", "ld_y"]
+
+
+# -- Why a reference cannot be built from fields -------------------------------------------------------------
+
+
+def references_of(tree: RenderTree, plan: DocxPlan) -> list[tuple[str, str, bool]]:
+    return [(i.text, show(plan, plan.refs[i.target_unit].segments), plan.refs[i.target_unit].exact)
+            for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)]
+
+
+def test_a_skipped_heading_level_leaves_a_part_of_the_designation_no_field_stands_for() -> None:
+    body = "# A {#a}\n\n### B {#b}\n\nSee {{ref: b}}.\n"
+    tree, plan, diagnostics = planned(body, style="outline")
+    assert references_of(tree, plan) == [("I.A.1", "REF b", False)]
+    [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert found.level == "warning" and found.line == tree.sections[1].blocks[0].line
+    assert found.message.startswith("The cross-reference 'I.A.1' cannot be built from Word's numbering fields: a "
+                                    "heading level is skipped before it")
+    assert "reads '1' in Word" in found.message
+    # the decimal scheme writes the whole number in the heading's own field, so nothing is missing there
+    tree, plan, diagnostics = planned(body)
+    assert references_of(tree, plan) == [("1.1.1", "REF b", True)] and not diagnostics
+
+
+def test_text_around_a_counter_that_word_cannot_drop_leaves_the_reference_as_one_field() -> None:
+    body = "# A\n\n- x {#x}\n\nSee {{ref: x}}.\n"
+    for label, shown in (("({n})", "(1)"), ("{n}:", "1:"), ("No. {n}", "No. 1")):
+        overrides = {"enumeration.levels": [{"counter": "decimal", "label": label, "ref": "{n}"}]}
+        tree, plan, diagnostics = planned(body, overrides=overrides)
+        [(text, cover_, exact)] = references_of(tree, plan)
+        assert (text, cover_, exact) == ("11", "REF x", False)
+        [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+        assert f"Word draws its number as '{shown}'" in found.message and "'11'" in found.message
+
+
+def test_a_cover_that_reads_differently_in_word_is_reported_unless_a_unit_already_says_why() -> None:
+    many = "\n".join(f"- i{i} {{#m{i}}}" for i in range(1, 30))
+    tree, plan, diagnostics = planned(f"# A {{#a}}\n\n{many}\n\nSee {{{{ref: m28}}}} {{{{ref: m1}}}}.\n")
+    # the letter counter past 26 is a finding of its own: the references to it are not reported again
+    assert references_of(tree, plan) == [("1(ab)", "REF a + REF m28", False), ("1(a)", "REF a + REF m1", True)]
+    assert [d.rule for d in diagnostics] == ["render-docx-letter-overflow"]
+    assert cached(plan.refs[tree.sections[0].blocks[0].items[27].unit].segments) == "1(bb)"
+
+
+def test_a_reference_whose_text_the_renderer_cut_is_reported() -> None:
+    title = "word " * 300
+    body = f"# {title.strip()} {{#long}}\n\nSee {{{{ref: long}}}}.\n"
+    tree, plan, diagnostics = planned(body, overrides=NONE)
+    [reference] = [i for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)]
+    assert len(reference.text) < len(title) - 100
+    assert not plan.refs["s1"].exact
+    [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert "will read" in found.message and "numbered or written differently" in found.message
+
+
+def test_a_cover_with_the_switch_word_ignores_in_libreoffice_is_an_information_for_the_document() -> None:
+    body = "# A {#a}\n\n# B {#b}\n\nSee {{ref: a}} {{ref: b}}.\n"
+    settings = {"overrides": {**ARTICLE, "references.format": "Article {designation}"}}
+    tree, plan, diagnostics = planned(body, **settings)
+    first, second = (plan.refs[i.target_unit].segments for i in iter_tree_inlines(tree) if isinstance(i, CrossRef))
+    assert [(s.suppress_text, s.cached, s.cached_lo) for s in first if isinstance(s, FieldSeg)] == [(True, "I", "Article I")]
+    assert [(s.suppress_text, s.cached, s.cached_lo) for s in second if isinstance(s, FieldSeg)] == [(True, "II", "Article II")]
+    [found] = [d for d in diagnostics if d.rule == "render-docx-reference-word-only"]
+    assert found.level == "info" and found.line is None and "'Article I'" in found.message
+    assert "reads 'Article Article I'" in found.message and "so do 1 more" in found.message
+    assert all(plan.refs[i].exact for i in plan.refs)
+
+
+def test_reference_findings_name_the_file_and_the_first_line_of_a_repeated_reference() -> None:
+    body = "# A {#a}\n\n### B {#b}\n\nFirst {{ref: b}}.\n\nSecond {{ref: b}}.\n"
+    result = render(FRONT + body, format="text", style="outline")
+    _, diagnostics = plan_docx(result.tree, file="deal.lgd")
+    [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert found.file == "deal.lgd" and found.line == result.tree.sections[1].blocks[0].line
+
+
+def test_untrusted_text_in_a_reference_message_is_escaped() -> None:
+    body = "# A\n\n### B {#b}\n\nSee {{ref: b}}.\n"
+    levels = [{"counter": "decimal", "label": "{n}\u0007", "ref": "{n}\u0007"}, {"counter": "decimal", "label": "{n}",
+                                                                                  "ref": "{n}"}]
+    _, _, diagnostics = planned(body, overrides={"numbering.levels": levels})
+    assert all("\u0007" not in d.message for d in diagnostics)
+
+
+# -- The cover on its own ----------------------------------------------------------------------------------
+
+
+def field(owner: str, *tokens: object, number: bool = True, suppress: bool = False) -> Field:
+    return Field(owner, number, suppress, tuple(tokens))  # type: ignore[arg-type]
+
+
+def test_fewest_fields_win_then_fewest_switches_then_fewest_literals() -> None:
+    designation = [Count("a", "1"), Lit("."), Count("b", "2")]
+    whole = field("b", Count("a", "1"), Lit("."), Count("b", "2"))
+    parts = [field("a", Count("a", "1")), field("b", Count("b", "2"))]
+    assert cover(designation, [*parts, whole]) == [whole]
+    assert cover(designation, parts) == [parts[0], ".", parts[1]]
+    plain = field("a", Lit("Article "), Count("a", "I"))
+    bare = field("a", Count("a", "I"), suppress=True)
+    assert cover([Count("a", "I")], [plain, bare]) == [bare]
+    assert cover([Lit("Article "), Count("a", "I")], [plain, bare]) == [plain]  # the words are in the field
+    assert cover([Lit("Article "), Count("a", "I")], [bare]) == ["Article ", bare]  # or come from the literal
+    assert cover([], []) == []
+
+
+def test_a_literal_stands_for_delimiters_only_never_for_a_counter_or_a_title() -> None:
+    assert cover([Count("a", "1")], []) is None
+    assert cover([Title("a", "Alpha")], []) is None
+    assert cover([Lit("(")], []) == ["("]
+    assert cover([Title("a", "Alpha")], [field("a", Title("a", "Alpha"), number=False)]) is not None
+
+
+def test_a_field_fits_where_the_counters_belong_to_the_same_units_whatever_their_text() -> None:
+    designation = [Count("a", "ab")]
+    assert cover(designation, [field("a", Count("a", "bb"))]) == [field("a", Count("a", "bb"))]
+    assert cover(designation, [field("a", Count("other", "ab"))]) is None
+    assert cover([Count(Ghost("s2", 1), "1")], [field("s2", Count("s2", "1"))]) is None
+
+
+def test_the_atom_nothing_can_stand_for_is_found() -> None:
+    designation = [Count("a", "I"), Lit("."), Count(Ghost("s2", 1), "1"), Lit("."), Count("b", "1")]
+    fields = [field("a", Count("a", "I")), field("b", Count("b", "1"))]
+    assert cover(designation, fields) is None and uncovered(designation, fields) == 2
+    assert uncovered([Count("a", "I")], fields) is None
+
+
+def test_the_switch_that_drops_text_is_modelled_only_where_it_leaves_bare_counters() -> None:
+    assert suppressed([Lit("Article "), Count("a", "I")]) == (Count("a", "I"),)
+    assert suppressed([Lit("§ "), Count("a", "3")]) == (Count("a", "3"),)
+    assert suppressed([Lit("("), Count("a", "a"), Lit(")")]) is None
+    assert suppressed([Count("a", "1"), Lit("."), Count("b", "2")]) is None
+    assert suppressed([Lit("No. "), Count("a", "1")]) is None
+    assert suppressed([Lit("Article")]) is None
+
+
+# -- Bookmarks ----------------------------------------------------------------------------------------------
+
+
+def test_bookmark_names_have_a_prefix_for_what_they_mark_and_write_dashes_as_underscores() -> None:
+    names = BookmarkNames()
+    assert names.anchor("ld_", "delay-cause") == "ld_delay_cause"
+    assert names.anchor("lddef_", "business-day") == "lddef_business_day"
+    assert names.anchor("ldatt_", "schedule-a") == "ldatt_schedule_a"
+    assert names.fixed("_LdAttachments") == "_LdAttachments"
+    assert names.toc() == "_Toc100000001" and names.toc() == "_Toc100000002"
+
+
+def test_a_name_that_cannot_be_used_is_a_hidden_one_counted_in_the_order_they_are_given() -> None:
+    names = BookmarkNames()
+    assert names.anchor("ld_", "a-b") == "ld_a_b"
+    assert names.anchor("ld_", "a_b") == "_Ld1"  # the same name once the dash is an underscore: not lossless
+    assert names.anchor("ld_", "A-B") == "_Ld2"  # the same ignoring case
+    assert names.anchor("ld_", "clanek-č") == "_Ld3"  # a letter a name cannot hold
+    assert names.anchor("ld_", "x" * 37) == "ld_" + "x" * 37  # 40 characters
+    assert names.anchor("ld_", "y" * 38) == "_Ld4"  # 41
+    assert names.hidden() == "_Ld5"
+
+
+def test_hidden_names_are_numbered_in_document_order_across_anchors_and_units() -> None:
+    tree, plan, _ = planned("# A\n\n- x\n  - y {#y}\n\nSee {{ref: y}} and " + "{{ref: " + "z" * 50 + "}}.\n")
+    assert plan.units["u1"].bookmarks == ("_Ld1",)
+
+
+def test_an_anchor_too_long_for_a_name_is_hidden_and_still_found_by_the_plan() -> None:
+    anchor = "a-very-long-identifier-that-goes-on-and-on-past-forty"
+    tree, plan, _ = planned(f"# A {{#{anchor}}}\n\n{{{{ref: {anchor}}}}}\n")
+    assert plan.anchors == {anchor: "_Ld1"} and plan.units["s1"].bookmarks == ("_Ld1",)
+    assert [s.bookmark for s in plan.refs["s1"].segments if isinstance(s, FieldSeg)] == ["_Ld1"]
+
+
+def test_the_names_do_not_depend_on_what_was_rendered_before() -> None:
+    body = "# A {#a-b}\n\n- x {#x}\n\nSee {{ref: x}}.\n"
+    first = planned(body)[1]
+    render(FRONT + "# Other {#a}\n", format="text")
+    assert planned(body)[1] == first
+
+
+def test_definitions_and_attachments_have_bookmarks_too() -> None:
+    result = render((DOCUMENTS / "features.lgd").read_text(encoding="utf-8"), format="text")
+    plan, _ = plan_docx(result.tree)
+    assert {a: n for a, n in plan.anchors.items() if not n.startswith("ld_")} == {
+        "def:agreement": "lddef_agreement", "def:services": "lddef_services", "def:business-day": "lddef_business_day",
+        "schedule-a": "ldatt_schedule_a", "exhibit-1": "ldatt_exhibit_1", "ld:attachments": "_LdAttachments"}
+    assert plan.anchors["services"] == "ld_services" and plan.anchors["delay-cause"] == "ld_delay_cause"
+    assert all(plan.units[unit.unit].bookmarks == (plan.anchors[unit.anchor],)
+               for unit in units(result.tree) if unit.anchor)
+
+
+def test_every_name_is_valid_and_unique_ignoring_case() -> None:
+    for name in ("features.lgd", "template.lgd"):
+        for settings in VARIANTS.values():
+            result = render((DOCUMENTS / name).read_text(encoding="utf-8"), format="text", **settings)
+            plan, _ = plan_docx(result.tree)
+            assert_names_are_sound(plan)
+
+
+def assert_names_are_sound(plan: DocxPlan) -> None:
+    names = [*(n for u in plan.units.values() for n in u.bookmarks), *plan.anchors.values(),
+             *(t.bookmark for t in plan.toc)]
+    names = list(dict.fromkeys(names))  # an anchor's name is the first of its unit's
+    assert all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,39}", n) for n in names), names
+    assert len({n.lower() for n in names}) == len(names), names
+
+
+# -- The table of contents ---------------------------------------------------------------------------------------
+
+
+ATTACHED = """---
+title: T
+attachments:
+  - id: schedule-a
+    title: Schedule A
+    file: a.lgd
+  - id: exhibit-1
+    title: Exhibit 1
+    file: b.pdf
+---
+"""
+
+
+def test_a_contents_entry_names_the_section_it_lists() -> None:
+    result = render(ATTACHED + "# A\n\n## B\n\n### C\n\n# D\n", format="text",
+                    overrides={"contents.enabled": True, "contents.depth": 2})
+    assert [(e.level, e.unit) for e in result.tree.contents] == [
+        (1, "s1"), (2, "s2"), (1, "s4"), (1, None), (2, None), (2, None)]
+    result = render(ATTACHED + "# A\n", format="text")
+    assert result.tree.contents == ()
+
+
+def test_the_contents_come_from_the_numbers_word_draws() -> None:
+    body = "# Alpha\n\n## Beta\n\n### Gamma\n\n# Delta\n"
+    tree, plan, _ = planned(body, ATTACHED, overrides={"contents.enabled": True, "contents.depth": 2})
+    assert [(e.unit, e.level, e.number, e.sep, e.condition_label, e.cached_page) for e in plan.toc] == [
+        ("s1", 1, "1.", "\t", None, ""), ("s2", 2, "1.1", "\t", None, ""), ("s4", 1, "2.", "\t", None, ""),
+        (None, 1, "", "", None, ""), (None, 2, "", "", None, ""), (None, 2, "", "", None, "")]
+    assert [e.title for e in plan.toc[:3]] == [tree.sections[0].title, tree.sections[1].title, tree.sections[3].title]
+    assert [e.bookmark for e in plan.toc] == [f"_Toc10000000{k}" for k in range(1, 7)]
+    assert [plan.units[s].toc_bookmark for s in ("s1", "s2", "s3", "s4")] == [
+        "_Toc100000001", "_Toc100000002", None, "_Toc100000003"]
+    assert [e.title for e in plan.toc[3:]] == [tree.contents[3].title, tree.contents[4].title, tree.contents[5].title]
+    assert_names_are_sound(plan)
+
+
+def test_a_contents_entry_has_the_separator_the_level_has_and_the_number_of_the_style() -> None:
+    body = "# Alpha\n\n## Beta\n"
+    _, plan, _ = planned(body, overrides={"contents.enabled": True, **ARTICLE})
+    assert [(e.number, e.sep) for e in plan.toc] == [("Article I", " "), ("I.1", "\t")]
+    _, plan, _ = planned(body, overrides={"contents.enabled": True, "numbering.scheme": "legal-outline"})
+    assert [(e.number, e.sep) for e in plan.toc] == [("I.", "\t"), ("A.", "\t")]
+    _, plan, _ = planned(body, overrides={"contents.enabled": True, **NONE})
+    assert [(e.number, e.sep) for e in plan.toc] == [("", ""), ("", "")]
+    _, plan, _ = planned(body, overrides={"contents.enabled": True, "contents.attachments": False}, front=ATTACHED)
+    assert [e.unit for e in plan.toc] == ["s1"] * 0 + ["s1", "s2"]
+
+
+def test_the_contents_carry_the_condition_label_of_a_conditional_heading() -> None:
+    _, plan, _ = planned("# A {when=forum:courts}\n\n# B\n", ALTERNATIVES, overrides={"contents.enabled": True})
+    assert [e.condition_label for e in plan.toc] == ["Only if: forum:courts", None]
+
+
+def test_there_are_no_entries_unless_the_style_asks_for_contents() -> None:
+    _, plan, _ = planned("# A\n", ATTACHED)
+    assert plan.toc == () and plan.units["s1"].toc_bookmark is None
+
+
+# -- The property: the plan's references read as the renderer wrote them, or a diagnostic says why not ---------
+
+
+def with_anchors(source: str) -> str:
+    """*source* with an anchor on every heading, item, quoted item and plain paragraph the random documents hold."""
+    out, count = [], 0
+    for line in source.splitlines():
+        if re.match(r"^\s*(#+ Heading|[-]|\d+\.) ", line) or line == "A paragraph." or re.match(r"^\s*> - ", line):
+            count += 1
+            line += f" {{#a{count}}}"
+        out.append(line)
+    return "\n".join(out)
+
+
+def with_references(source: str) -> str:
+    """*source* with a paragraph at its end that refers to every anchor in it."""
+    anchors = dict.fromkeys(re.findall(r"\{#([a-z][a-z0-9-]*)", source))
+    return source + "\n\nRefs: " + " ".join(f"{{{{ref: {anchor}}}}}" for anchor in anchors) + "\n"
+
+
+def assert_references_as_resolved(result) -> None:  # noqa: ANN001
+    """For every reference: its cover reads as the renderer's text (``exact``, and the cached results say so), or the
+    plan says why not: a unit on the way is numbered differently in Word (a diagnostic of the numbering says so, as the
+    property of the numbering above has it), or a ``render-docx-reference`` finding names the reference. Every field
+    points at a bookmark the plan makes, the names are sound, and the same tree gives the same plan."""
+    tree = result.tree
+    plan, diagnostics = plan_docx(tree)
+    assert plan_docx(tree) == (plan, diagnostics)
+    assert_names_are_sound(plan)
+    nodes = {u.unit: u for u in units(tree)}
+    counters = {node.unit: counter for node, counter in numbered(tree)}
+    marked = {n for u in plan.units.values() for n in u.bookmarks}
+    reported = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    texts = {i.target_unit: i.text for i in iter_tree_inlines(tree) if isinstance(i, CrossRef) and i.target_unit}
+    assert set(plan.refs) == set(texts)
+    findings = 0
+    for target, text in texts.items():
+        reference = plan.refs[target]
+        assert all(s.bookmark in marked for s in reference.segments if isinstance(s, FieldSeg))
+        assert reference.exact == (cached(reference.segments) == text)
+        for segment in reference.segments:
+            if isinstance(segment, FieldSeg) and segment.number and not segment.suppress_text:
+                assert segment.cached == plan.units[next(u for u, p in plan.units.items()
+                                                        if segment.bookmark in p.bookmarks)].word_ref
+        mentioned = any(d.message.startswith(f"The cross-reference '{text}' ") for d in reported)
+        findings += mentioned
+        if reference.exact:
+            assert mentioned <= any(not plan.refs[t].exact for t in texts if texts[t] == text), (target, text)
+            continue
+        chain, unit = [], target
+        while unit is not None:
+            chain.append(unit)
+            unit = nodes[unit].parent_unit
+        differs = False
+        for unit in chain:
+            mine, node = plan.units[unit], nodes[unit]
+            if node.number is not None and mine.count is not None:
+                differs |= mine.count != node.number or (
+                    unit in counters and word_counter(node.number, NUM_FMT[counters[unit]])
+                    != format_counter(node.number, counters[unit]))
+        assert differs or mentioned, (target, text, cached(reference.segments), show(plan, reference.segments))
+    assert len(reported) <= findings
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+@pytest.mark.parametrize("name", ["features.lgd", "template.lgd"])
+def test_the_test_documents_references_are_planned_as_resolved(name: str, variant: str) -> None:
+    source = (DOCUMENTS / name).read_text(encoding="utf-8")
+    assert_references_as_resolved(render(source, format="text", **VARIANTS[variant]))
+
+
+@pytest.mark.conformance
+@pytest.mark.skipif(SPEC is None, reason="LegalDown specification checkout not found")
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_the_specifications_documents_references_are_planned_as_resolved(variant: str) -> None:
+    for path in _spec_documents():
+        try:
+            result = render(path.read_text(encoding="utf-8"), format="text", **VARIANTS[variant])
+        except DocumentError:
+            continue
+        try:
+            assert_references_as_resolved(result)
+        except AssertionError as error:
+            raise AssertionError(f"{path.relative_to(SPEC)}: {error}") from error
+
+
+@functools.cache
+def _referenced_renders(variant: str) -> tuple:
+    rng = random.Random(20261029)
+    sources = [with_references(with_anchors(_random_document(rng))) for _ in range(30)]
+    return tuple((source, render(FRONT + source, format="text", **VARIANTS[variant])) for source in sources)
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_random_documents_references_are_planned_as_resolved(variant: str) -> None:
+    for source, result in _referenced_renders(variant):
+        try:
+            assert_references_as_resolved(result)
+        except AssertionError as error:
+            raise AssertionError(f"{error}\n--- document ---\n{source}") from error
+
+
+@pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "none"])
+def test_random_alternatives_references_are_planned_as_resolved(variant: str) -> None:
+    rng = random.Random(11)
+    for _ in range(20):
+        source = ALTERNATIVES + with_references(_random_alternatives(rng))
+        assert_references_as_resolved(render(source, format="text", **VARIANTS[variant]))
+
+
+def test_the_random_documents_reach_every_kind_of_cover() -> None:
+    shapes: set[str] = set()
+    inexact = switches = 0
+    for variant in VARIANTS:
+        for _, result in _referenced_renders(variant):
+            plan, _ = plan_docx(result.tree)
+            for reference in plan.refs.values():
+                shapes.add("".join("L" if isinstance(s, Literal_) else "F" for s in reference.segments))
+                inexact += not reference.exact
+                switches += any(isinstance(s, FieldSeg) and s.suppress_text for s in reference.segments)
+    assert {"F", "FF", "FFF", "FFFF", "FLF", "FLFL", "FLFLF"} <= shapes
+    assert inexact > 0 and switches > 0
