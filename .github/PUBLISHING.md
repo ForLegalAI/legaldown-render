@@ -104,6 +104,7 @@ for doc in ("features", "template"):
         "separator-none": {"attachments.separator": "none"},
         "separator-rule": {"attachments.separator": "rule"},
         "scheme-none": {"numbering.scheme": "none"},
+        "paragraphs-numbered": {"paragraphs.numbered": True},      # `1.1` paragraphs on the heading list (item 9)
     }.items():
         data = render(source, format="docx", overrides={**contents, **extra}).binary
         (out / f"{doc}.{name}.docx").write_bytes(data)
@@ -160,7 +161,30 @@ For each file:
      kind restarts by a fixed setting (the render reported `render-docx-static-restart`).
    - Roman numerals of 4000 and over, and letters past 26: Word's text (`render-docx-roman-overflow`,
      `render-docx-letter-overflow`) is the one the render reported, not a different one.
-9. **Page layout.** The running footer shows `n / N`; a header template with `{title}`, `{version}` and `{date}` shows
+9. **Numbering that shares a list or a counter** (`template.continental.docx`, the continental `features` file, and
+   the `paragraphs-numbered` files; the planner models these from Word's documented behaviour and LibreOffice, and they are
+   what only Word can confirm). After Ctrl+A, F9:
+   - Two `w:num` of one abstract list share the counter, and a `startOverride` restarts only its own level: where a section with clauses `1.1`, `1.2` is followed by a sub-heading
+     (add one to the file if the golden documents have none), the sub-heading reads `1.1` for the
+     sub-heading (restarted at a fixed value; the render reported `render-docx-shared-counter`), and the next heading
+     after it reads `1.2`, not `1.3`. Deleting that sub-heading makes the headings after it read higher (the documented
+     limit).
+   - Clauses in the continental style (`5.1`, `5.2`) are not in the table of contents and not in the navigation pane
+     (they have no heading style). Under each clause the nested list reads `a)`, `b)`, and a new clause (Enter at the end
+     of a clause, typing) restarts it at `a)` under that clause; so does a sub-sub-list (`i)`). A list nested three
+     levels under a clause (`1.1.1`) is a separate list that restarts by a fixed setting (reported `render-docx-static-restart`).
+   - In `template.continental.docx` a later alternative (a paragraph, clause or heading that shares a number: the
+     second "Disputes", say) shows the first one's number: a `numId 0` paragraph that starts with a `REF \n \h` field,
+     with the same hanging indent as a numbered one and its text after a tab. Update the field: it still reads the
+     holder's number. Its entry in the table of contents reads the shared number, a tab and the title (`2.<tab>Title`).
+     The numbers after the alternatives continue as the renderer's. Press Enter at the start and at the end of a
+     later alternative: the new paragraph has no number (it copies `numId 0`; expected, apply a list style by hand). **Delete
+     the first alternative:** every later alternative, their children, and every reference to the shared identifier read
+     "Error! Reference source not found" (expected: the render reported `render-docx-alternative`, and the final document
+     is made by rendering with the condition values).
+   - In the `paragraphs-numbered` files the paragraphs read `1.1`, `1.2` on the heading list; a sub-heading after a
+     list of clauses in the same section is restarted (as above).
+10. **Page layout.** The running footer shows `n / N`; a header template with `{title}`, `{version}` and `{date}` shows
    them; a landscape page is landscape when printed (print preview).
 
 Record what differs in the release notes. A difference from LibreOffice is expected where the documentation says Word

@@ -313,6 +313,14 @@ Ref {{ref: i1}} {{ref: n2}} {{ref: d3}} {{ref: o2}} {{ref: i3}} {{ref: beta}} {{
 """,
 }
 
+#: The stress documents that are shown under some variants only (each costs LibreOffice time): the continental style, where
+#: the items ride the heading list, the default, and the default with numbered paragraphs.
+FEW_VARIANTS: dict[str, tuple[str, ...]] = {
+    name: ("continental", "default", "paragraphs") for name in ("alternatives in threes", "nested titles", "qualified")}
+
+#: The variants that show some stress documents only.
+ONLY_DOCS: dict[str, tuple[str, ...]] = {"five levels": ("qualified",), "shared level": ("qualified", "nested")}
+
 #: The settings that give the numbering words and symbols, which Word's ``\t`` switch drops from a reference.
 WORDS: dict[str, dict] = {
     "article": {"overrides": {"numbering.levels": [
@@ -322,6 +330,15 @@ WORDS: dict[str, dict] = {
     "paragraphs": {"overrides": {"paragraphs.numbered": True}},
     # the items and the paragraphs of a section share the heading list's level: the numbers are restarted where the
     # resolver counts them apart
+    # six levels of enumeration with no section in them but the first: a chain of four lists nested in a clause rides all
+    # four reserved levels of the heading list
+    "five levels": {"style": "continental", "overrides": {"enumeration.levels": [
+        {"counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"},
+        {"counter": "lower-alpha", "label": "{n})", "ref": "({n})"},
+        {"counter": "lower-roman", "label": "{n})", "ref": "({n})"},
+        {"counter": "upper-alpha", "label": "({n})", "ref": "({n})"},
+        {"counter": "decimal", "label": "[{n}]", "ref": "[{n}]"},
+        {"counter": "lower-alpha", "label": "{n}.", "ref": "{n}"}]}},
     "shared level": {"style": "continental", "overrides": {"paragraphs.numbered": True, "paragraphs.format": {
         "counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"}}},
 }
@@ -464,6 +481,11 @@ def round_trips() -> dict[str, tuple[Case, ...]]:
     for offset, variant in enumerate(cases):
         for index, (name, source) in enumerate(corpus().items()):
             if variant in WORDS and not name.startswith("stress/"):
+                continue
+            if variant in ONLY_DOCS and name.removeprefix("stress/") not in ONLY_DOCS[variant]:
+                continue
+            if (variant not in ONLY_DOCS and name.removeprefix("stress/") in FEW_VARIANTS
+                    and variant not in FEW_VARIANTS[name.removeprefix("stress/")]):
                 continue
             if name.startswith(("examples/", "fixtures/")) and (index + offset) % 2:
                 continue  # the specification's documents take turns under the schemes: each is shown under half
@@ -828,15 +850,50 @@ def test_a_clause_inserted_or_deleted_before_the_restarted_sub_heading_leaves_it
         assert lines_of(resynced()[name]) == lines_of(render(source, format="text", style="continental").output), name
 
 
-def test_a_sub_heading_inserted_or_deleted_before_the_restarted_one_is_the_documented_limit() -> None:
-    # The restarted heading keeps its fixed value, and the counter it shared goes on where the edit left it: the
-    # warning of the plan is what tells the author. Only the warning is asserted, not what the drift looks like.
+def test_a_sub_heading_inserted_before_the_restarted_one_takes_its_num_and_everything_follows() -> None:
+    source = applied(RESYNCED, [("## Beta", "## NEWH\n")])
+    assert lines_of(resynced()["heading inserted"]) == lines_of(
+        render(source, format="text", style="continental").output)
+
+
+def test_deleting_the_restarted_sub_heading_is_the_documented_limit() -> None:
+    """The heading that holds the fixed value is gone: the headings after it go on from the counter the clauses of the
+    section used, so Gamma reads 1.4 where the renderer's document says 1.1 (the plan's warning says so). The
+    clauses before it are right and the broken reference to the deleted heading is Word's."""
     _, diagnostics = plan_docx(render(RESYNCED, format="docx", style="continental").tree)
-    assert [d.level for d in diagnostics if d.rule == "render-docx-shared-counter"] == ["warning"]
-    for name in ("heading deleted", "heading inserted"):
-        said = lines_of(resynced()[name])
-        assert [line for line in said if "clause" in line and not line.startswith("(")] == [
-            "1.1 clause one", "1.2 spare clause", "1.3 clause two"]  # what stands before the edit is right
+    [found] = [d for d in diagnostics if d.rule == "render-docx-shared-counter"]
+    assert "if it is deleted in Word the headings after it read higher" in found.message
+    said = lines_of(resynced()["heading deleted"])
+    assert [line for line in said if "clause" in line and not line.startswith("(")] == [
+        "1.1 clause one", "1.2 spare clause", "1.3 clause two"]
+    assert "1.4 Gamma" in said and "1.1 Gamma" in lines_of(render(
+        RESYNCED.replace("## Beta {#beta}\n\n", ""), format="text", style="continental").output)
+
+
+@functools.cache
+def shared_level() -> dict[str, str]:
+    require_libreoffice()
+    levels = {"paragraphs.numbered": True, "paragraphs.format": {"counter": "decimal", "label": "{section}.{n}",
+                                                                 "ref": ".{n}"}}
+    data = render(PARAGRAPHS_AND_CLAUSES, format="docx", style="continental", overrides=levels).binary
+    return libreoffice_edit({"original": (data, []), "inserted": (data, [("One.", "NEWP")])})  # type: ignore[arg-type]
+
+
+PARAGRAPHS_AND_CLAUSES = FRONT + "# A\n\nOne.\n\n- x\n- y\n\nTwo.\n"
+
+
+def test_a_paragraph_restarted_after_clauses_does_not_follow_a_paragraph_inserted_before_it() -> None:
+    levels = {"paragraphs.numbered": True, "paragraphs.format": {"counter": "decimal", "label": "{section}.{n}",
+                                                                 "ref": ".{n}"}}
+    assert lines_of(shared_level()["original"]) == lines_of(render(
+        PARAGRAPHS_AND_CLAUSES, format="text", style="continental", overrides=levels).output)
+    plan, diagnostics = plan_docx(render(PARAGRAPHS_AND_CLAUSES, format="docx", style="continental",
+                                         overrides=levels).tree)
+    [found] = [d for d in diagnostics if d.rule == "render-docx-shared-counter"]
+    assert "inserted or deleted before it in Word does not move it" in found.message
+    # the renderer would number the new paragraph 1.1, One 1.2 and Two 1.3; Two holds its fixed value
+    said = lines_of(shared_level()["inserted"])
+    assert [line for line in said if line.endswith(("NEWP", "One.", "Two."))] == ["1.1 NEWP", "1.2 One.", "1.2 Two."]
 
 
 # -- The contents: the headings with the numbers Word draws, and none of the units on the heading list ------------------

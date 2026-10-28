@@ -876,13 +876,14 @@ class _Planner:
             units[unit] = replace(units[unit], bookmarks=(name,), collapsed=unit not in enclosing)
         for unit, targets in cyclic.items():
             units[unit] = replace(units[unit], literal_refs=targets)
-        for unit, (holder, suff) in self.alts.items():
+        for unit, (holder, alt_suff) in self.alts.items():
             # The number of a later alternative is the number of the unit it repeats (§15.8).
             shared = self.units[holder]
             tail = shared.label[len(shared.word_ref):]
-            segments: list[Segment] = [FieldSeg(bookmark[holder], True, False, True, shared.word_ref, shared.word_ref)]
+            alt_segments: list[Segment] = [
+                FieldSeg(bookmark[holder], True, False, True, shared.word_ref, shared.word_ref)]
             units[unit] = replace(units[unit], alt=AltNumber(
-                (*segments, *([Literal_(tail)] if tail else [])), suff))
+                (*alt_segments, *([Literal_(tail)] if tail else [])), alt_suff))
         for inline in iter_tree_inlines(self.tree):
             if isinstance(inline, DefinedTerm) and inline.defining and inline.anchor and inline.anchor not in anchors:
                 anchors[inline.anchor] = names.anchor("lddef_", inline.anchor.removeprefix("def:"))
@@ -942,6 +943,7 @@ class _Planner:
         for drift in self.drifts:
             self.report_drift(drift)
         self.report_collisions()
+        self.report_alternatives()
         units, anchors, refs, toc = self.finish()
         abstracts = tuple(
             AbstractNum(a.id, a.kind, f"{0x4C440000 + a.id:08X}",  # type: ignore[arg-type]
@@ -1216,19 +1218,20 @@ class _Planner:
 
     def indent(self, abstract: _Abstract, ilvl: int, unit: str, parent: str | None, *, alternative: bool
                ) -> tuple[int, int] | None:
-        """The indent a unit carries itself, in twips ``(left, hanging)``: the level's for a later alternative (which
-        has no numbering to take it from), and for a unit of the heading abstractNum that is no heading (whose level
-        indents the headings) the width of the heading level it stands on, one step more for each level of nesting
-        below it."""
+        """The indent a unit carries itself, in twips ``(left, hanging)``. An item or paragraph on the heading abstractNum
+        (whose levels indent the headings) takes the width of the heading level it stands on; one that stands in an
+        item with an indent of its own, on any list, is one step in from the text of that item; a later alternative,
+        which has no numbering to take an indent from, takes its level's. Any other unit takes its level's, and the
+        plan sets nothing."""
         level = abstract.levels[ilvl]
-        if abstract.kind == "headings" and unit in self.item_units:
-            if parent in self.text_left:
-                left, hanging = self.text_left[parent] + _STEP, _STEP
-            else:
-                left, hanging = level.left, level.hanging
-            self.text_left[unit] = left
-            return left, hanging
-        return (level.left, level.hanging) if alternative else None
+        if unit in self.item_units and parent in self.text_left:
+            left, hanging = self.text_left[parent] + _STEP, _STEP
+        elif unit in self.item_units and abstract.kind == "headings":
+            left, hanging = level.left, level.hanging
+        else:
+            return (level.left, level.hanging) if alternative else None
+        self.text_left[unit] = left
+        return left, hanging
 
     def numbered(self, node: _Unit, kind: Literal["section", "item", "paragraph"], num: Num, abstract: _Abstract,
                  ilvl: int, *, counter: str, group: object, cause: tuple[str, ...] = (), explicit: bool = True) -> Num:
@@ -1305,18 +1308,41 @@ class _Planner:
 
     def report_collisions(self) -> None:
         """One finding for the units of the heading list that Word would number off the resolver's because they share
-        a counter with others of their section (§2.7): the first, and how many more."""
+        a counter with others of their section (§2.7): the first, and how many more. What an edit in Word does to
+        the fixed value depends on the unit: a sub-heading restarted after the clauses of its section keeps it, and
+        the headings after it read higher if it is deleted; a clause or paragraph does not follow what is inserted or
+        deleted before it."""
         if not self.collisions:
             return
         node, word = self.collisions[0]
         assert node.unit is not None
         designation = text_of(self.desig[node.unit])
         more = f" {len(self.collisions) - 1} more units do the same." if len(self.collisions) > 1 else ""
+        if word == "heading":
+            effect = ("The heading keeps that value when clauses or headings are inserted before it, and if it is "
+                      "deleted in Word the headings after it read higher than the renderer's.")
+        else:
+            effect = ("The unit keeps that value: a clause or paragraph inserted or deleted before it in Word does not "
+                      "move it.")
         self.shared_counter(
             f"The {word} '{printable(node.label or '')}' has the designation {printable(designation)}, which another "
             f"unit of its section has too (in every output format their designations collide), and in Word they "
-            f"share one counter. The number is kept as the renderer shows it by restarting at a fixed value, which "
-            f"will not follow a heading or clause inserted or deleted before it in Word.{more}", node.line)
+            f"share one counter. The number is kept as the renderer shows it by restarting at a fixed value. "
+            f"{effect}{more}", node.line)
+
+    def report_alternatives(self) -> None:
+        """One information for the document's alternatives that share a number: their numbers are fields of the first
+        alternative, which a lawyer can delete in Word (§15.8)."""
+        if not self.alts:
+            return
+        holder = next(iter(self.alts.values()))[0]
+        node = self.nodes[holder]
+        where = f", line {node.line}" if node.line is not None else ""
+        self.report("render-docx-alternative", "info",
+                    f"{len(self.alts)} alternative(s) that share a number show it as a field of the first alternative "
+                    f"('{printable(self.units[holder].label)}'{where}); deleting that paragraph in Word "
+                    f"breaks their numbers and every reference to their shared identifier. Render the document "
+                    f"with the condition values to produce the final one.", node.line)
 
     def list_(self, lst: List, section: Section | None, quoted: bool = False) -> None:
         first = lst.items[0]

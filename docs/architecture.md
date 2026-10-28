@@ -293,7 +293,7 @@ A level of a list shows only counters of its own list, which settles where the r
   same num as its parent with no override: it restarts by structure under every new item and sibling lists go on
   counting, as in any other list. A level may be shared by units whose definitions are equal and is kept for the first
   that needs it otherwise; the level after the fifth heading level is kept for a level-5 section's units when the
-  document has one, and a nested list then falls back. What does not fit (an outline or mixed scheme, where the
+  document has one, and a nested list then falls back. The built-in continental style uses levels 6 and 7 (`a)`, `i)`); its third level of nesting under a clause shows the section's number and falls back (static, reported). What does not fit (an outline or mixed scheme, where the
   level after the section's reads otherwise; the `none` scheme, where the section's number is its text; a nested
   item whose label shows the section; items in a quote; ordered and bullet lists nested in such an item; depth past
   4) keeps the family's own abstractNum with the label written without the section and reported
@@ -307,16 +307,22 @@ A level of a list shows only counters of its own list, which settles where the r
   later alternative section until one of its level or above; a list nested in a later alternative item), because the
   alternative counts nothing and Word would go on counting from the holder's children. A later alternative whose live
   number is already right (the children of a later alternative section repeat the numbers of the first's) is numbered
-  live. Designations below an alternative are made of the holder's counters.
+  live. Designations below an alternative are made of the holder's counters. This is live for edits elsewhere but not
+  for the first alternative: deleting it in Word breaks every later alternative and every reference to the shared
+  identifier, and Enter at the start or end of a later alternative gives an unnumbered paragraph, so the render reports
+  one information per document (`render-docx-alternative`) and a final document is made by rendering with the
+  condition values.
 - **Resynchronising.** A numbered unit that Word would number differently from the resolver for want of a place where it
   can count by structure (it goes on a counter that other units of the same abstractNum have used) is put on a num with
   a `startOverride` at its number, and the units after it go on counting on the original. This is a fixed value: a
-  heading or clause inserted or deleted in Word before it does not renumber it. It repairs a sub-heading after the
+  restarted sub-heading keeps it when clauses or headings are inserted before it, and the headings after it read
+  higher if it is deleted; a restarted clause or paragraph does not follow what is inserted or deleted before it. It repairs a sub-heading after the
   items and paragraphs of its section on the heading list (`1.1` for the sub-heading and for the first item share a
   counter in Word and a designation in every output format: `render-docx-shared-counter` says so), a list that
   resumes a sibling's count after another list in the same item, and a list past level 9.
 
-A label that shows a counter of a unit outside the unit's own chain (a quote's list inside an item of the preamble,
+A list nested in an item that has an indent of its own (`UnitPlan.ind`) is indented one step in from it, on whatever
+list it is. A label that shows a counter of a unit outside the unit's own chain (a quote's list inside an item of the preamble,
 whose label starts from the item; a list nested in another kind of list) is written with the counters Word has there
 and reported. Nothing is left to be shown by Word differently without a diagnostic.
 
@@ -383,12 +389,12 @@ complex `TOC` field that uses them is written with the title block.
 its number, a fixed value that will not follow edits before it: a sub-heading that shares a designation with the
 items of its section, a list that goes on from another, a list whose level another used in between), `number-mismatch` (any
 other difference: the first unit of a run that Word counts off by the same amount, with how many follow; it is the
-catch-all of the planner and does not occur), `reference` (a
+catch-all of the planner and does not occur outside documents that skip a heading level), `reference` (a
 cross-reference that cannot be built from fields, because a heading level is skipped before the target with a
 `{n}`-style scheme, or Word draws text around a counter that `\t` cannot drop (`({n})`, `{n}:`, `No. {n}`): it is
 written as fixed text; or one that reads differently in Word for a reason that no diagnostic of a unit already
 gives; references that fail alike are one finding), `reference-cycle` (a heading's title holds a reference that
-leads back to it: written as text), and, as information, `static-restart` (a list that restarts at 1 by a
+leads back to it: written as text), and, as information, `alternative` (alternatives share a number as fields of the first, which deleting in Word breaks), `static-restart` (a list that restarts at 1 by a
 fixed setting: nested in a list of another kind, in an item whose number is on the heading list but which the list
 cannot ride, or in an alternative that shares a number) and `reference-word-only` (a cover relies on `\t`, which LibreOffice ignores, once per document). A
 heading level that is skipped is the Core Error `heading-skip`; the plan only notes it on the unit.
@@ -472,7 +478,7 @@ Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can ev
 `ref-not-enumerated`, `path-not-relative` and `path-outside-root` (Errors for a file reference that is
 not relative, or that leaves the document root, §2.3; reported here because validator 0.4 checks
 neither), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id), and the rules the DOCX planner reports on what Word draws differently from the other formats (`render-docx-section-label`, `-list-depth`, `-letter-overflow`, `-roman-overflow`, `-shared-counter`, `-number-mismatch`, `-reference`, `-reference-cycle`, as Warnings, `-static-restart` and `-reference-word-only` as Infos; see "The DOCX planner"). The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id), and the rules the DOCX planner reports on what Word draws differently from the other formats (`render-docx-section-label`, `-list-depth`, `-letter-overflow`, `-roman-overflow`, `-shared-counter`, `-number-mismatch`, `-reference`, `-reference-cycle`, as Warnings, `-alternative`, `-static-restart` and `-reference-word-only` as Infos; see "The DOCX planner"). The validator's
 diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
 `file:line:`.
 

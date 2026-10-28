@@ -99,10 +99,19 @@ a `REF` to the heading text.
   otherwise (the outline and mixed schemes, `none`), the label is written without the section and reported.
 - **Alternatives that share a number** (§15.8). Word cannot give two paragraphs one number on one level, except
   by `numId 0` and a field: the later alternative is such a paragraph, with a `REF \n` field of the unit that
-  holds the number as its number. The units under it restart in a num of their own with a `startOverride`.
+  holds the number as its number. The units under it restart in a num of their own with a `startOverride`. This is
+  live for edits elsewhere (inserting a clause before the alternatives moves their numbers and every reference), but
+  **not for the first alternative itself**: deleting it in Word makes every later alternative, their children and
+  every reference to the shared identifier read "Error! Reference source not found", and pressing Enter at the start
+  or end of a later alternative gives a new paragraph with no number (it copies `numId 0`). There is no live option
+  that avoids this, so the render reports one information per document (`render-docx-alternative`), and the way to a
+  final document is to render it with the condition values, which resolves the alternatives.
 - **A unit that Word would number off the resolver's** because it shares a counter with others of its
-  abstractNum (a sub-heading after the items of its section) is restarted at a fixed value and reported, so the
-  file is right when it is opened and a heading inserted or deleted before it in Word does not renumber it.
+  abstractNum (a sub-heading after the clauses of its section, a paragraph after clauses on the same level) is
+  restarted at a fixed value and reported (`render-docx-shared-counter`), so the file is right when it is opened. The
+  value is fixed: a restarted sub-heading keeps it when clauses or headings are inserted before it, but deleting it
+  makes the headings after it read higher; a restarted clause or paragraph does not follow what is inserted or
+  deleted before it.
 
 ### Rejected alternatives
 
@@ -128,7 +137,8 @@ a `REF` to the heading text.
   numbers, references, table of contents and page numbers follow.
 - Some restarts cannot be kept live in Word and are documented and warned about, not prevented: a
   nested list of another family than its parent, a list nested in an alternative, a unit restarted at a fixed
-  value because it shares a counter, and paragraph numbering in a section the user adds. A lawyer who adds a
+  value because it shares a counter, and paragraph numbering in a section the user adds; and the numbers of the
+  alternatives that share one live only as long as the first alternative stays. A lawyer who adds a
   parent item restarts such a list by hand.
 - Viewers that never update fields (Word Online, Quick Look, the Google Docs import, Outlook's
   preview) show the cached results, which are right, but the table of contents without page numbers.
