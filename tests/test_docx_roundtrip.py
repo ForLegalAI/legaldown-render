@@ -14,7 +14,8 @@ take turns, each under half of them), then changed so that the file cannot be ri
 Every body paragraph's text must also be what the file cached for it, and a second round trip makes the edits a
 lawyer makes (an item, a heading and an ordered item inserted before the targets, in LibreOffice) and updates the
 fields: every reference and number must read as the renderer writes them for the edited source. The table of
-contents is not written yet, so its entries and the ``_Toc`` bookmarks are not exercised.
+contents is not part of this comparison (its entries are in ``test_docx_matter.py`` and ``test_docx_acceptance.py``,
+which also compares whole documents with the plain-text writer's).
 
 The exported text is then compared with what the renderer wrote (the labels and designations that the text writer
 prints), **modulo the gaps the plan documents**, each of which the plan reports with a diagnostic:
@@ -661,8 +662,7 @@ def shown_lines(shown: Exported) -> list[str]:
 def check(case: Case) -> None:
     """The property: every number LibreOffice draws is the renderer's, or the plan's where the plan says Word differs
     (with a diagnostic), every reference reads as the renderer wrote it, or as the plan says, and every body paragraph
-    says what the file cached for it. The table of contents is not written yet, so its entries and the ``_Toc``
-    bookmarks are not exercised."""
+    says what the file cached for it. The table of contents is compared elsewhere (``test_docx_matter.py``)."""
     assert case.shown is not None
     lines = marked_lines(case.shown)
     excused = False
