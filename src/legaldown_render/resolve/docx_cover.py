@@ -92,7 +92,8 @@ def suppressed(tokens: Sequence[Shown], mode: TextSwitch = "documented") -> tupl
       ``§ 3`` gives ``3``). With a delimiter in it (``(a)``, ``a)``, ``1:``) Word's result is not documented: None.
       Mode ``guess`` also drops leading text that has a period after letters in it (``No. 1``, ``Čl. 1`` give ``1``).
     * Text between two counters that is nothing but delimiters stays (Microsoft's example: ``Section 1.01`` gives
-      ``1.01``); text between them with no delimiter in it is dropped; a mixture is None.
+      ``1.01``). Words between them, with no delimiter, are dropped only in mode ``guess``: the documentation does not
+      say what Word does with them. A mixture is None.
     """
     if mode == "off":
         return None
@@ -114,6 +115,8 @@ def suppressed(tokens: Sequence[Shown], mode: TextSwitch = "documented") -> tupl
             if not all(character in DELIMITERS for character in token.text):
                 return None
             kept.append(token)
+        elif mode != "guess":
+            return None
     return tuple(kept)
 
 

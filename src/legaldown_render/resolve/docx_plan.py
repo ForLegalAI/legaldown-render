@@ -117,10 +117,11 @@ class AbstractNum:
     id: int  # 0.., in order of first use (headings first)
     #: ``detached``: the enumerated levels with each level's own counter alone, for a list nested where the enumerated list
     #: would have to show the counter of a unit that is not on it (§13.2). ``enumerated+1`` to ``enumerated+3`` (and
-    #: ``renumber+k``): Word has nine levels, so a list nested deeper takes the next abstractNum of its family, whose level
-    #: *j* is the family's level of depth ``9k + j`` with its own counter alone.
+    #: ``renumber+k``, ``bullet+k``): Word has nine levels, so a list nested deeper takes the next abstractNum of its
+    #: family, whose level *j* is the family's level of depth ``9k + j`` with its own counter alone.
     kind: Literal["headings", "enumerated", "detached", "renumber", "paragraphs", "bullet",
-                  "enumerated+1", "enumerated+2", "enumerated+3", "renumber+1", "renumber+2", "renumber+3"]
+                  "enumerated+1", "enumerated+2", "enumerated+3", "renumber+1", "renumber+2", "renumber+3",
+                  "bullet+1", "bullet+2", "bullet+3"]
     #: Eight hex digits, deterministic (``0x4C440000 + id``). Equal in every LegalDown document, so Word may
     #: merge lists on paste between two of them (cosmetic).
     nsid: str
@@ -202,7 +203,7 @@ class UnitPlan:
     #: ``restart-family`` / ``restart-section`` / ``restart-alternative`` / ``restart-depth`` (a nested list in a list of
     #: another kind, in an item whose number carries the section, in an alternative, past Word's nine levels: a num of
     #: its own that restarts by a fixed setting), ``label-fallback`` (the label is written without a number Word cannot
-    #: show there), ``clamped`` (nested past :data:`MAX_DEPTH`, or a bullet past Word's nine levels), ``skipped-level``.
+    #: show there), ``clamped`` (nested past :data:`MAX_DEPTH`, in any family), ``skipped-level``.
     cause: tuple[str, ...]
     #: Names to wrap around the paragraph's title/first paragraph content: the bookmark of the unit's anchor when it
     #: has one, else a hidden one when a reference field points at it, else none.
@@ -228,10 +229,10 @@ class RefPlan:
     #: No cover exists, so the reference is the renderer's text with no field: right when the file is opened, but
     #: fixed (an edit in Word does not change it). The plan reports each (``render-docx-reference``).
     fixed: bool = False
-    #: The cover writes the number of a heading level the document skips (a Core error, ``heading-skip``, §4.1) as text,
-    #: since no unit holds that level's counter and so no field returns it; the rest is fields. Reported like a fixed
-    #: reference (``render-docx-reference``).
-    ghost: bool = False
+    #: The text of the counters of heading levels the document skips (a Core error, ``heading-skip``, §4.1) that the cover
+    #: writes as literal text, since no unit holds those counters and so no field returns them; the rest is fields.
+    #: Empty when the cover has none. Reported like a fixed reference (``render-docx-reference``).
+    ghost: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,13 +334,22 @@ _CHARACTER = 113
 #: the last level is used again and the lists restart by fixed values.
 _LEVELS = 9
 MAX_DEPTH = 4 * _LEVELS
-#: Twips: the indent items stop stepping at (thirteen centimetres), so that a list nested very deeply stays on the page.
-_MAX_LEFT = 13 * _STEP
+#: The width of the text of an A4 page with 25 mm margins, in twips: what the indents of nested lists are limited by when
+#: the planner is not told the page (:func:`plan_docx`).
+DEFAULT_TEXT_WIDTH = 9072
+#: The part of the text width an item's indent may reach: a list nested very deeply stops stepping in there and stays
+#: readable on any page (A5 included).
+_MAX_INDENT = 0.6
+
+
+def max_indent(text_width: int) -> int:
+    """The widest indent, in twips, a nested list steps in to on a page whose text is *text_width* twips wide."""
+    return max(_STEP, int(text_width * _MAX_INDENT))
 
 
 def _level(ilvl: int, num_fmt: str, parts: LevelParts, *, p_style: str | None = None,
            widths: Mapping[int, str] | None = None, unwritable: list[tuple[str, int]] | None = None,
-           kind: str = "", depth: int | None = None) -> LevelDef:
+           kind: str = "", depth: int | None = None, max_left: int | None = None) -> LevelDef:
     """One level. Headings (*widths*: the ``numFmt`` of each level a ``%k`` names) get an indent wide enough for
     their widest label; items step one centimetre per level of nesting (*depth*, the level's own by default: a level of
     a list that goes on past Word's nine levels is nested deeper). A label with a word in it (``Article {n}``) is
@@ -348,7 +358,7 @@ def _level(ilvl: int, num_fmt: str, parts: LevelParts, *, p_style: str | None = 
     words = any(isinstance(part, str) and any(c.isalpha() for c in part) for part in parts)
     depth = ilvl if depth is None else depth
     if widths is None:
-        left, hanging = min(_STEP * (depth + 1), _MAX_LEFT), _STEP
+        left, hanging = min(_STEP * (depth + 1), max_left or max_indent(DEFAULT_TEXT_WIDTH)), _STEP
     else:
         sample = sum(len(part) if isinstance(part, str) else len(SAMPLE_COUNTER[widths[part]]) for part in parts)
         left = hanging = max(_STEP, _CHARACTER * (sample + 2))
@@ -364,8 +374,8 @@ def _neutral(ilvl: int) -> LevelDef:
     return LevelDef(ilvl, "decimal", f"%{ilvl + 1}", left=_STEP * (ilvl + 1), hanging=_STEP)
 
 
-def _own(formats: NumberingFormats, ilvl: int, depth: int, textual: bool, unwritable: list[tuple[str, int]] | None
-         ) -> LevelDef:
+def _own(formats: NumberingFormats, ilvl: int, depth: int, textual: bool, unwritable: list[tuple[str, int]] | None,
+         max_left: int | None = None) -> LevelDef:
     """Level *ilvl* of an enumerated list nested *depth* levels deep, with its own counter alone (a ``{path}`` shows
     its own ``ref`` and nothing of the units it is nested in): the levels of the detached list and of the lists that go
     on past Word's nine levels, where no unit of the list holds the levels above."""
@@ -373,11 +383,11 @@ def _own(formats: NumberingFormats, ilvl: int, depth: int, textual: bool, unwrit
     here = levels[depth % len(levels)]
     return _level(ilvl, NUM_FMT[here.counter],
                   level_text(here.label, [""] * ilvl + [here.ref], ilvl, section=(), textual=textual),
-                  unwritable=unwritable, kind="enumerated", depth=depth)
+                  unwritable=unwritable, kind="enumerated", depth=depth, max_left=max_left)
 
 
-def _definitions(formats: NumberingFormats, unwritable: list[tuple[str, int]] | None = None
-                 ) -> dict[str, list[LevelDef]]:
+def _definitions(formats: NumberingFormats, unwritable: list[tuple[str, int]] | None = None,
+                 max_left: int | None = None) -> dict[str, list[LevelDef]]:
     """The nine levels of every abstractNum *formats* needs, by kind. A label that needs a number of the section
     (``{section}``, or ``{path}`` of an item or paragraph in one) is written without it, as for a preamble item:
     Word shows only counters of the list itself in a level."""
@@ -396,26 +406,32 @@ def _definitions(formats: NumberingFormats, unwritable: list[tuple[str, int]] | 
         out["enumerated"] = [
             _level(d, NUM_FMT[formats.enumerated[d % size].counter],
                    level_text(formats.enumerated[d % size].label, refs, d, section=(), textual=textual),
-                   unwritable=unwritable, kind="enumerated")
+                   unwritable=unwritable, kind="enumerated", max_left=max_left)
             for d in range(9)]
         # The same levels with nothing but their own counter (a ``{path}`` shows its own ``ref`` alone): where a list is
         # nested in a unit that is not on the enumerated list, Word has no counter of the enclosing units to show.
-        out["detached"] = [_own(formats, d, d, textual, unwritable) for d in range(_LEVELS)]
+        out["detached"] = [_own(formats, d, d, textual, unwritable, max_left) for d in range(_LEVELS)]
         for k in range(1, MAX_DEPTH // _LEVELS):
-            out[f"enumerated+{k}"] = [_own(formats, d, _LEVELS * k + d, textual, unwritable) for d in range(_LEVELS)]
+            out[f"enumerated+{k}"] = [_own(formats, d, _LEVELS * k + d, textual, unwritable, max_left)
+                                      for d in range(_LEVELS)]
     if formats.renumber is not None:
         f = formats.renumber
         for k in range(MAX_DEPTH // _LEVELS):
             out["renumber" if k == 0 else f"renumber+{k}"] = [
                 _level(d, NUM_FMT[f.counter], level_text(f.label, [f.ref] * 9, d, section=(), textual=textual),
-                       unwritable=unwritable, kind="renumber", depth=_LEVELS * k + d) for d in range(_LEVELS)]
+                       unwritable=unwritable, kind="renumber", depth=_LEVELS * k + d, max_left=max_left)
+                for d in range(_LEVELS)]
     if formats.paragraphs is not None:
         f = formats.paragraphs
         out["paragraphs"] = [
             _level(0, NUM_FMT[f.counter], level_text(f.label, [f.ref], 0, section=(), textual=textual),
                    unwritable=unwritable, kind="paragraphs"),
             *(_neutral(k) for k in range(1, 9))]
-    out["bullet"] = [LevelDef(d, "bullet", _BULLETS[d % 3], left=_STEP * (d + 1), hanging=_STEP) for d in range(9)]
+    limit = max_left or max_indent(DEFAULT_TEXT_WIDTH)
+    for k in range(MAX_DEPTH // _LEVELS):
+        out["bullet" if k == 0 else f"bullet+{k}"] = [
+            LevelDef(d, "bullet", _BULLETS[(_LEVELS * k + d) % 3], left=min(_STEP * (_LEVELS * k + d + 1), limit),
+                     hanging=_STEP) for d in range(_LEVELS)]
     return out
 
 
@@ -584,7 +600,7 @@ class _Built(NamedTuple):
     exact: bool
     lo_text: str | None
     fixed: bool
-    ghost: bool = False
+    ghost: str = ""
 
 
 class _Finding(NamedTuple):
@@ -607,8 +623,10 @@ class _Drift:
 
 
 class _Planner:
-    def __init__(self, tree: RenderTree, file: str | None, text_switch: TextSwitch = "documented") -> None:
+    def __init__(self, tree: RenderTree, file: str | None, text_switch: TextSwitch = "documented",
+                 text_width: int = DEFAULT_TEXT_WIDTH) -> None:
         self.tree, self.file, self.text_switch = tree, file or "", text_switch
+        self.max_left = max_indent(text_width)
         self.formats = tree.formats
         self.textual = tree.formats.scheme == "none"
         self.diagnostics: list[Diagnostic] = []
@@ -638,12 +656,15 @@ class _Planner:
         self.reserve5 = False
         self.flagged: set[str] = set()
         self.reported: set[tuple[str, object]] = set()
+        #: The labels Word draws differently for want of counters it cannot show, by what they have in common, as
+        #: (line, message) of each place; reported once for each group (:meth:`report_section_labels`).
+        self.label_findings: dict[tuple[object, ...], list[tuple[int | None, str]]] = {}
         self.drifts: list[_Drift] = []
         self.open_drift: dict[tuple[int, int], _Drift] = {}
         self.heading_num: Num | None = None
-        self.bullet_num: Num | None = None
+        self.bullet_nums: dict[str, Num] = {}
         self.depth_reported = False
-        self.definitions = _definitions(self.formats)
+        self.definitions = _definitions(self.formats, max_left=self.max_left)
         self.by_kind: dict[str, _Abstract] = {}
         #: Every unit's node, in document order; what Word numbers each as (:class:`Step`); and its designation as
         #: the resolver wrote it, as tokens (§13.1-§13.3), each counter with the unit that holds it.
@@ -745,12 +766,17 @@ class _Planner:
           ``{section}.{n}`` under a ref ``{n}``): Word returns the whole number or none of it."""
         wanted = atoms(designation)
         _, owner = wanted[uncovered(designation, fields) or 0]
+        mine = {t.owner for t in designation if isinstance(t, Count)}
+        skips = any(isinstance(owner_, Ghost) for owner_ in mine)
         for candidate in fields:
             plain = candidate.number and not candidate.suppress_text
             if not (plain and any(isinstance(t, Count) and t.owner == owner for t in candidate.tokens)):
                 continue
             drawn = printable(text_of(candidate.tokens))
             shape = "".join("#" if isinstance(t, Count) else t.text for t in candidate.tokens)
+            if skips and any(isinstance(t, Count) and t.owner not in mine for t in candidate.tokens):
+                return ("a heading level is skipped before it (§4.1) and Word's counter for that level belongs to another "
+                        "unit, so no field returns the number the renderer shows", "skipped")
             if any(isinstance(t, Count) and t.owner != owner for t in candidate.tokens):
                 return (f"Word draws its number as '{drawn}', which holds the counters of other units that the reference "
                         f"writes itself before it (the section's, the enclosing items'), and a field returns the whole "
@@ -764,7 +790,8 @@ class _Planner:
             else:
                 how = "Word is not documented to leave such punctuation out with its \\t switch"
             return (f"Word draws its number as '{drawn}', with text or punctuation around the counter that the "
-                    f"reference does not have, and {how}", f"delimiters {shape}")
+                    f"reference does not have, and {how}. The reference is made of fields when the level's `ref` has "
+                    f"them too (put it in `ref`, for example `({{n}})`)", f"delimiters {shape}")
         return "no combination of Word's fields reads like it", "other"
 
     def reference(self, found: _Reference) -> _Built | None:
@@ -804,7 +831,7 @@ class _Planner:
         if any(isinstance(piece, Field) and piece.suppress_text for piece in pieces):
             lo_text = "".join(piece if isinstance(piece, str) else text_of(self.words(piece.owner) if piece.number
                                                                            else piece.tokens) for piece in pieces)
-        return _Built(pieces, shown == found.text, lo_text, False, bool(ghost))
+        return _Built(pieces, shown == found.text, lo_text, False, ghost)
 
     @staticmethod
     def skipped_part(whole: Sequence[Shown], pieces: Sequence[str | Field]) -> str:
@@ -1036,6 +1063,7 @@ class _Planner:
             self.section(section)
             for block in section.blocks:
                 self.block(block, section)
+        self.report_section_labels()
         for drift in self.drifts:
             self.report_drift(drift)
         self.report_collisions()
@@ -1213,11 +1241,26 @@ class _Planner:
             why = "the levels of the heading list kept for nested lists are used up or read otherwise"
         else:
             why = "the list is nested in a unit that is on another list"
-        self.report("render-docx-section-label", "warning",
-                    f"The label '{printable(fmt.label)}' of {kind}s shows the number of {self.describe(lost)}, "
-                    f"which Word cannot show in this list ({why}): in Word it reads "
-                    f"'{printable(_reads(levels[ilvl], levels))}'. A reference to such an item is still made of "
-                    f"fields.", first.line)
+        self.section_label(("detached", fmt.label, self.describe(lost), why),
+                           f"The label '{printable(fmt.label)}' of {kind}s shows the number of {self.describe(lost)}, "
+                           f"which Word cannot show in this list ({why}): in Word it reads "
+                           f"'{printable(_reads(levels[ilvl], levels))}'. A reference to such an item is still made of "
+                           f"fields.", first.line)
+
+    def section_label(self, group: tuple[object, ...], message: str, line: int | None) -> None:
+        """Note a label Word draws differently for want of counters it cannot show; the ones that have *group* in
+        common are one finding."""
+        self.label_findings.setdefault(group, []).append((line, message))
+
+    def report_section_labels(self) -> None:
+        """One ``render-docx-section-label`` for each group: the first place by line, and how many more do the same
+        (as for the references that fail alike)."""
+        for members in self.label_findings.values():
+            members.sort(key=lambda m: (m[0] is None, m[0] or 0))
+            line, message = members[0]
+            if len(members) > 1:
+                message += f" {len(members) - 1} more {'places do' if len(members) > 2 else 'place does'} the same."
+            self.report("render-docx-section-label", "warning", message, line)
 
     def shared_counter(self, message: str, line: int | None) -> None:
         self.report("render-docx-shared-counter", "warning", message, line)
@@ -1431,7 +1474,7 @@ class _Planner:
         plan sets nothing."""
         level = abstract.levels[ilvl]
         if unit in self.item_units and parent in self.text_left:
-            left, hanging = min(self.text_left[parent] + _STEP, _MAX_LEFT), _STEP
+            left, hanging = min(self.text_left[parent] + _STEP, self.max_left), _STEP
         elif unit in self.item_units and abstract.kind == "headings":
             left, hanging = level.left, level.hanging
         else:
@@ -1493,10 +1536,17 @@ class _Planner:
                 # a level nothing numbers as 0, or the counter of whatever last counted it, and the resolver's label
                 # is that of the enclosing unit. Not left to Word's reading.
                 cause += ("label-fallback",)
-                self.report("render-docx-section-label", "warning",
-                            f"The label of {word}s '{printable(node.label or '')}' shows the number of an enclosing "
-                            f"item that Word cannot show here (the list is not nested directly in an item of its own "
-                            f"kind): in Word it reads '{printable(step.label)}'.", node.line)
+                skipped = any(isinstance(t, Count) and isinstance(t.owner, Ghost) for t in self.desig.get(parent or "", ()))
+                if skipped:
+                    message = (f"The label of {word}s '{printable(node.label or '')}' holds the number of a heading level "
+                               f"that the document skips (a heading level must follow the one above, §4.1): Word draws "
+                               f"that level with the counter of another unit, so it reads '{printable(step.label)}' only "
+                               f"as long as that counter is what the renderer counts, and a unit inserted there changes it.")
+                else:
+                    message = (f"The label of {word}s '{printable(node.label or '')}' shows the number of an enclosing "
+                               f"item that Word cannot show here (the list is not nested directly in an item of its own "
+                               f"kind): in Word it reads '{printable(step.label)}'.")
+                self.section_label(("chain", word, skipped), message, node.line)
         self.add(node, kind, used, ilvl, explicit=explicit, cause=cause, step=step,
                  ind=self.indent(abstract, ilvl, unit, parent, alternative=False))
         self.check(node, word, step, counter, group, cause, (abstract.id, ilvl))
@@ -1513,6 +1563,15 @@ class _Planner:
         if placed.abstract is not abstract:
             return "restart-section" if placed.abstract.kind == "headings" else "restart-family"
         return "resync"
+
+    def report_depth(self, depth: int, line: int | None) -> None:
+        """Report, once, a list nested past the levels the plan has (:data:`MAX_DEPTH`), of any family."""
+        if not self.depth_reported:
+            self.depth_reported = True
+            self.report("render-docx-list-depth", "warning",
+                        f"A list is nested {depth} levels deep: the plan has {MAX_DEPTH} levels of Word lists. Items from "
+                        f"level {MAX_DEPTH + 1} on are numbered in the format of level {MAX_DEPTH} and restart by fixed "
+                        f"values (a bullet has no number to restart).", line)
 
     def report_collisions(self) -> None:
         """One finding for the units of the heading list that Word would number off the resolver's because they share
@@ -1602,12 +1661,7 @@ class _Planner:
             num = self.new_num(abstract, ilvl, first.number or 1)
             if depth >= MAX_DEPTH:
                 cause = ("clamped",)
-                if not self.depth_reported:
-                    self.depth_reported = True
-                    self.report("render-docx-list-depth", "warning",
-                                f"A list is nested {depth} levels deep: the plan has {MAX_DEPTH} levels of Word lists. "
-                                f"Items from level {MAX_DEPTH + 1} on are numbered in the format of level {MAX_DEPTH} "
-                                f"and restart by fixed values.", first.line)
+                self.report_depth(depth, first.line)
             elif placed is not None and first.number > 1:
                 cause = ("resync",)
                 self.shared_counter(
@@ -1647,31 +1701,39 @@ class _Planner:
                 self.block(child, section, quoted)
 
     def bullets(self, lst: List, section: Section | None, quoted: bool) -> None:
-        """Bullets count nothing, so every bullet list of the document is numbered by one num."""
-        abstract = self.abstract("bullet")
-        if self.bullet_num is None:
-            self.bullet_num = self.new_num(abstract)
-        ilvl = min(lst.depth, 8)
+        """Bullets count nothing, so every bullet list of the document at one stretch of nine levels is numbered by
+        one num; a list nested deeper goes on in the next abstractNum, as the other families do."""
+        reached = min(lst.depth, MAX_DEPTH - 1)
+        chunk, ilvl = divmod(reached, _LEVELS)
+        kind = "bullet" if chunk == 0 else f"bullet+{chunk}"
+        abstract = self.abstract(kind)
+        if kind not in self.bullet_nums:
+            self.bullet_nums[kind] = self.new_num(abstract)
+        bullet_num = self.bullet_nums[kind]
         parent = lst.items[0].parent_unit
+        cause: tuple[str, ...] = ()
+        if lst.depth >= MAX_DEPTH:
+            cause = ("clamped",)
+            self.report_depth(lst.depth, lst.items[0].line)
         for item in lst.items:
             assert item.unit is not None
             self.parent[item.unit] = item.parent_unit
             self.nodes[item.unit] = item
             self.desig[item.unit] = self.desig.get(parent, []) if parent is not None else []
-            cause = ("clamped",) if lst.depth > 8 else ()
-            self.units[item.unit] = UnitPlan(item.unit, "item", self.bullet_num.id, ilvl, True, None, None, "", "",
+            self.units[item.unit] = UnitPlan(item.unit, "item", bullet_num.id, ilvl, True, None, None, "", "",
                                              None, cause, (), None)
-            self.placed[item.unit] = _Placed(self.bullet_num, abstract)
+            self.placed[item.unit] = _Placed(bullet_num, abstract)
             for child in item.blocks:
                 self.block(child, section, quoted)
 
 
-def plan_docx(tree: RenderTree, *, file: str | None = None, text_switch: TextSwitch = "documented"
-              ) -> tuple[DocxPlan, list[Diagnostic]]:
+def plan_docx(tree: RenderTree, *, file: str | None = None, text_switch: TextSwitch = "documented",
+              text_width: int = DEFAULT_TEXT_WIDTH) -> tuple[DocxPlan, list[Diagnostic]]:
     """The numbering plan of *tree* for Word, and the diagnostics only planning can produce (all
     ``render-docx-*``, in the order of their lines, naming *file*). Pure: the same tree and *text_switch* (the style's
     ``docx.reference_text_switch``: what a reference may expect of Word's ``\\t`` switch, see
-    :func:`.docx_cover.suppressed`) give an equal plan, and ``tree.formats`` carries the style's numbering. A style
+    :func:`.docx_cover.suppressed`) and *text_width* (the page's, in twips: nested lists stop stepping in at 60% of it)
+    give an equal plan, and ``tree.formats`` carries the style's numbering. A style
     Word's numbering cannot express (:func:`docx_style_errors`) is refused before rendering (ADR 0006), so it never
     reaches here."""
-    return _Planner(tree, file, text_switch).run()
+    return _Planner(tree, file, text_switch, text_width).run()

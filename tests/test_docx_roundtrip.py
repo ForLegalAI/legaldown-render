@@ -1187,7 +1187,7 @@ def test_the_live_parts_of_a_reference_below_a_skipped_level_follow_a_heading_in
     assert [line for line in lines_of(said) if line.startswith("Refs")] == ["Refs: II II.A.1 II.A.1(a) III III.A.1"]
     result = render(SKIPPED, format="docx", style="outline")
     plan, diagnostics = plan_docx(result.tree)
-    assert [r.ghost for r in plan.refs.values()] == [False, True, True, False, True]
+    assert [r.ghost for r in plan.refs.values()] == ["", "A", "A", "", "A"]
     assert not any(r.fixed for r in plan.refs.values())
     assert any(d.rule == "render-docx-reference" and "heading level that the document skips" in d.message
                for d in diagnostics)

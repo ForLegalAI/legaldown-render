@@ -10,12 +10,14 @@ import io
 import random
 import re
 import time
+import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
 from conftest import DOCUMENTS, FRONT, spec_root
+from docx_support import W, parts
 
 from legaldown_render import DocumentError, render
 from legaldown_render.errors import StyleError
@@ -30,6 +32,7 @@ from legaldown_render.resolve.docx_plan import (
     _components,
     _Planner,
     docx_style_errors,
+    max_indent,
     plan_docx,
 )
 from legaldown_render.resolve.numbering import format_counter, formats_of
@@ -424,9 +427,31 @@ def test_the_abstract_nums_past_nine_levels_have_the_families_formats_of_the_dep
         ("lowerLetter", "(%5)")]
     assert [(level.num_fmt, level.lvl_text) for level in by_kind["enumerated+2"].levels[:3]] == [
         ("lowerRoman", "%1)"), ("upperLetter", "[%2]"), ("decimal", "%3.")]  # depth 18, 19, 20
-    # the indent goes on stepping a centimetre per level of nesting, up to thirteen centimetres
-    assert [level.left for level in by_kind["enumerated+1"].levels[:5]] == [567 * k for k in (10, 11, 12, 13, 13)]
+    # the indent stops stepping in at 60% of the text width of an A4 page (9072 twips), which level 9 has nearly reached
+    assert [level.left for level in by_kind["enumerated"].levels[6:]] == [567 * 7, 567 * 8, 567 * 9]
+    assert [level.left for level in by_kind["enumerated+1"].levels[:5]] == [max_indent(9072)] * 5 == [5443] * 5
     assert all(len(a.levels) == 9 for a in plan.abstract_nums)
+
+
+def test_the_indent_of_a_deep_list_is_limited_by_the_width_of_the_page_it_is_on() -> None:
+    body = "# A\n\n" + "".join("  " * i + f"- level {i}\n" for i in range(14)) + "\n- bullet\n" + "".join(
+        "  " * (i + 1) + "- bullet\n" for i in range(12))
+    result = render(FRONT + body, format="text")
+    for width in (5557, 14000):  # A5 with 25 mm margins; a wide page
+        plan, _ = plan_docx(result.tree, text_width=width)
+        lefts = [level.left for a in plan.abstract_nums if a.kind != "headings" for level in a.levels]
+        assert max(lefts) == max_indent(width) == int(width * 0.6)
+    # the indents of the items that carry their own (those on the heading list and nested in them) stop there too
+    clauses = render(FRONT + body, format="text", style="continental")
+    plan, _ = plan_docx(clauses.tree, text_width=5557)
+    assert max(unit.ind[0] for unit in plan.units.values() if unit.ind) == max_indent(5557)
+    # the render plans for the page of the document: on A5 no indent of the file goes past 60% of the text
+    data = render(FRONT + body, format="docx", style="continental", overrides={"page.size": "A5"}).binary
+    assert data is not None
+    document = ET.fromstring(parts(data)["word/document.xml"])
+    text_width = 8391 - 2 * 1417
+    lefts = [int(ind.get(f"{W}left")) for ind in document.iter(f"{W}ind") if ind.get(f"{W}left")]
+    assert max(lefts) > 3000 and max(lefts) <= int(text_width * 0.6) + 1
 
 
 def test_ordered_lists_go_on_past_nine_levels_too() -> None:
@@ -438,6 +463,29 @@ def test_ordered_lists_go_on_past_nine_levels_too() -> None:
     assert [plan.units[i.unit].label for i in deep] == [i.label for i in deep]
     assert [plan.units[i.unit].cause for i in deep[8:]] == [(), ("restart-depth",), ()]
     assert rules(diagnostics) == {"render-docx-static-restart"}
+
+
+def test_bullets_go_on_past_nine_levels_in_further_abstract_nums_too() -> None:
+    body = "# A\n\n" + "".join("  " * i + f"- bullet {i}\n" for i in range(12))
+    tree, plan, diagnostics = planned(body, overrides={"enumeration.enabled": False})
+    deep = items(tree)
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "bullet", "bullet+1"]
+    assert [plan.units[i.unit].ilvl for i in deep] == [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2]
+    assert len({plan.units[i.unit].num_id for i in deep[:9]}) == 1 == len({plan.units[i.unit].num_id for i in deep[9:]})
+    assert plan.units[deep[8].unit].num_id != plan.units[deep[9].unit].num_id
+    assert all(plan.units[i.unit].cause == () for i in deep) and diagnostics == []
+    # the glyph goes on cycling, as it would at that depth
+    bullets = {a.kind: a for a in plan.abstract_nums}
+    assert [bullets["bullet"].levels[8].lvl_text, bullets["bullet+1"].levels[0].lvl_text] == ["◦", "•"]
+
+
+def test_a_list_of_any_family_nested_past_the_levels_the_plan_has_is_reported_once() -> None:
+    for marker in ("-", "1."):
+        width = 3 if marker == "1." else 2
+        body = "# A\n\n" + "".join(" " * (width * i) + f"{marker} level {i}\n" for i in range(38))
+        _, plan, diagnostics = planned(body, overrides={"enumeration.enabled": marker == "1."})
+        assert [d.rule for d in diagnostics if d.rule == "render-docx-list-depth"] == ["render-docx-list-depth"]
+        assert any("clamped" in unit.cause for unit in plan.units.values())
 
 
 def test_a_list_nested_past_the_levels_the_plan_has_is_clamped_and_reported_once() -> None:
@@ -1991,7 +2039,7 @@ def test_a_skipped_heading_level_is_the_one_part_of_a_reference_that_is_written_
     tree, plan, diagnostics = planned(body, style="outline")
     # no unit holds the number of the level the document skips (an error, §4.1), so it is text between two fields
     assert references_of(tree, plan) == [("I.A.1", 'REF a + ".A." + REF b', True)]
-    assert plan.refs["s2"].ghost and not plan.refs["s2"].fixed
+    assert plan.refs["s2"].ghost == "A" and not plan.refs["s2"].fixed
     [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
     assert found.level == "warning" and found.line == tree.sections[1].blocks[0].line
     assert found.message.startswith("The cross-reference 'I.A.1' holds the number of a heading level that the document skips")
@@ -2321,7 +2369,8 @@ def test_references_that_are_fixed_for_the_same_reason_are_one_finding() -> None
     # delimiters in the label that the reference leaves out
     ([{"counter": "lower-alpha", "label": "({n})", "ref": "{n}"}], "documented",
      ["Word draws its number as '(a)'", "text or punctuation around the counter that the reference does not have",
-      "Word is not documented to leave such punctuation out with its \\t switch"]),
+      "Word is not documented to leave such punctuation out with its \\t switch",
+      "put it in `ref`, for example `({n})`"]),
     ([{"counter": "decimal", "label": "{n}:", "ref": "{n}"}], "guess",
      ["Word draws its number as '1:'", "not documented to leave such punctuation out"]),
     # an abbreviation with a period: the setting that guesses leaves it out
@@ -2343,6 +2392,32 @@ def test_the_reason_a_reference_is_fixed_names_what_the_style_could_change(
     assert all(phrase in found.message for phrase in phrases), found.message
     assert "written as the text" in found.message and "not a field" in found.message
     assert all(r.fixed for r in plan.refs.values())
+
+
+def test_a_reference_below_a_skipped_level_whose_number_Word_draws_with_another_units_counter_says_so() -> None:
+    # the paragraph of the section after the skip is numbered 1.1.1.1 by Word too, but through the counter of the
+    # paragraph before the skip (level 2 of the heading list), not of the level the document skips
+    body = ("# Heading\n\nA paragraph. {#a1}\n\n### Heading {#h3}\n\nA paragraph. {#a22}\n\nA third. {#a23}\n\n"
+            "Refs: {{ref: a1}} {{ref: a22}}\n")
+    tree, plan, diagnostics = planned(body, overrides=PARAGRAPHS)
+    [reference] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert "a heading level is skipped before it (§4.1) and Word's counter for that level belongs to another unit" in reference.message
+    assert "style" not in reference.message and "label" not in reference.message
+    [label] = [d for d in diagnostics if d.rule == "render-docx-section-label"]
+    # what Word draws is not stated as if it were different from the renderer's: it is the same text, from another counter
+    assert "holds the number of a heading level that the document skips" in label.message
+    assert "another unit" in label.message and "only as long as that counter" in label.message
+    assert label.message.endswith(" 2 more places do the same.")  # the three paragraphs, one finding
+
+
+def test_the_labels_of_the_lists_of_one_chain_that_lose_counters_are_one_finding() -> None:
+    body = ("# A\n\n- one\n  1. ordered\n     - three\n       - four\n     - three b\n       - four c\n"
+            "  1. ordered two\n     - x\n       - y\n")
+    _, plan, diagnostics = planned(body, **ORDERED_PARENT)
+    found = [d for d in diagnostics if d.rule == "render-docx-section-label"]
+    assert len(found) == 1 and found[0].message.endswith(" 2 more places do the same.")
+    assert sum(next(a.kind for a in plan.abstract_nums if a.id == n.abstract_id) == "detached"
+               for n in plan.nums) == 3
 
 
 def test_every_reference_that_carries_the_counters_of_other_units_is_one_finding_whatever_its_shape() -> None:
@@ -2415,7 +2490,7 @@ def test_the_switch_that_drops_text_is_modelled_only_where_its_result_is_known()
     assert suppressed([Lit("§ "), Count("a", "3")]) == (Count("a", "3"),)
     assert suppressed([Lit("Section "), one, Lit("."), two]) == (one, Lit("."), two)
     assert suppressed([one, Lit("."), two]) == (one, Lit("."), two)  # nothing to drop: no field of its own is needed
-    assert suppressed([Lit("Part "), one, Lit(" of "), two]) == (one, two)  # words between counters go too
+    assert suppressed([Lit("Part "), one, Lit(" of "), two]) is None  # words between counters: only `guess` drops them
     # a delimiter around the counters, or mixed with words between them, is not documented
     assert suppressed([Lit("("), Count("a", "a"), Lit(")")]) is None
     assert suppressed([Count("a", "a"), Lit(")")]) is None
@@ -2437,6 +2512,8 @@ def test_the_switch_setting_says_what_word_may_be_expected_to_do() -> None:
     assert suppressed([Lit("("), one], "guess") is None and suppressed([Lit("1. "), one], "guess") is None
     assert suppressed([one, Lit(" Art.")], "guess") is None and suppressed([Lit("No: "), one], "guess") is None
     assert suppressed([Lit("Article "), Count("a", "I")], "guess") == (Count("a", "I"),)
+    assert suppressed([Lit("Part "), one, Lit(" of "), two], "guess") == (one, two)  # words between counters go too
+    assert suppressed([one, Lit(" to."), two], "guess") is None  # a mixture with a delimiter never does
 
 
 # -- Bookmarks ----------------------------------------------------------------------------------------------
@@ -2627,9 +2704,8 @@ def assert_references_as_resolved(result, plan, diagnostics) -> None:  # noqa: A
                                  tree.formats.paragraphs) if f is not None]
     delimiters_only = not any(c.isalnum() for t in templates for c in re.sub(r"\{(n|path|section)\}", "", t))
     # The one counter a cover may write as text is that of a heading level the document skips (a Core error), which no
-    # unit holds: it reads as the first counter of that level.
+    # unit holds, and the plan says which it wrote.
     skipping = any("skipped-level" in u.cause for u in plan.units.values())
-    ghost_text = {c for level in tree.formats.headings for c in format_counter(1, level.counter)}
     needing_a_finding = 0
     fixed = ghosts = 0
     for target, text in texts.items():
@@ -2646,9 +2722,11 @@ def assert_references_as_resolved(result, plan, diagnostics) -> None:  # noqa: A
             continue
         assert not reference.ghost or skipping, (target, text)
         if delimiters_only:
-            written = {c for c in literal_text_of_a_cover(tree, reference.segments) if c.isalnum()}
-            assert written <= (ghost_text if reference.ghost else set()), (target, text, show(plan, reference.segments))
-        ghosts += reference.ghost
+            # the letters and digits written as text are exactly the counters the plan says it wrote as text
+            written = "".join(c for c in literal_text_of_a_cover(tree, reference.segments) if c.isalnum())
+            assert written == "".join(c for c in reference.ghost if c.isalnum()), (
+                target, text, show(plan, reference.segments))
+        ghosts += bool(reference.ghost)
         assert any(isinstance(s, FieldSeg) for s in reference.segments) or not text, (target, text)
         if reference.exact:
             continue

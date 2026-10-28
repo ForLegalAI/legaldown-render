@@ -100,7 +100,7 @@ which a field returns whole or not at all; and, in a document that skips a headi
 Error), **the counter of the skipped level**, held by no unit, which is text between the fields of the units that
 do hold theirs. A heading's title that refers back to itself under the `none` scheme is the other case
 (`render-docx-reference-cycle`). The built-in styles have none of these in a document without errors, and a
-reference to an item in a list nested as deep as the document likes is made of fields.
+reference to an item in a list nested up to 36 levels is made of fields.
 Under the `none` scheme a reference is a `REF` to the heading text.
 
 ### Numbering the hard cases

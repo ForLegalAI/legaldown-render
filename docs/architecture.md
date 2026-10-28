@@ -316,9 +316,9 @@ A level of a list shows only counters of its own list, which settles where the r
   restarts under a new parent at a fixed value, like any list nested in a list of another kind (`render-docx-static-restart`):
   a list made new in Word by copying an item of another goes on counting where the renderer would start again.
 - **Lists nested past Word's nine levels.** Word has nine levels in a list. A list nested deeper goes on in the next
-  abstractNum of its family (`enumerated+1` to `enumerated+3`, `renumber+1` to `renumber+3`: 36 levels in all), whose
+  abstractNum of its family (`enumerated+1` to `enumerated+3`, `renumber+1` to `renumber+3`, `bullet+1` to `bullet+3`: 36 levels in all), whose
   level `j` is the family's level of depth `9k + j` (format and label with its own counter alone, indent stepping a
-  centimetre per level up to thirteen). Inside such an abstractNum the lists restart by structure; the list that
+  centimetre per level up to 60% of the page's text width, as for every nested list, `plan_docx(text_width=)`). Inside such an abstractNum the lists restart by structure; the list that
   begins one restarts at a fixed value (`restart-depth`, reported as information). Only a nesting past 36 levels
   uses the last level again (`clamped`, `render-docx-list-depth`).
 - **Alternatives that share a number** (§15.8). A unit that shares its number with the one before it and that Word
@@ -369,8 +369,9 @@ LibreOffice ignores it) is used where the number holds words the reference does 
 gives `I`, `§ 3` gives `3`; Microsoft's own example is `Section 1.01`, which gives `1.01`), as far as the style's
 `docx.reference_text_switch` says Word may be expected to do it: `documented` (the default) drops the words before the
 first counter and after the last, keeps a delimiter between counters, and does not use the switch for a number with a
-delimiter around its counters (`(a)`, `a)`, `1:`, `No. 1`), because what Word does with it is not documented; `off`
-never uses it; `guess` also drops a period after the letters that lead a number (`No. 1`, `Čl. 1`). What Word does is
+delimiter around its counters (`(a)`, `a)`, `1:`, `No. 1`) or words between counters, because what Word does with them is
+not documented; `off` never uses it; `guess` also drops a period after the letters that lead a number (`No. 1`,
+`Čl. 1`) and words between counters. What Word does is
 on the manual Word checklist (`.github/PUBLISHING.md`). Each field's cached result is **Word's** value (the simulator's),
 and `cached_lo` what LibreOffice shows. A unit that a field points at has a
 bookmark (its anchor's, or a hidden one); a reference to an item or paragraph the style does not number is the
@@ -393,7 +394,7 @@ that part, is literal text (`RefPlan.ghost`, `render-docx-reference` names it); 
 there is LibreOffice's reading of a skipped level (its start value); Word itself is expected to read it as one less
 (the checklist). A heading's title that refers back to itself under the `none` scheme is the third case
 (`render-docx-reference-cycle`). Nothing else that Word could compute is written as literal text; the built-in styles
-have no fixed reference in a document without a skipped heading level, whatever its nesting.
+have no fixed reference in a document without a skipped heading level, with lists nested up to 36 levels.
 
 **Bookmarks** (`resolve/docx_bookmarks.py`). The planner names bookmarks and the writer gives them ids. Every anchor of
 the tree has one, referenced or not: `ld_<anchor>` for a section, list item or paragraph, `lddef_<id>` for a

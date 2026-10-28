@@ -39,8 +39,10 @@ from legaldown_render.writers.docx.styles import build_styles
 _STEP = 567
 
 
-def _level(ilvl: int, num_fmt: str, text: str, *, p_style: str | None = None) -> LevelDef:
-    return LevelDef(ilvl, num_fmt, text, p_style=p_style, left=_STEP * (ilvl + 1), hanging=_STEP)
+def _level(ilvl: int, num_fmt: str, text: str) -> LevelDef:
+    """A level of a list of the check document. None is linked to a paragraph style: the document's own titles are
+    ``Heading`` paragraphs that Word must not number, and the numbered lines carry ``w:numPr`` themselves."""
+    return LevelDef(ilvl, num_fmt, text, left=_STEP * (ilvl + 1), hanging=_STEP)
 
 
 def _neutral(ilvl: int) -> LevelDef:
@@ -71,17 +73,19 @@ ROWS = (
     Row("a colon after a number: %1:", (_level(0, "decimal", "%1:"),), 0),
     Row("a path with a parenthesis: %1.%2(%3)",
         (_level(0, "decimal", "%1"), _level(1, "decimal", "%1.%2"), _level(2, "lowerLetter", "%1.%2(%3)")), 2),
+    Row("words between the counters: Part %1 of %2 (only the guess drops them)",
+        (_level(0, "decimal", "%1"), _level(1, "decimal", "Part %1 of %2")), 1),
 )
 
 #: The levels of the heading list as the planner writes them for a style with items on the heading list's second level
 #: and a ``{path}`` list nested in them on the reserved level 6: levels 3 to 5 are never used.
 HEADING_LIST = (
-    _level(0, "decimal", "%1.", p_style="Heading1"), _level(1, "decimal", "%1.%2"), _level(2, "decimal", "%1.%2.%3"),
+    _level(0, "decimal", "%1."), _level(1, "decimal", "%1.%2"), _level(2, "decimal", "%1.%2.%3"),
     _level(3, "decimal", "%1.%2.%3.%4"), _level(4, "decimal", "%1.%2.%3.%4.%5"),
     _level(5, "lowerLetter", "%1.%2(%6)"), _level(6, "lowerRoman", "%1.%2(%6)(%7)"), _neutral(7), _neutral(8))
 SKIPPING_LIST = (
-    _level(0, "decimal", "%1.", p_style="Heading1"), _level(1, "decimal", "%1.%2", p_style="Heading2"),
-    _level(2, "decimal", "%1.%2.%3", p_style="Heading3"), *(_neutral(k) for k in range(3, 9)))
+    _level(0, "decimal", "%1."), _level(1, "decimal", "%1.%2"),
+    _level(2, "decimal", "%1.%2.%3"), *(_neutral(k) for k in range(3, 9)))
 
 
 @dataclass

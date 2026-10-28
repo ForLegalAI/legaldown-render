@@ -152,8 +152,8 @@ For each file:
 8. **The numbering corner cases.** Make the check document with `python tests/word_check.py
    word-check/numbering-assumptions.docx` (from the repository root, in the project's environment): one row for each label
    form the planner relies on, each with the planner's assumption beside it, taken from the planner's own code, so that
-   a change to the model shows in the file. Ctrl+A, F9, then compare each row's `REF \n` and `REF \n \t` with the last
-   column:
+   a change to the model shows in the file. Ctrl+A, F9, then compare each row's `REF \n` and `REF \n \t` with what the
+   row says the planner assumes (the text after "The planner assumes", and the `[planner: ...]` of parts B and C):
    - `\t` with words before the number (rows 1 to 4: `Article %1`, `§ %1`, Microsoft's own `Section %1.%2` with a
      decimal and with a roman `%1`): Word shows the bare number (`I`, `1`, `1.1`, `I.1`) where LibreOffice ignores `\t`
      and shows the words. This is what the default `docx.reference_text_switch: documented` relies on.
@@ -161,8 +161,11 @@ For each file:
      them under `documented`, and takes it to give the bare number under `guess`. If Word gives `1`, a style with such a
      label may set `docx.reference_text_switch: guess`; if it gives anything else, report it.
    - delimiters around the counter (rows 7 to 10: `(%1)`, `%1)`, `%1:`, `%1.%2(%3)`): the planner never uses `\t` for
-     them (what Word does is not documented). Note what Word returns: if it keeps the delimiter, `\t` gives the plain
-     number and the planner's refusal is only cautious.
+     them (what Word does is not documented). Note what Word returns. If it leaves the delimiter out (`a` for `(a)`),
+     `\t` would make a reference to such an item live and the planner's refusal is only cautious (report it); if it
+     keeps the delimiter (`(a)`), the refusal is right and the reference stays fixed text, reported.
+   - words between the counters (row 11, `Part %1 of %2`): only `docx.reference_text_switch: guess` expects `\t` to drop
+     them (the result would be `12`). If Word returns something else, report it.
    - the reference to such an item reads as the HTML reads it, or the render reported `render-docx-reference` and the
      reference is fixed text (with the class it falls in and the setting that could change it).
    - skipped heading levels (a `###` straight after a `#`, an Error for the validator but rendered; part C of the check
