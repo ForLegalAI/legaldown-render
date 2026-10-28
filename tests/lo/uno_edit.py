@@ -10,7 +10,10 @@ Run it with the system Python that has the ``uno`` module, **not** with the proj
     /usr/bin/python3 tests/lo/uno_edit.py OUTDIR JOBS.json
 
 ``JOBS.json`` is a list of ``{"name": "job", "file": "/path/doc.docx", "edits": [["text of a paragraph", "new"], ...]}``;
-an edit whose new text is ``null`` deletes the paragraph whose text is exactly that instead.
+an edit whose new text is ``null`` deletes the paragraph whose text is exactly that instead. An edit with a third entry,
+``["text of a paragraph", "new", "text of another"]``, puts the new paragraph on the list and the level of the paragraph that
+holds the third text, as pasting a copy of that item at this place does (a new paragraph otherwise takes the numbering of
+the one it is inserted before).
 One LibreOffice instance serves every job. Exit status 0 when every job was exported.
 """
 from __future__ import annotations
@@ -49,10 +52,22 @@ def _connect(pipe: str, process: subprocess.Popen[bytes]) -> object:
     raise SystemExit("soffice did not accept a connection in time")
 
 
-def _edit(document: object, match: str, new: str | None) -> None:
-    """Insert a paragraph with the text *new* before the first paragraph that holds *match*, or, when *new* is None,
-    delete the first paragraph whose text is exactly *match* (with its break, as Delete at its end does; the last
-    paragraph of the document with the break before it, so that no empty paragraph is left)."""
+def _paragraph(document: object, match: str) -> object:
+    """The first paragraph of the body that holds *match*."""
+    paragraphs = document.getText().createEnumeration()
+    while paragraphs.hasMoreElements():
+        paragraph = paragraphs.nextElement()
+        if (paragraph.supportsService("com.sun.star.text.Paragraph") and not paragraph.ParaStyleName.startswith("Contents")
+                and match in paragraph.getString()):
+            return paragraph
+    raise SystemExit(f"no paragraph holds {match!r}")
+
+
+def _edit(document: object, match: str, new: str | None, like: str | None = None) -> None:
+    """Insert a paragraph with the text *new* before the first paragraph that holds *match*, on the list and level of the
+    paragraph that holds *like* when that is given, or, when *new* is None, delete the first paragraph whose text is
+    exactly *match* (with its break, as Delete at its end does; the last paragraph of the document with the break before
+    it, so that no empty paragraph is left)."""
     text = document.getText()
     paragraphs = text.createEnumeration()
     while paragraphs.hasMoreElements():
@@ -76,6 +91,10 @@ def _edit(document: object, match: str, new: str | None) -> None:
             text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
             cursor.goLeft(1, False)
             cursor.setString(new)
+            if like is not None:
+                copied = _paragraph(document, like)
+                for name in ("NumberingRules", "ListId", "NumberingLevel"):
+                    cursor.setPropertyValue(name, copied.getPropertyValue(name))
             return
     raise SystemExit(f"no paragraph {'is' if new is None else 'holds'} {match!r}")
 
@@ -97,8 +116,8 @@ def edit(out_dir: str, jobs: list[dict]) -> None:
             if document is None:
                 raise SystemExit(f"LibreOffice could not open {job['file']}")
             try:
-                for match, new in job["edits"]:
-                    _edit(document, match, new)
+                for match, new, *like in job["edits"]:
+                    _edit(document, match, new, *like)
                 for _ in range(2):  # page numbers and indexes settle after the first layout
                     indexes = document.getDocumentIndexes()
                     for position in range(indexes.getCount()):

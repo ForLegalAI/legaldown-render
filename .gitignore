@@ -9,3 +9,6 @@ dist/
 
 # OOXML schemas fetched for the DOCX tests (tests/schemas/README.md)
 tests/schemas/ooxml/
+
+# The documents made for the manual Word checks (.github/PUBLISHING.md)
+word-check/

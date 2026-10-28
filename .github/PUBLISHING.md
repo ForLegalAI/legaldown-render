@@ -149,14 +149,30 @@ For each file:
    - `\u` honours the outline levels of the attachment styles and paragraphs: the attachment titles are entries, at
      the level the table of contents gives them, in every variant that lists them. If Word does not list them, the
      fix is a `\t "Attachment Title,2"` list in the field (locale list separator permitting); report it.
-8. **The numbering corner cases:**
-   - `\t` with words before the number: a label such as `Article {n}` or `§ {n}` referenced with `{n}`, whose reference
-     drops the words (`REF \n \t`): Word shows the bare number, where LibreOffice ignores `\t` and shows the words.
-   - a period before the number (`No. {n}`): the reference to the item reads as the HTML reads it, or the render
-     reported `render-docx-reference` and the reference is fixed text.
-   - skipped heading levels (a `###` straight after a `#`, an Error for the validator but rendered): the numbers after
-     it, and the references to them, read as the plain-text output reads them, or the render reported a
-     `render-docx-reference` Warning and the reference is fixed text; nothing is unreadable.
+8. **The numbering corner cases.** Make the check document with `python tests/word_check.py
+   word-check/numbering-assumptions.docx` (from the repository root, in the project's environment): one row for each label
+   form the planner relies on, each with the planner's assumption beside it, taken from the planner's own code, so that
+   a change to the model shows in the file. Ctrl+A, F9, then compare each row's `REF \n` and `REF \n \t` with what the
+   row says the planner assumes (the text after "The planner assumes", and the `[planner: ...]` of parts B and C):
+   - `\t` with words before the number (rows 1 to 4: `Article %1`, `§ %1`, Microsoft's own `Section %1.%2` with a
+     decimal and with a roman `%1`): Word shows the bare number (`I`, `1`, `1.1`, `I.1`) where LibreOffice ignores `\t`
+     and shows the words. This is what the default `docx.reference_text_switch: documented` relies on.
+   - a period after letters before the number (rows 5 and 6: `Čl. %1`, `No. %1`): the planner does not use `\t` for
+     them under `documented`, and takes it to give the bare number under `guess`. If Word gives `1`, a style with such a
+     label may set `docx.reference_text_switch: guess`; if it gives anything else, report it.
+   - delimiters around the counter (rows 7 to 10: `(%1)`, `%1)`, `%1:`, `%1.%2(%3)`): the planner never uses `\t` for
+     them (what Word does is not documented). Note what Word returns. If it leaves the delimiter out (`a` for `(a)`),
+     `\t` would make a reference to such an item live and the planner's refusal is only cautious (report it); if it
+     keeps the delimiter (`(a)`), the refusal is right and the reference stays fixed text, reported.
+   - words between the counters (row 11, `Part %1 of %2`): only `docx.reference_text_switch: guess` expects `\t` to drop
+     them (the result would be `11` for `Part 1 of 1`). If Word returns something else, report it.
+   - the reference to such an item reads as the HTML reads it, or the render reported `render-docx-reference` and the
+     reference is fixed text (with the class it falls in and the setting that could change it).
+   - skipped heading levels (a `###` straight after a `#`, an Error for the validator but rendered; part C of the check
+     document): the numbers after it, and the references to them, read as the plain-text output reads them, but the
+     planner caches the skipped level as 1, as LibreOffice and the renderer count it, and writes that level's part of a
+     reference as text (`render-docx-reference` says so). Word is expected to draw 0 for the level a heading skips: record
+     what it draws. The rest of such a reference is fields and follows edits.
    - counters shared across nums: a nested list of the same kind restarts under each new parent; a list of another
      kind restarts by a fixed setting (the render reported `render-docx-static-restart`).
    - Roman numerals of 4000 and over, and letters past 26: Word's text (`render-docx-roman-overflow`,
@@ -173,6 +189,17 @@ For each file:
      (they have no heading style). Under each clause the nested list reads `a)`, `b)`, and a new clause (Enter at the end
      of a clause, typing) restarts it at `a)` under that clause; so does a sub-sub-list (`i)`). A list nested three
      levels under a clause (`1.1.1`) is a separate list that restarts by a fixed setting (reported `render-docx-static-restart`).
+   - A level of the heading list whose text names levels around ones nothing numbers (part B of the check document: levels
+     3 to 5 unused, the nested level `%1.%2(%6)`): the nested items read `1.1(a)`, `1.1(b)`, and `1.2(a)` under the next
+     item, never `1.1.0.0.0(a)` and never continuing after a new item. This is the layout of a `{path}` label under a
+     clause.
+   - A list in an ordered item that shows the path of its item (the style `enumeration.levels` with `{path}` labels) is on
+     detached levels: Word draws the item's own counter alone (`(A)`, not `1(a)(1)(i)(A)`; the render reported
+     `render-docx-section-label` with what Word draws), and the references read as the HTML reads them. A second
+     such list under a new parent restarts at `(A)` by a fixed setting; a list made new in Word by copying an item
+     of another goes on counting (the documented limit).
+   - Items nested past nine levels continue in a further list: the tenth level restarts at `(a)` by a fixed setting and its
+     own items restart by structure; the references to them read as the HTML reads them.
    - In `template.continental.docx` a later alternative (a paragraph, clause or heading that shares a number: the
      second "Disputes", say) shows the first one's number: a `numId 0` paragraph that starts with a `REF \n \h` field,
      with the same hanging indent as a numbered one and its text after a tab. Update the field: it still reads the

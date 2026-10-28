@@ -84,9 +84,24 @@ A cross-reference is a `REF` field to a bookmark on the target, with the switch 
 number, no trailing period) and `\h` (a link). The renderer's designation ("2.3(b)", "I.A.1.a(i)") is
 covered by segments: literals, and one such field for each numbered unit on the target's path whose
 label contributes. A `{path}` label needs one field on the target. An `{n}` label needs one field per
-ancestor, joined by the literals the reference templates give. Only when no cover exists does the
-planner fall back to one field on the target, with a warning. Under the `none` scheme a reference is
-a `REF` to the heading text.
+ancestor, joined by the literals the reference templates give. What is covered is the whole text the
+reader sees (the designation inside `references.format`), so a field that returns the words of the format
+(`Article I` under `Article {designation}`) stands for them, and Word's `\t` switch, which leaves the words of
+a number out, is needed only where the number holds words the reference does not. What Word does with `\t`
+is documented for one example only (`Section 1.01` gives `1.01`), so the style says how far to trust it
+(`docx.reference_text_switch`: `off`, `documented`, `guess`).
+
+**A reference is fixed text only where Word cannot express it.** Each such reference is reported
+(`render-docx-reference`) with the class it falls in, so that the style can be changed if it matters:
+a number with **delimiters around its counter** that the reference does not have (a label `({n})` under a
+ref `{n}`, `{n}:`, `No. {n}`) where the switch is off or not documented to drop them; a number with **the
+counters of other units** that the reference writes itself (a label `{section}.{n}` under a ref `{n}`),
+which a field returns whole or not at all; and, in a document that skips a heading level (`heading-skip`, an
+Error), **the counter of the skipped level**, held by no unit, which is text between the fields of the units that
+do hold theirs. A heading's title that refers back to itself under the `none` scheme is the other case
+(`render-docx-reference-cycle`). The built-in styles have none of these in a document without errors, and a
+reference to an item in a list nested up to 36 levels is made of fields.
+Under the `none` scheme a reference is a `REF` to the heading text.
 
 ### Numbering the hard cases
 
@@ -95,8 +110,21 @@ a `REF` to the heading text.
   no heading style, no outline level and so no entry in the table of contents. A list nested in one goes on
   the heading list's levels 6 to 9 (headings have five), which are reserved for that: the level text is the
   label's without the section (`%6)`), on the parent's num with no override, so the list restarts under every
-  new item and sibling lists go on counting, as in any list. Where the level after the section's reads
-  otherwise (the outline and mixed schemes, `none`), the label is written without the section and reported.
+  new item and sibling lists go on counting, as in any list. When a nested list's label shows more than its
+  own counter (a `{path}`), the level text carries each counter at the level of the heading list that holds it
+  (`%1.%2(%6)`: the section's, the item's, its own), so the label and every reference to it stay live. Where the level after the
+  section's reads otherwise (the outline and mixed schemes, `none`), the label is written without the section and
+  reported.
+- **Lists nested where Word cannot show the counters above them** (a list in an ordered item, a path label whose
+  reserved level another text has taken or that is nested past four levels, a quote's list) go on a **detached**
+  abstractNum: each level shows its own counter alone. The label Word draws is shorter than the renderer's
+  (`(A)` for `1(a)(1)(i)(A)`) and is reported with the units whose counters it leaves out; references are still
+  fields of each unit's own counter. The list restarts at a fixed value under a new parent (as any list nested
+  in a list of another kind does), and lists nested in its items restart by structure.
+- **Lists nested past Word's nine levels** go on in the next abstractNum of their family (36 levels in all), whose levels are
+  the family's levels of those depths with their own counters, instead of repeating level 9. The list that begins
+  one restarts at a fixed value; inside it the lists restart by structure. Beyond 36 levels the last is used again
+  and reported (`render-docx-list-depth`).
 - **Alternatives that share a number** (§15.8). Word cannot give two paragraphs one number on one level, except
   by `numId 0` and a field: the later alternative is such a paragraph, with a `REF \n` field of the unit that
   holds the number as its number. The units under it restart in a num of their own with a `startOverride`. This is
@@ -136,7 +164,8 @@ a `REF` to the heading text.
 - A DOCX lawyers can edit: insert a clause, update fields (Word does it on open by default), and the
   numbers, references, table of contents and page numbers follow.
 - Some restarts cannot be kept live in Word and are documented and warned about, not prevented: a
-  nested list of another family than its parent, a list nested in an alternative, a unit restarted at a fixed
+  nested list of another family than its parent (and any detached list), a list nested in an alternative, the list
+  that begins a further abstractNum past nine levels, a unit restarted at a fixed
   value because it shares a counter, and paragraph numbering in a section the user adds; and the numbers of the
   alternatives that share one live only as long as the first alternative stays. A lawyer who adds a
   parent item restarts such a list by hand.
@@ -148,5 +177,5 @@ a `REF` to the heading text.
   `lvlRestart`, `SEQ \s` and `w:updateFields`, so those differences are normalised in the comparison.
 - Cost: an OOXML writer of our own, with its schema checks, instead of a library. The numbering
   planner is the bulk of the work.
-- Style template additions: `page.header`, `page.footer` and `docx.update_fields_on_open`
-  ([style-templates.md](../style-templates.md)). The HTML writer does not read the first two yet.
+- Style template additions: `page.header`, `page.footer`, `docx.update_fields_on_open` and
+  `docx.reference_text_switch` ([style-templates.md](../style-templates.md)). The HTML writer does not read the first two yet.

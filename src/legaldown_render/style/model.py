@@ -355,6 +355,13 @@ class Docx:
     #: shows the document correctly, only without the page numbers of the table
     #: of contents.
     update_fields_on_open: bool = True
+    #: What Word's ``\t`` switch (``REF \n \t``, which leaves the words of a number out) is taken to do when a
+    #: cross-reference is built from fields (docs/style-templates.md, "DOCX"). ``off``: never used, so a reference that
+    #: needs it is fixed text. ``documented``: only where Microsoft's documentation says what Word returns (words before the first counter
+    #: and after the last are left out, a delimiter between counters stays). ``guess``: also where Word is expected to do
+    #: what it is not documented to (a period after the letters that lead a number: ``No. 1``, ``Čl. 1``, and words between
+    #: counters); to be checked in Word.
+    reference_text_switch: Literal["off", "documented", "guess"] = "documented"
 
 
 @dataclass(frozen=True, slots=True)

@@ -40,7 +40,7 @@ from dataclasses import dataclass, replace
 import pytest
 from conftest import DOCUMENTS, FRONT, spec_root
 from docx_support import Exported, W, libreoffice_edit, libreoffice_export, parts, repackage, require_libreoffice
-from test_docx_plan import ALTERNATIVES, units
+from test_docx_plan import ALTERNATIVES, ORDERED_PARENT, PATH_ITEMS, units
 
 from legaldown_render import DocumentError, render
 from legaldown_render.resolve.docx_plan import DocxPlan, FieldSeg, Literal_, plan_docx
@@ -313,20 +313,99 @@ Ref {{ref: i1}} {{ref: n2}} {{ref: d3}} {{ref: o2}} {{ref: i3}} {{ref: beta}} {{
 """,
 }
 
+#: Labels that show the path of an item (`{path}`): in a clause (the reserved levels of the heading list carry the clause's
+#: and the section's counters), in a section of another level (the reserved level reads otherwise: detached levels), past
+#: the reserved levels, and below an ordered item.
+STRESS["paths"] = FRONT + """
+# Alpha {#alpha}
+
+- one {#i1}
+  - two {#i2}
+    - three {#i3}
+      - four {#i4}
+        - five {#i5}
+          - six {#i6}
+            - seven {#i7}
+- uno {#j1}
+  - dos {#j2}
+  - tres {#j3}
+
+## Beta {#beta}
+
+- bee {#k1}
+  - kay {#k2}
+  - kay two {#k3}
+- bee two {#k4}
+  - kay three {#k5}
+
+# Second {#second}
+
+- x {#x1}
+  - y {#y1}
+
+Refs: {{ref: i1}} {{ref: i2}} {{ref: i3}} {{ref: i4}} {{ref: i5}} {{ref: i6}} {{ref: i7}} {{ref: j2}} {{ref: j3}}
+{{ref: k2}} {{ref: k3}} {{ref: k5}} {{ref: y1}}
+"""
+STRESS["ordered paths"] = FRONT + """
+# Alpha {#alpha}
+
+- one {#i1}
+  1. ordered {#o}
+     - three {#i3}
+       - four {#i4}
+         - five {#i5}
+         - five b {#i6}
+       - four b {#i7}
+     - three b {#i8}
+       - four c {#i9}
+  1. ordered two {#o2}
+     - x {#x}
+       - y {#y}
+- two {#t}
+  1. o3 {#o3}
+     - z {#z}
+       - w {#w}
+
+Refs: {{ref: i3}} {{ref: i4}} {{ref: i5}} {{ref: i6}} {{ref: i7}} {{ref: i9}} {{ref: y}} {{ref: w}}
+"""
+
+#: Lists nested past Word's nine levels: each nine levels are a list of their own, restarted at a fixed value where they
+#: begin, and numbered by structure inside.
+STRESS["deep"] = FRONT + "# A {#a}\n\n" + "".join(
+    "  " * d + f"- level {d} {{#l{d}}}\n" for d in range(12)) + "  " * 8 + "- level 8 again {#l8b}\n" + (
+    "  " * 9 + "- level 9 again {#l9b}\n") + "\nRefs: " + " ".join(
+    f"{{{{ref: {anchor}}}}}" for anchor in ("l0", "l7", "l8", "l9", "l10", "l11", "l8b", "l9b")) + "\n"
+
 #: The stress documents that are shown under some variants only (each costs LibreOffice time): the continental style, where
 #: the items ride the heading list, the default, and the default with numbered paragraphs.
 FEW_VARIANTS: dict[str, tuple[str, ...]] = {
-    name: ("continental", "default", "paragraphs") for name in ("alternatives in threes", "nested titles", "qualified")}
+    **{name: ("continental", "default", "paragraphs") for name in ("alternatives in threes", "nested titles", "qualified")},
+    "paths": ("continental", "default"), "ordered paths": ("default",), "deep": ("continental", "default", "outline")}
 
 #: The variants that show some stress documents only.
-ONLY_DOCS: dict[str, tuple[str, ...]] = {"five levels": ("qualified",), "shared level": ("qualified", "nested")}
+ONLY_DOCS: dict[str, tuple[str, ...]] = {
+    "five levels": ("qualified",), "shared level": ("qualified", "nested"), "path items": ("paths", "lists", "deep"),
+    "ordered parent": ("ordered paths", "lists"), "section-short": ("nested", "qualified"),
+    "cl-guess": ("nested", "qualified")}
 
-#: The settings that give the numbering words and symbols, which Word's ``\t`` switch drops from a reference.
+#: The settings that give the numbering words and symbols: a field that returns the same words as the reference's format
+#: stands for them, otherwise Word's ``\t`` switch drops them from the number.
 WORDS: dict[str, dict] = {
     "article": {"overrides": {"numbering.levels": [
         {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"}], "references.format": "Article {designation}"}},
     "section-sign": {"overrides": {"numbering.levels": [
         {"counter": "decimal", "label": "§ {n}", "ref": "{n}"}], "references.format": "§ {designation}"}},
+    # the format says a word the label does not: Word's \t leaves the label's out and the format's is put back
+    "article-short": {"overrides": {"numbering.levels": [
+        {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"}], "references.format": "Art. {designation}"}},
+    # a number with a delimiter between its counters ("Section 1.1") that the format words differently: Word's \t keeps it
+    "section-short": {"overrides": {"numbering.levels": [
+        {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"},
+        {"counter": "decimal", "label": "Section {path}", "ref": ".{n}"}], "references.format": "Sec. {designation}"}},
+    # a period after letters ("Čl. 1") that only the setting that guesses lets the switch drop
+    "cl-guess": {"overrides": {"numbering.levels": [
+        {"counter": "decimal", "label": "Čl. {n}", "ref": "{n}"}, {"counter": "decimal", "label": "{path}", "ref": ".{n}"}],
+        "references.format": "čl. {designation}", "docx.reference_text_switch": "guess"}},
     "paragraphs": {"overrides": {"paragraphs.numbered": True}},
     # the items and the paragraphs of a section share the heading list's level: the numbers are restarted where the
     # resolver counts them apart
@@ -341,6 +420,8 @@ WORDS: dict[str, dict] = {
         {"counter": "lower-alpha", "label": "{n}.", "ref": "{n}"}]}},
     "shared level": {"style": "continental", "overrides": {"paragraphs.numbered": True, "paragraphs.format": {
         "counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"}}},
+    "path items": PATH_ITEMS,
+    "ordered parent": ORDERED_PARENT,
 }
 
 #: What a diagnostic of the plan has to say when Word numbers a unit differently from the renderer.
@@ -467,7 +548,7 @@ def make_case(variant: str, name: str, source: str) -> Case | None:
     except DocumentError:
         return None
     assert result.binary is not None
-    plan, diagnostics = plan_docx(result.tree)
+    plan, diagnostics = plan_docx(result.tree, text_switch=result.style.docx.reference_text_switch)
     return Case(variant, name, result.tree, plan, {d.rule for d in diagnostics}, result.binary,
                 prepared(result.binary, result.tree, plan))
 
@@ -946,3 +1027,192 @@ def test_the_contents_list_the_headings_as_the_plan_does_and_none_of_the_items_o
     assert [e.number for e in plan.toc] == ["1.", "1.1", "2.", "2.1", "2.", "2.1", "3."]  # the alternative's is shared
     assert not any(word in line for line in entries for word in ("item", "nested"))
     assert "1.1 item one" in body and "a) nested" in body  # the items are in the body: on the heading list, not in it
+
+
+# -- Labels that show the path: live on the reserved levels, detached where they cannot be ---------------------------------
+
+PATH_CLAUSES = FRONT + """
+# Alpha {#alpha}
+
+- clause one {#c1}
+  - nested of one {#n1}
+    - deep of one {#d1}
+- clause two {#c2}
+  - nested of two {#n2}
+    - deep of two {#d2}
+
+Refs: {{ref: c1}} {{ref: n1}} {{ref: d1}} {{ref: c2}} {{ref: n2}} {{ref: d2}}
+"""
+
+#: A clause, a nested item and a deeper one inserted before the second clause and what is under it.
+PATH_EDITS = [
+    ("clause two", "NEW clause", "- clause two {#c2}", "- NEW clause"),
+    ("nested of two", "NEW nested", "  - nested of two {#n2}", "  - NEW nested"),
+    ("deep of two", "NEW deep", "    - deep of two {#d2}", "    - NEW deep"),
+]
+
+
+def path_clauses() -> str:
+    return later_edits()["paths"]
+
+
+def test_a_path_label_on_the_reserved_levels_follows_the_items_a_lawyer_inserts_and_so_do_its_references() -> None:
+    """The label and every reference to it are live: after a clause, a nested item and a deeper one are inserted in
+    the editor and the fields are updated, the numbers (with the section's and the clause's counters in them) and the
+    references read as the renderer writes them for the edited source."""
+    source = applied(PATH_CLAUSES, [(before, new) for _, _, before, new in PATH_EDITS])
+    said = lines_of(path_clauses())
+    assert said == lines_of(render(source, format="text", **PATH_ITEMS).output)
+    assert {"1.3(a) NEW nested", "1.3(b) nested of two", "1.3(b)(i) NEW deep", "1.3(b)(ii) deep of two"} <= set(said)
+    assert [line for line in said if line.startswith("(1) Refs")] == [
+        "(1) Refs: 1.1 1.1(a) 1.1(a)(i) 1.3 1.3(b) 1.3(b)(ii)"]
+
+
+ORDERED_PATHS = FRONT + """
+# Alpha {#alpha}
+
+- one {#i1}
+  1. ordered {#o}
+     - three {#i3}
+       - four {#i4}
+       - four b {#i5}
+     - three b {#i6}
+       - four c {#i7}
+
+Refs: {{ref: i4}} {{ref: i5}} {{ref: i7}}
+"""
+
+
+def ordered_paths() -> dict[str, str]:
+    """The ordered-parent document as it is, with a nested item inserted in the detached list, and with a new parent whose
+    nested item is a copy of one of the detached list's (Word's paste keeps the list)."""
+    return {name: text for name, text in later_edits().items() if name in ("original", "nested inserted", "new parent")}
+
+
+def test_a_detached_list_draws_its_own_counter_and_its_references_are_live() -> None:
+    said = lines_of(ordered_paths()["original"])
+    assert [line for line in said if line.endswith(("four", "four b", "four c"))] == ["(A) four", "(B) four b", "(A) four c"]
+    assert "Refs: 1(a)(1)(i)(A) 1(a)(1)(i)(B) 1(a)(1)(ii)(A)" in said[-1]
+    # an item inserted in the detached list renumbers what follows, in the list and in the references to it
+    after = lines_of(ordered_paths()["nested inserted"])
+    assert [line for line in after if line.endswith(("four", "NEW four", "four b", "four c"))] == [
+        "(A) four", "(B) NEW four", "(C) four b", "(A) four c"]
+    assert "Refs: 1(a)(1)(i)(A) 1(a)(1)(i)(C) 1(a)(1)(ii)(A)" in after[-1]
+
+
+def test_a_new_parent_whose_nested_item_is_copied_from_a_detached_list_goes_on_counting_there() -> None:
+    """The documented limit of the detached levels: a nested list restarts at a fixed value under the parent that has it,
+    so a list that is new in Word, made by copying an item of another, goes on from that one (the renderer would start
+    it again at ``(A)``), while the list that was restarted keeps its start."""
+    said = lines_of(ordered_paths()["new parent"])
+    assert [line for line in said if line.endswith(("four b", "NEW copy", "four c"))] == [
+        "(B) four b", "(C) NEW copy", "(A) four c"]
+    assert "ii NEW three" in said and "iii three b" in said
+    assert "Refs: 1(a)(1)(i)(A) 1(a)(1)(i)(B) 1(a)(1)(iii)(A)" in said[-1]
+
+
+# -- Lists nested past Word's nine levels ---------------------------------------------------------------------------------
+
+DEEP = FRONT + "# A {#a}\n\n" + "".join("  " * d + f"- level {d} {{#l{d}}}\n" for d in range(12)) + (
+    "\nRefs: {{ref: l8}} {{ref: l9}} {{ref: l10}} {{ref: l11}}\n")
+
+#: An item inserted before the first of the list at level 9, before the one at level 10, and before the one at level 8.
+DEEP_EDITS = [
+    ("level 9", "NEW nine", "                  - level 9 {#l9}", "                  - NEW nine"),
+    ("level 10", "NEW ten", "                    - level 10 {#l10}", "                    - NEW ten"),
+    ("level 8", "NEW eight", "                - level 8 {#l8}", "                - NEW eight"),
+]
+
+
+def deep_lists() -> str:
+    return later_edits()["deep"]
+
+
+def test_items_nested_past_nine_levels_are_numbered_by_the_list_they_go_on_in_and_follow_edits() -> None:
+    """The lists nested past Word's nine levels keep restarting by structure inside the list they go on in, so an item
+    inserted at level 8, 9 or 10 renumbers what follows and every reference to it, as the renderer does."""
+    source = applied(DEEP, [(before, new) for _, _, before, new in DEEP_EDITS])
+    assert lines_of(deep_lists()) == lines_of(render(source, format="text").output)
+    said = lines_of(deep_lists())
+    assert [line for line in said if line.endswith(("NEW eight", "level 8", "NEW nine", "level 9", "NEW ten",
+                                                    "level 10", "level 11"))] == [
+        "(A) NEW eight", "(B) level 8", "(a) NEW nine", "(b) level 9", "(i) NEW ten", "(ii) level 10", "(A) level 11"]
+
+
+# -- A skipped heading level: the one part of a reference that is text ----------------------------------------------------
+
+SKIPPED = FRONT + """
+# One {#one}
+
+### Deep {#deep}
+
+- item {#i}
+
+# Two {#two}
+
+### Deeper {#deeper}
+
+Refs: {{ref: one}} {{ref: deep}} {{ref: i}} {{ref: two}} {{ref: deeper}}
+"""
+
+
+def skipped() -> tuple[str, str]:
+    """What LibreOffice says about the document that skips a heading level (outline numbering) after a heading is inserted
+    before its first section, and what the text writer prints for the edited source."""
+    edited_source = applied(SKIPPED, [("# One {#one}", "# NEWH\n")])
+    return later_edits()["skipped"], render(edited_source, format="text", style="outline").output
+
+
+@functools.cache
+def later_edits() -> dict[str, str]:
+    """What LibreOffice says about the documents of the sections above after their edits, all in one LibreOffice session
+    (starting it is what costs): path labels in a clause, the ordered-parent list as it is, with a nested item inserted
+    and with a new parent whose nested item is a copy, the list past nine levels, and the document that skips a level."""
+    require_libreoffice()
+
+    def docx(source: str, **settings: object) -> bytes:
+        data = render(source, format="docx", **settings).binary
+        assert data is not None
+        return data
+
+    ordered = docx(ORDERED_PATHS, **ORDERED_PARENT)
+    return libreoffice_edit({  # type: ignore[arg-type]
+        "paths": (docx(PATH_CLAUSES, **PATH_ITEMS), [(match, new) for match, new, _, _ in PATH_EDITS]),
+        "original": (ordered, []),
+        "nested inserted": (ordered, [("four b", "NEW four")]),
+        "new parent": (ordered, [("three b", "NEW three"), ("three b", "NEW copy", "four b")]),
+        "deep": (docx(DEEP), [(match, new) for match, new, _, _ in DEEP_EDITS]),
+        "skipped": (docx(SKIPPED, style="outline"), [("One", "NEWH")])})
+
+
+def test_the_live_parts_of_a_reference_below_a_skipped_level_follow_a_heading_inserted_before_it() -> None:
+    """The skipped level has no number of its own, so its part of the reference is text (``A``) between two fields; the
+    fields are updated by the edit, so ``I.A.1`` becomes ``II.A.1`` with the text kept, as the renderer writes it."""
+    said, written = skipped()
+    assert lines_of(said) == lines_of(written)
+    assert [line for line in lines_of(said) if line.startswith("Refs")] == ["Refs: II II.A.1 II.A.1(a) III III.A.1"]
+    result = render(SKIPPED, format="docx", style="outline")
+    plan, diagnostics = plan_docx(result.tree)
+    assert [r.ghost for r in plan.refs.values()] == ["", "A", "A", "", "A"]
+    assert not any(r.fixed for r in plan.refs.values())
+    assert any(d.rule == "render-docx-reference" and "heading level that the document skips" in d.message
+               for d in diagnostics)
+
+
+# -- A level that nothing counted before a deeper item: where LibreOffice and Word differ -----------------------------------
+
+UNCOUNTED = FRONT + "# A\n\n- a\n  - b\n    1. c\n       - d\n    - e\n    - f\n"
+
+
+def test_libreoffice_counts_the_level_nothing_numbered_before_a_deeper_item_and_the_plan_reports_it() -> None:
+    """The one place LibreOffice's numbers differ from the plan's for a reason of Word's model, not of the file: the items
+    ``e`` and ``f`` are the first of their level in their list, which Word numbers (A), (B) and LibreOffice (B), (C)
+    (it counts the level above ``d`` as one). The plan is Word's and reports the difference."""
+    require_libreoffice()
+    result = render(UNCOUNTED, format="docx")
+    plan, diagnostics = plan_docx(result.tree)
+    said = lines_of(libreoffice_export({"uncounted": result.binary})["uncounted"].text)  # type: ignore[arg-type]
+    assert [line for line in said if line.endswith((" e", " f"))] == ["(B) e", "(C) f"]
+    assert [plan.units[u.unit].label for u in units(result.tree) if plan.units[u.unit].count and u.unit in ("u5", "u6")] \
+        == ["(A)", "(B)"]
+    assert any(d.rule == "render-docx-libreoffice-count" and d.level == "info" for d in diagnostics)

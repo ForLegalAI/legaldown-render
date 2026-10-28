@@ -93,6 +93,31 @@ def test_fields_are_updated_on_open_by_default_and_the_setting_is_a_boolean() ->
         load_style("default", overrides={"docx.update_fields_on_open": "maybe"})
 
 
+# -- docx.reference_text_switch -----------------------------------------------------------
+
+
+def test_the_text_switch_is_documented_by_default_and_the_setting_is_one_of_three_words() -> None:
+    assert load_style("default").docx == Docx(update_fields_on_open=True, reference_text_switch="documented")
+    for word in ("off", "documented", "guess"):
+        style = load_style("default", overrides={"docx.reference_text_switch": word})
+        assert style.docx.reference_text_switch == word
+        assert docx_settings(style).reference_text_switch == word
+        assert parse_override("docx.reference_text_switch", word) == word
+    with pytest.raises(StyleError, match="docx.reference_text_switch: must be one of off, documented, guess"):
+        load_style("default", overrides={"docx.reference_text_switch": "always"})
+    with pytest.raises(StyleError, match="docx.reference_text_switch: must be one of"):
+        load_style("default", overrides={"docx.reference_text_switch": True})
+    assert "reference_text_switch: documented" in dump_style(load_style("default"))
+    assert load_style(dump_style(load_style("default", overrides={"docx.reference_text_switch": "guess"}))
+                      ).docx.reference_text_switch == "guess"
+
+
+def test_an_untrusted_style_does_not_quote_the_value_of_the_text_switch() -> None:
+    with pytest.raises(StyleError) as caught:
+        load_style("default", overrides={"docx.reference_text_switch": "secret"}, trusted=False)
+    assert "secret" not in str(caught.value) and "must be one of off, documented, guess" in str(caught.value)
+
+
 def test_an_unknown_docx_key_is_a_style_error_with_a_suggestion() -> None:
     with pytest.raises(StyleError, match=r"docx.update_field_on_open: unknown key \(did you mean 'update_fields_on_open'"):
         load_style("default", overrides={"docx.update_field_on_open": True})

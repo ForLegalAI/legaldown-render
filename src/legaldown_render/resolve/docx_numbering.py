@@ -244,6 +244,10 @@ class Step(NamedTuple):
     word_ref: str
     #: The label as tokens, each counter with the unit (or ghost) that holds it.
     tokens: tuple[Token, ...]
+    #: The counter of the paragraph's own level as LibreOffice counts it (-1: not modelled): it counts a level that
+    #: nothing numbered before a deeper one as its start value and goes on from it, where Word shows one less and
+    #: leaves it unused, so the next paragraph of that level is 2 there and 1 in Word.
+    lo_count: int = -1
 
 
 class WordNumbering:
@@ -262,6 +266,7 @@ class WordNumbering:
         self._levels: dict[int, Sequence[LevelDef]] = {}
         self._nums: dict[int, Num] = {}
         self._count: dict[int, list[int]] = {}
+        self._lo: dict[int, list[int]] = {}
         self._holder: dict[int, list[object | None]] = {}
         self._used: set[tuple[int, int]] = set()
 
@@ -270,6 +275,7 @@ class WordNumbering:
         self._levels[abstract_id] = levels
         self._skipped[abstract_id] = skipped or self.skipped
         self._count[abstract_id] = [0] * 9
+        self._lo[abstract_id] = [0] * 9
         self._holder[abstract_id] = [None] * 9
 
     def add_num(self, num: Num) -> None:
@@ -299,14 +305,20 @@ class WordNumbering:
         num = self._nums[num_id]
         levels = self._levels[num.abstract_id]
         count, holder = self._count[num.abstract_id], self._holder[num.abstract_id]
+        lo = self._lo[num.abstract_id]
         overrides = self._overrides(num_id)
         if ilvl in overrides and (num_id, ilvl) not in self._used:
             self._used.add((num_id, ilvl))
-            count[ilvl] = overrides[ilvl] - 1
+            count[ilvl] = lo[ilvl] = overrides[ilvl] - 1
         count[ilvl] += 1
+        lo[ilvl] += 1
         holder[ilvl] = owner
         for deeper in range(ilvl + 1, 9):
             count[deeper], holder[deeper] = 0, None
+            lo[deeper] = 0
+        for above in range(ilvl):
+            if lo[above] == 0:
+                lo[above] = levels[above].start
         skipped = self._skipped[num.abstract_id]
         for above in range(ilvl):
             if count[above] == 0:
@@ -325,4 +337,4 @@ class WordNumbering:
                     count[above], holder[above] = 0, None
         label = text_of(tokens)
         return Step(count[ilvl], word_counter(count[ilvl], levels[ilvl].num_fmt), label,
-                    label.rstrip("."), tuple(tokens))
+                    label.rstrip("."), tuple(tokens), lo[ilvl])
