@@ -78,6 +78,64 @@ legaldown-render --version
 The extra index is needed because the dependencies (`legaldown-validator`, Babel, PyYAML,
 markdown-it-py) come from PyPI.
 
+## Checking the DOCX in Word (before a release)
+
+CI proves the DOCX against the ISO/IEC 29500 schemas and in LibreOffice; it cannot run Word. Before a release, a maintainer
+opens the golden documents in Word (the desktop application, a current version) and checks what only Word can show. Make
+the documents with a table of contents, for each of the three built-in styles:
+
+```bash
+for style in default continental outline; do
+  for doc in features template; do
+    legaldown-render tests/documents/$doc.lgd -s $style --set contents.enabled=true --set contents.depth=3 \
+        -o /tmp/word-check/$doc.$style.docx
+  done
+done
+```
+
+For each file:
+
+1. **Opens clean.** No "unreadable content" or repair prompt, and Word does not open it in Compatibility Mode.
+   Answer *Yes* to the prompt to update the fields (`docx.update_fields_on_open`), or press Ctrl+A, F9.
+2. **Table of contents.** It lists exactly the entries of the HTML contents (numbers and titles; the condition
+   labels of a template after the title), indented by level, with a dotted leader and page numbers that are right.
+   The attachments heading and each attachment's title are listed (at the levels the HTML shows) and nothing else is:
+   not the "Contents" label, no quote or note. A click on an entry (Ctrl+click) goes to the heading. Right-click the
+   TOC, *Update field*, *Update entire table*: the same entries come back.
+3. **References.** Every `{{ref:}}` reads as in the HTML before and after the update (Ctrl+A, F9). Insert a clause
+   (a heading, a list item, a numbered paragraph) above a referenced one, update the fields: the numbers after it move
+   and every reference and the contents follow. A reference to an attachment (`{{attach:}}`) shows its title and links
+   to it.
+4. **Numbering after inserting a clause.** Press Enter at the end of a numbered item and at the start of one: the new
+   paragraph is numbered, the rest renumbers, nested lists restart under it. In the continental style a new
+   sub-item continues `a)`, `b)`.
+5. **Zero-length bookmarks.** A `REF \n` to the zero-length (point) bookmark at the start of a numbered paragraph
+   returns the number. Press Enter at the start of that paragraph and update the fields: the references still
+   point at the paragraph they pointed at and read right.
+6. **`none` scheme.** With `--set numbering.scheme=none`, a heading referenced with `{{ref:}}` shows its title text
+   (`REF \h`), and the references inside a heading that refers to itself are plain text: no "Error! Reference source
+   not found" and no self-reference.
+7. **Front and back matter.** The title block (header rows, parties) is two aligned columns without borders; each
+   attachment starts on a new page with `attachments.separator: page-break` and has a rule above it with `rule`; the
+   signature blocks are borderless, with a signing line above each name, and stay on one page (try a longer document).
+8. **The numbering corner cases:**
+   - `\t` with words before the number: a label such as `Article {n}` or `§ {n}` referenced with `{n}`, whose reference
+     drops the words (`REF \n \t`): Word shows the bare number, where LibreOffice ignores `\t` and shows the words.
+   - a period before the number (`No. {n}`): the reference to the item reads as the HTML reads it, or the render
+     reported `render-docx-reference` and the reference is fixed text.
+   - skipped heading levels (a `###` straight after a `#`, an Error for the validator but rendered): the numbers after
+     it, and the references to them, read as the plain-text output reads them, or the render reported a
+     `render-docx-reference` Warning and the reference is fixed text; nothing is unreadable.
+   - counters shared across nums: a nested list of the same kind restarts under each new parent; a list of another
+     kind restarts by a fixed setting (the render reported `render-docx-static-restart`).
+   - Roman numerals of 4000 and over, and letters past 26: Word's text (`render-docx-roman-overflow`,
+     `render-docx-letter-overflow`) is the one the render reported, not a different one.
+9. **Page layout.** The running footer shows `n / N`; a header template with `{title}`, `{version}` and `{date}` shows
+   them; a landscape page is landscape when printed (print preview).
+
+Record what differs in the release notes. A difference from LibreOffice is expected where the documentation says Word
+and LibreOffice differ (`\t`, `lvlRestart`, `SEQ \s`, `w:updateFields`).
+
 ## Notes
 
 - **Version numbers are permanent.** PyPI does not allow re-uploading a version, even after
