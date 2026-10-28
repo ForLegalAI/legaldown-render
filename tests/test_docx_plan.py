@@ -716,14 +716,22 @@ def numbered(tree: RenderTree) -> Iterator[tuple[Section | ListItem | Paragraph,
         yield from blocks(section.blocks)
 
 
-def assert_planned_as_resolved(result) -> None:  # noqa: ANN001
+@functools.cache
+def planned_run(source: str, variant: str) -> tuple:
+    """*source* rendered under *variant* and planned: (result, plan, diagnostics). The property tests of the numbering
+    and of the references look at the same documents, so each is rendered and planned once."""
+    result = render(source, format="text", **VARIANTS[variant])
+    plan, diagnostics = plan_docx(result.tree)
+    return result, plan, diagnostics
+
+
+def assert_planned_as_resolved(result, plan, diagnostics) -> None:  # noqa: ANN001
     """The property, unit by unit: Word's count is the resolver's number, and Word's label is the resolver's label,
     unless that unit's own counter reads differently in Word (a letter past 26, a Roman numeral from 4000: its label
     and those of its descendants may differ), its label cannot show what the resolver's does (the plan says so on the
     unit), or its depth is past Word's. A document without alternatives has no other exception; a diagnostic is
     reported exactly where there is an exception."""
     tree = result.tree
-    plan, diagnostics = plan_docx(tree)
     found = rules(diagnostics)
     shares = any(unit.shares_number_with for unit in units(tree))
     overflows: dict[str, str] = {}  # unit -> the rule its counter reads differently under (itself or an ancestor)
@@ -771,7 +779,7 @@ def assert_planned_as_resolved(result) -> None:  # noqa: ANN001
 @pytest.mark.parametrize("name", ["features.lgd", "template.lgd"])
 def test_the_test_documents_are_planned_as_resolved(name: str, variant: str) -> None:
     source = (DOCUMENTS / name).read_text(encoding="utf-8")
-    assert_planned_as_resolved(render(source, format="text", **VARIANTS[variant]))
+    assert_planned_as_resolved(*planned_run(source, variant))
 
 
 SPEC = spec_root()
@@ -789,11 +797,11 @@ def _spec_documents() -> list[Path]:
 def test_the_specifications_documents_are_planned_as_resolved(variant: str) -> None:
     for path in _spec_documents():
         try:
-            result = render(path.read_text(encoding="utf-8"), format="text", **VARIANTS[variant])
+            run = planned_run(path.read_text(encoding="utf-8"), variant)
         except DocumentError:
             continue
         try:
-            assert_planned_as_resolved(result)
+            assert_planned_as_resolved(*run)
         except AssertionError as error:
             raise AssertionError(f"{path.relative_to(SPEC)}: {error}") from error
 
@@ -858,27 +866,53 @@ def _random_alternatives(rng: random.Random) -> str:
     return "\n".join(out)
 
 
+#: The random documents: one set for the numbering and the references. Each has an anchor on every unit and a
+#: paragraph that refers to up to 40 of them, and is planned under every fourth variant (rotating, so that each variant
+#: sees a different quarter), once.
+RANDOM_DOCUMENTS = 36
+ROTATION = 4
+
+
 @functools.cache
-def _random_renders(variant: str) -> tuple:
+def _random_sources() -> tuple[str, ...]:
     rng = random.Random(20261028)
-    return tuple(render(FRONT + _random_document(rng), format="text", **VARIANTS[variant]) for _ in range(30))
+    return tuple(with_references(with_anchors(_random_document(rng))) for _ in range(RANDOM_DOCUMENTS))
+
+
+@functools.cache
+def random_runs(variant: str) -> tuple:
+    """(source, result, plan, diagnostics) of the random documents planned under *variant*."""
+    offset = list(VARIANTS).index(variant)
+    return tuple((source, *planned_run(FRONT + source, variant))
+                 for index, source in enumerate(_random_sources()) if (index + offset) % ROTATION == 0)
+
+
+@functools.cache
+def alternative_runs(variant: str) -> tuple:
+    rng = random.Random(7)
+    sources = [ALTERNATIVES + with_references(_random_alternatives(rng)) for _ in range(15)]
+    return tuple((source, *planned_run(source, variant)) for source in sources)
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_random_documents_are_planned_as_resolved(variant: str) -> None:
-    for result in _random_renders(variant):
+    for source, result, plan, diagnostics in random_runs(variant):
         try:
-            assert_planned_as_resolved(result)
+            assert_planned_as_resolved(result, plan, diagnostics)
         except AssertionError as error:
-            raise AssertionError(f"{error}\n--- document ---\n{result.tree.preamble}\n{result.output}") from error
+            raise AssertionError(f"{error}\n--- document ---\n{source}") from error
 
 
 @pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "none"])
 def test_random_alternatives_are_planned_and_reported(variant: str) -> None:
-    rng = random.Random(7)
-    for _ in range(20):
-        result = render(ALTERNATIVES + _random_alternatives(rng), format="text", **VARIANTS[variant])
-        assert_planned_as_resolved(result)
+    for _, result, plan, diagnostics in alternative_runs(variant):
+        assert_planned_as_resolved(result, plan, diagnostics)
+
+
+def test_planning_twice_gives_the_same_plan() -> None:
+    for variant in ("default", "continental", "none"):
+        for _, result, plan, diagnostics in random_runs(variant)[:4]:
+            assert plan_docx(result.tree) == (plan, diagnostics)
 
 
 def test_the_random_documents_reach_every_case_the_property_is_about() -> None:
@@ -886,8 +920,7 @@ def test_the_random_documents_reach_every_case_the_property_is_about() -> None:
     seen_causes: set[str] = set()
     depth = 0
     for variant in VARIANTS:
-        for result in _random_renders(variant):
-            plan, diagnostics = plan_docx(result.tree)
+        for _, result, plan, diagnostics in random_runs(variant):
             seen_rules |= rules(diagnostics)
             seen_causes |= {cause for unit in plan.units.values() for cause in unit.cause}
             depth = max(depth, max((lst.depth for lst in lists(result.tree)), default=0))
@@ -1101,15 +1134,16 @@ def references_of(tree: RenderTree, plan: DocxPlan) -> list[tuple[str, str, bool
 def test_a_skipped_heading_level_leaves_a_part_of_the_designation_no_field_stands_for() -> None:
     body = "# A {#a}\n\n### B {#b}\n\nSee {{ref: b}}.\n"
     tree, plan, diagnostics = planned(body, style="outline")
-    assert references_of(tree, plan) == [("I.A.1", "REF b", False)]
+    # no field can stand for the missing level: the reference is the renderer's text, right now and not a field
+    assert references_of(tree, plan) == [("I.A.1", '"I.A.1"', True)] and plan.refs["s2"].fixed
     [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
     assert found.level == "warning" and found.line == tree.sections[1].blocks[0].line
     assert found.message.startswith("The cross-reference 'I.A.1' cannot be built from Word's numbering fields: a "
                                     "heading level is skipped before it")
-    assert "reads '1' in Word" in found.message
+    assert "written as the text 'I.A.1'" in found.message and "not a field" in found.message
     # the decimal scheme writes the whole number in the heading's own field, so nothing is missing there
     tree, plan, diagnostics = planned(body)
-    assert references_of(tree, plan) == [("1.1.1", "REF b", True)] and not diagnostics
+    assert references_of(tree, plan) == [("1.1.1", "REF b", True)] and not diagnostics and not plan.refs["s2"].fixed
 
 
 def test_text_around_a_counter_that_word_cannot_drop_leaves_the_reference_as_one_field() -> None:
@@ -1118,9 +1152,9 @@ def test_text_around_a_counter_that_word_cannot_drop_leaves_the_reference_as_one
         overrides = {"enumeration.levels": [{"counter": "decimal", "label": label, "ref": "{n}"}]}
         tree, plan, diagnostics = planned(body, overrides=overrides)
         [(text, cover_, exact)] = references_of(tree, plan)
-        assert (text, cover_, exact) == ("11", "REF x", False)
+        assert (text, cover_, exact) == ("11", '"11"', True) and plan.refs[next(iter(plan.refs))].fixed
         [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
-        assert f"Word draws its number as '{shown}'" in found.message and "'11'" in found.message
+        assert f"Word draws its number as '{shown}'" in found.message and "written as the text '11'" in found.message
 
 
 def test_a_cover_that_reads_differently_in_word_is_reported_unless_a_unit_already_says_why() -> None:
@@ -1170,6 +1204,74 @@ def test_untrusted_text_in_a_reference_message_is_escaped() -> None:
                                                                                   "ref": "{n}"}]
     _, _, diagnostics = planned(body, overrides={"numbering.levels": levels})
     assert all("\u0007" not in d.message for d in diagnostics)
+
+
+# -- Bookmarks that never hold a field, and references that would -----------------------------------------------
+
+
+def test_a_bookmark_is_a_point_unless_a_field_returns_the_text_it_holds() -> None:
+    body = "# A {#a}\n\n- x {#x}\n\nSee {{ref: x}} and {{ref: a}}.\n"
+    _, plan, _ = planned(body)
+    assert plan.units["s1"].collapsed and plan.units["u1"].collapsed  # numbers only: \n fields
+    _, plan, _ = planned(body, overrides=NONE)
+    # the heading's text is what the field for it returns: its bookmark holds it; the item's is a point
+    assert not plan.units["s1"].collapsed and plan.units["u1"].collapsed
+
+
+def test_a_heading_that_refers_to_itself_or_in_a_circle_has_those_references_written_as_text() -> None:
+    body = ("# A {{ref: b}} {#a}\n\n# B {{ref: a}} {#b}\n\n# C {{ref: c}} {#c}\n\n# D {{ref: e}} {#d}\n\n"
+            "# E {#e}\n\nSee {{ref: a}}.\n")
+    tree, plan, diagnostics = planned(body, overrides=NONE)
+    assert [(u, plan.units[u].literal_refs) for u in ("s1", "s2", "s3", "s4", "s5")] == [
+        ("s1", ("s2",)), ("s2", ("s1",)), ("s3", ("s3",)), ("s4", ()), ("s5", ())]  # D's reference to E is no cycle
+    found = [d for d in diagnostics if d.rule == "render-docx-reference-cycle"]
+    assert [(d.level, d.line) for d in found] == [("warning", tree.sections[i].line) for i in range(3)]
+    assert "written as text" in found[0].message and "will not follow edits" in found[0].message
+    # outside a heading, and where the number is what is referred to, nothing is a cycle
+    _, plan, diagnostics = planned(body)
+    assert not any(u.literal_refs for u in plan.units.values())
+    assert "render-docx-reference-cycle" not in rules(diagnostics)
+
+
+def test_a_reference_in_a_heading_to_a_unit_inside_another_heading_is_still_a_field() -> None:
+    body = "# A {{ref: x}} {#a}\n\n# B {#b}\n\n- x {#x}\n\n# C {{ref: b}} {#c}\n"
+    _, plan, diagnostics = planned(body, overrides=NONE)
+    assert not any(u.literal_refs for u in plan.units.values())
+    assert "render-docx-reference-cycle" not in rules(diagnostics)
+
+
+# -- What the bookmark returns is what the runs show ---------------------------------------------------------------
+
+
+def test_a_heading_field_returns_the_text_of_the_runs_not_the_renderers_collapsed_designation() -> None:
+    tree, plan, diagnostics = planned("# The {{def: foo}} clause {#c}\n\nSee {{ref: c}}.\n", overrides=NONE)
+    [reference] = [i for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)]
+    assert reference.text == "The clause"  # the renderer collapses the white space of a designation
+    [segment] = plan.refs[reference.target_unit].segments
+    assert segment.cached == "The  clause" and not plan.refs[reference.target_unit].exact  # what the runs show
+    [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert "'The clause'" in found.message and "'The  clause'" in found.message
+
+
+def test_the_text_of_the_runs_has_a_blanks_prompt_and_a_hard_break() -> None:
+    from legaldown_render.resolve.docx_plan import _shown
+    from legaldown_render.tree import Blank, Emphasis, HardBreak, SoftBreak, Text
+
+    assert _shown((Text("a"), SoftBreak(), Emphasis((Text("b"),)), HardBreak(), Blank("x", "[_]", "How much"),
+                   Blank("y", "[_]"))) == "a b\n[_] (How much)[_]"
+
+
+# -- One finding for references that fail alike ----------------------------------------------------------------------
+
+
+def test_references_that_fail_in_the_same_way_are_one_finding_naming_the_first_and_how_many_more() -> None:
+    body = "# A {#a}\n\n### B {#b}\n\n### C {#c}\n\n# D {#d}\n\n### E {#e}\n\n{{ref: b}} {{ref: c}} {{ref: e}}\n"
+    tree, plan, diagnostics = planned(body, style="outline")
+    found = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert len(found) == 1 and found[0].message.startswith("The cross-reference 'I.A.1' cannot be built")
+    assert found[0].message.endswith(" 2 more cross-references fail in the same way.")
+    assert all(plan.refs[t].fixed for t in ("s2", "s3", "s5"))
+    assert found[0].line == tree.sections[-1].blocks[-1].line  # the lowest line of the three: all in one paragraph
 
 
 # -- The cover on its own ----------------------------------------------------------------------------------
@@ -1368,19 +1470,29 @@ def with_anchors(source: str) -> str:
 
 
 def with_references(source: str) -> str:
-    """*source* with a paragraph at its end that refers to every anchor in it."""
-    anchors = dict.fromkeys(re.findall(r"\{#([a-z][a-z0-9-]*)", source))
+    """*source* with a paragraph at its end that refers to the anchors in it (at most 40, evenly spread: resolving
+    a reference costs more than numbering a unit)."""
+    anchors = list(dict.fromkeys(re.findall(r"\{#([a-z][a-z0-9-]*)", source)))
+    anchors = anchors[::-(-len(anchors) // 40) or 1]
     return source + "\n\nRefs: " + " ".join(f"{{{{ref: {anchor}}}}}" for anchor in anchors) + "\n"
 
 
-def assert_references_as_resolved(result) -> None:  # noqa: ANN001
-    """For every reference: its cover reads as the renderer's text (``exact``, and the cached results say so), or the
-    plan says why not: a unit on the way is numbered differently in Word (a diagnostic of the numbering says so, as the
-    property of the numbering above has it), or a ``render-docx-reference`` finding names the reference. Every field
-    points at a bookmark the plan makes, the names are sound, and the same tree gives the same plan."""
+def literal_text_of_a_cover(tree: RenderTree, segments: Sequence[Segment]) -> str:
+    """The literal text of *segments* without the text of ``references.format`` around the designation."""
+    text = "".join(s.text for s in segments if isinstance(s, Literal_))
+    for part in tree.formats.reference.split("{designation}"):
+        assert part in text or not part, (part, text)
+        text = text.replace(part, "", 1)
+    return text
+
+
+def assert_references_as_resolved(result, plan, diagnostics) -> None:  # noqa: ANN001
+    """For every reference: it is a cover of fields and delimiters, with no counter written as text; and it reads as
+    the renderer's text (``exact``, and the cached results say so), or the plan says why not: a unit on the way is
+    numbered differently in Word (a diagnostic of the numbering says so, as the property of the numbering above has
+    it), or a ``render-docx-reference`` finding names it. A reference that has no cover is the renderer's text, marked
+    ``fixed`` and reported as such. Every field points at a bookmark the plan makes, and the names are sound."""
     tree = result.tree
-    plan, diagnostics = plan_docx(tree)
-    assert plan_docx(tree) == (plan, diagnostics)
     assert_names_are_sound(plan)
     nodes = {u.unit: u for u in units(tree)}
     counters = {node.unit: counter for node, counter in numbered(tree)}
@@ -1388,7 +1500,13 @@ def assert_references_as_resolved(result) -> None:  # noqa: ANN001
     reported = [d for d in diagnostics if d.rule == "render-docx-reference"]
     texts = {i.target_unit: i.text for i in iter_tree_inlines(tree) if isinstance(i, CrossRef) and i.target_unit}
     assert set(plan.refs) == set(texts)
-    findings = 0
+    # The ``ref`` templates write delimiters only: any letter or digit that is literal text in a cover is a counter
+    # that should have been a field.
+    templates = [f.ref for f in (*tree.formats.headings, *tree.formats.enumerated, tree.formats.renumber,
+                                 tree.formats.paragraphs) if f is not None]
+    delimiters_only = not any(c.isalnum() for t in templates for c in re.sub(r"\{(n|path|section)\}", "", t))
+    needing_a_finding = 0
+    fixed = 0
     for target, text in texts.items():
         reference = plan.refs[target]
         assert all(s.bookmark in marked for s in reference.segments if isinstance(s, FieldSeg))
@@ -1397,10 +1515,15 @@ def assert_references_as_resolved(result) -> None:  # noqa: ANN001
             if isinstance(segment, FieldSeg) and segment.number and not segment.suppress_text:
                 assert segment.cached == plan.units[next(u for u, p in plan.units.items()
                                                         if segment.bookmark in p.bookmarks)].word_ref
-        mentioned = any(d.message.startswith(f"The cross-reference '{text}' ") for d in reported)
-        findings += mentioned
+        if reference.fixed:
+            fixed += 1
+            assert reference.segments == ((Literal_(text),) if text else ()) and reference.exact
+            continue
+        if delimiters_only:
+            assert not any(c.isalnum() for c in literal_text_of_a_cover(tree, reference.segments)), (
+                target, text, show(plan, reference.segments))
+        assert any(isinstance(s, FieldSeg) for s in reference.segments) or not text, (target, text)
         if reference.exact:
-            assert mentioned <= any(not plan.refs[t].exact for t in texts if texts[t] == text), (target, text)
             continue
         chain, unit = [], target
         while unit is not None:
@@ -1413,15 +1536,22 @@ def assert_references_as_resolved(result) -> None:  # noqa: ANN001
                 differs |= mine.count != node.number or (
                     unit in counters and word_counter(node.number, NUM_FMT[counters[unit]])
                     != format_counter(node.number, counters[unit]))
-        assert differs or mentioned, (target, text, cached(reference.segments), show(plan, reference.segments))
-    assert len(reported) <= findings
+        needing_a_finding += not differs
+    # Every fixed text and every other difference is in a finding, named or counted among "N more".
+    counted = 0
+    for finding in reported:
+        more = re.search(r" (\d+) more cross-references fail in the same way\.$", finding.message)
+        counted += 1 + (int(more.group(1)) if more else 0)
+    assert needing_a_finding + fixed <= counted <= len(texts)
+    if fixed:
+        assert any("not a field" in d.message for d in reported)
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize("name", ["features.lgd", "template.lgd"])
 def test_the_test_documents_references_are_planned_as_resolved(name: str, variant: str) -> None:
     source = (DOCUMENTS / name).read_text(encoding="utf-8")
-    assert_references_as_resolved(render(source, format="text", **VARIANTS[variant]))
+    assert_references_as_resolved(*planned_run(source, variant))
 
 
 @pytest.mark.conformance
@@ -1430,45 +1560,35 @@ def test_the_test_documents_references_are_planned_as_resolved(name: str, varian
 def test_the_specifications_documents_references_are_planned_as_resolved(variant: str) -> None:
     for path in _spec_documents():
         try:
-            result = render(path.read_text(encoding="utf-8"), format="text", **VARIANTS[variant])
+            run = planned_run(path.read_text(encoding="utf-8"), variant)
         except DocumentError:
             continue
         try:
-            assert_references_as_resolved(result)
+            assert_references_as_resolved(*run)
         except AssertionError as error:
             raise AssertionError(f"{path.relative_to(SPEC)}: {error}") from error
 
 
-@functools.cache
-def _referenced_renders(variant: str) -> tuple:
-    rng = random.Random(20261029)
-    sources = [with_references(with_anchors(_random_document(rng))) for _ in range(30)]
-    return tuple((source, render(FRONT + source, format="text", **VARIANTS[variant])) for source in sources)
-
-
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_random_documents_references_are_planned_as_resolved(variant: str) -> None:
-    for source, result in _referenced_renders(variant):
+    for source, result, plan, diagnostics in random_runs(variant):
         try:
-            assert_references_as_resolved(result)
+            assert_references_as_resolved(result, plan, diagnostics)
         except AssertionError as error:
             raise AssertionError(f"{error}\n--- document ---\n{source}") from error
 
 
 @pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "none"])
 def test_random_alternatives_references_are_planned_as_resolved(variant: str) -> None:
-    rng = random.Random(11)
-    for _ in range(20):
-        source = ALTERNATIVES + with_references(_random_alternatives(rng))
-        assert_references_as_resolved(render(source, format="text", **VARIANTS[variant]))
+    for _, result, plan, diagnostics in alternative_runs(variant):
+        assert_references_as_resolved(result, plan, diagnostics)
 
 
 def test_the_random_documents_reach_every_kind_of_cover() -> None:
     shapes: set[str] = set()
     inexact = switches = 0
     for variant in VARIANTS:
-        for _, result in _referenced_renders(variant):
-            plan, _ = plan_docx(result.tree)
+        for _, _, plan, _ in random_runs(variant):
             for reference in plan.refs.values():
                 shapes.add("".join("L" if isinstance(s, Literal_) else "F" for s in reference.segments))
                 inexact += not reference.exact

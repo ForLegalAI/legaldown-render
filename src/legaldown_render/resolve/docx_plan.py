@@ -31,10 +31,18 @@ from legaldown import Diagnostic
 from ..diagnostics import by_line
 from ..style.model import LevelFormat, Style
 from ..tree import (
+    Blank,
+    Choice,
+    Code,
     CrossRef,
     DefinedTerm,
     DraftingNote,
+    Emphasis,
+    FailureMarker,
+    HardBreak,
+    Image,
     Inline,
+    Link,
     List,
     ListItem,
     NumberingFormats,
@@ -42,10 +50,18 @@ from ..tree import (
     Quote,
     RenderTree,
     Section,
+    SoftBreak,
+    Strong,
+    TermRef,
+    Text,
+    Value,
+    has_visible_content,
+    iter_inlines,
     iter_located_body_inlines,
     iter_tree_inlines,
+    plain_text,
 )
-from ..urls import printable
+from ..urls import displayed_url, printable
 from .docx_bookmarks import ATTACHMENTS_HEADING, BookmarkNames
 from .docx_cover import Field, Shown, Title, atoms, cover, suppressed, text_of, uncovered
 from .docx_numbering import (
@@ -180,6 +196,12 @@ class UnitPlan:
     bookmarks: tuple[str, ...]
     #: ``_Toc`` name of a heading listed in the contents.
     toc_bookmark: str | None
+    #: True: *bookmarks* are points at the start of the paragraph, not around its text (no field returns that
+    #: text, and a field must never stand inside the bookmark it points at).
+    collapsed: bool = False
+    #: Targets of the ``{{ref:}}`` in this heading's title that are written as their text, not as fields, because
+    #: their fields would lead back into the title (see :meth:`_Planner.cyclic_titles`).
+    literal_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +212,9 @@ class RefPlan:
     segments: tuple[Segment, ...]
     #: ``concat(cached) == CrossRef.text``.
     exact: bool
+    #: No cover exists, so the reference is the renderer's text with no field: right when the file is opened, but
+    #: fixed (an edit in Word does not change it). The plan reports each (``render-docx-reference``).
+    fixed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +385,33 @@ def _reads(level: LevelDef, levels: Sequence[LevelDef]) -> str:
 # The planner
 # ---------------------------------------------------------------------------
 
+
+def _shown(inlines: tuple[Inline, ...]) -> str:
+    """What the runs of *inlines* show in the document (``writers/docx/runs.py``): the text of each, a hard break as a
+    line break, a blank with its prompt. A heading's bookmark returns this, which is not always the heading's
+    designation (white space is collapsed in that)."""
+    out: list[str] = []
+    for inline in inlines:
+        match inline:
+            case Text(text=text) | Code(text=text) | CrossRef(text=text) | TermRef(text=text) | Value(text=text) \
+                    | FailureMarker(text=text):
+                out.append(text)
+            case SoftBreak():
+                out.append(" ")
+            case HardBreak():
+                out.append("\n")
+            case Blank(text=text, prompt=prompt):
+                out.append(text + (f" ({prompt})" if prompt else ""))
+            case Choice(options=options, separator=separator):
+                out.append("[" + separator.join(options) + "]")
+            case Image(children=children):
+                out.append(plain_text(children))
+            case Link(href=href, children=children):
+                out.append(_shown(children) if has_visible_content(children) else displayed_url(href))
+            case Emphasis(children=children) | Strong(children=children) | DefinedTerm(children=children):
+                out.append(_shown(children))
+    return "".join(out)
+
 _Unit = Section | ListItem | Paragraph
 
 
@@ -389,12 +441,22 @@ class _Reference(NamedTuple):
 
 class _Built(NamedTuple):
     """What the plan makes of one reference: its pieces (literal text and fields), whether they read exactly as the
-    renderer's text, and what LibreOffice shows for them when that is not what Word shows (a field with ``\\t``),
-    else None."""
+    renderer's text, what LibreOffice shows for them when that is not what Word shows (a field with ``\\t``), else
+    None, and whether it is fixed text for want of a cover."""
 
     pieces: list[str | Field]
     exact: bool
     lo_text: str | None
+    fixed: bool
+
+
+class _Finding(NamedTuple):
+    """A reference that is fixed text (*kind* ``fixed``, *reason* why) or reads differently in Word (``differs``)."""
+
+    kind: str
+    reason: str
+    found: _Reference
+    shown: str
 
 
 class _Drift:
@@ -436,6 +498,9 @@ class _Planner:
         #: The parts of the number of the open section, one per level: the unit that holds it (a skipped level has a
         #: :class:`Ghost`) and its value.
         self.owners: list[tuple[object, int]] = []
+        #: What a heading's bookmark returns (``REF bookmark \\h``): its title as the runs show it.
+        self.heading_text: dict[str, str] = {}
+        self.unreferable: list[_Finding] = []
 
     # -- registry -------------------------------------------------------------------
 
@@ -503,7 +568,7 @@ class _Planner:
             if self.units[owner].num_id == 0 or self.units[owner].alt is not None:
                 continue
             if isinstance(token, Title):
-                fields.append(Field(owner, False, False, (token,)))
+                fields.append(Field(owner, False, False, (Title(owner, self.heading_text.get(owner, token.text)),)))
             elif owner in self.steps:
                 words = self.words(owner)
                 fields.append(Field(owner, True, False, words))
@@ -525,21 +590,11 @@ class _Planner:
                         f"leave out")
         return "no combination of Word's fields reads like it"
 
-    def own_field(self, unit: str | None) -> Field | None:
-        """The one field for the number Word draws for *unit* (its heading text under the ``none`` scheme), which a
-        reference falls back to when its designation cannot be covered; None for a unit with neither."""
-        if unit is None or unit not in self.units:
-            return None
-        if unit in self.steps:
-            return Field(unit, True, False, self.words(unit))
-        title = self.desig.get(unit, [])
-        return Field(unit, False, False, (title[0],)) if title and isinstance(title[0], Title) else None
-
     def reference(self, found: _Reference) -> _Built | None:
         """The fields of the reference *found*: its designation covered by fields and delimiters, inside the text of
-        ``references.format``; None for a target the plan knows nothing of. A designation that cannot be covered is one
-        field for the number Word draws for the target, and is reported, as is a reference that reads differently
-        in Word for a reason no diagnostic of a unit already gives."""
+        ``references.format``; None for a target the plan knows nothing of. A designation that cannot be covered is
+        written as the renderer's text, which is right at open and not a field (``fixed``), and noted for the
+        report, as is a cover that reads differently in Word for a reason no diagnostic of a unit already gives."""
         node = self.nodes.get(found.target)
         if node is None or found.target not in self.units:
             return None
@@ -547,13 +602,9 @@ class _Planner:
         designation = self.desig[found.target] if numbered else self.desig.get(found.section or "", [])
         fields = self.fields(designation)
         covered = cover(designation, fields)
-        reason = None
         if covered is None:
-            reason = self.why_uncovered(designation, fields)
-            own = self.own_field(found.target if numbered else found.section)
-            if own is None:
-                return None
-            covered = [own]
+            self.unreferable.append(_Finding("fixed", self.why_uncovered(designation, fields), found, found.text))
+            return _Built([found.text] if found.text else [], True, None, True)
         pieces: list[str | Field] = []
         parts = self.formats.reference.split("{designation}")
         for index, literal in enumerate(parts):
@@ -563,23 +614,70 @@ class _Planner:
                 else:
                     pieces.append(piece)
         shown = "".join(piece if isinstance(piece, str) else text_of(piece.tokens) for piece in pieces)
-        text = printable(found.text)
-        if reason is not None:
-            self.report("render-docx-reference", "warning",
-                        f"The cross-reference '{text}' cannot be built from Word's numbering fields: {reason}. It is "
-                        f"one field for the target's own number, which reads '{printable(shown)}' in Word.",
-                        found.line)
-        elif shown != found.text:
+        if shown != found.text:
             chain = {t.owner for t in designation if not isinstance(t, Lit) and isinstance(t.owner, str)}
             if not chain & self.flagged and found.target not in self.flagged:
-                self.report("render-docx-reference", "warning",
-                            f"The cross-reference '{text}' will read '{printable(shown)}' in Word: a part of it is "
-                            f"numbered or written differently there.", found.line)
+                self.unreferable.append(_Finding("differs", "", found, shown))
         lo_text = None
         if any(isinstance(piece, Field) and piece.suppress_text for piece in pieces):
             lo_text = "".join(piece if isinstance(piece, str) else text_of(self.words(piece.owner) if piece.number
                                                                            else piece.tokens) for piece in pieces)
-        return _Built(pieces, shown == found.text, lo_text)
+        return _Built(pieces, shown == found.text, lo_text, False)
+
+    def report_references(self) -> None:
+        """One finding for the references that fail in the same way (the first, by line, and how many more), as
+        for a run of units counted off by the same amount."""
+        groups: dict[tuple[str, str], list[_Finding]] = {}
+        for finding in self.unreferable:
+            groups.setdefault((finding.kind, finding.reason), []).append(finding)
+        for (kind, reason), members in groups.items():
+            members.sort(key=lambda m: (m.found.line is None, m.found.line or 0))
+            first = members[0]
+            text, shown = printable(first.found.text), printable(first.shown)
+            more = f" {len(members) - 1} more cross-references fail in the same way." if len(members) > 1 else ""
+            if kind == "fixed":
+                message = (f"The cross-reference '{text}' cannot be built from Word's numbering fields: {reason}. It is "
+                           f"written as the text '{text}', which is right now but is not a field: it will not follow "
+                           f"edits made in Word.{more}")
+            else:
+                message = (f"The cross-reference '{text}' will read '{shown}' in Word: a part of it is numbered or "
+                           f"written differently there.{more}")
+            self.report("render-docx-reference", "warning", message, first.found.line)
+
+    def cyclic_titles(self, built: dict[str, _Built]) -> dict[str, tuple[str, ...]]:
+        """The cross-references in a heading's title that must be text, by heading unit. Under the ``none`` scheme a
+        heading is designated by its text, and a field for it (``REF bookmark \\h``) returns what its bookmark holds;
+        a reference in the title that leads back to the heading (directly, or through the titles of other headings)
+        would be a field inside the bookmark it points at, which Word cannot show (a self-reference) and
+        LibreOffice expands without end. Such a reference is written as its text and reported."""
+        if not any(not p.number for made in built.values() for p in made.pieces if isinstance(p, Field)):
+            return {}  # no field returns the text of a heading: nothing can lead back into one
+        inside: dict[str, list[str]] = {}
+        for section in self.tree.sections:
+            if section.unit is not None:
+                targets = [i.target_unit for i in iter_inlines(section.title)
+                           if isinstance(i, CrossRef) and i.target_unit in built]
+                inside[section.unit] = list(dict.fromkeys(t for t in targets if t is not None))
+        owners = {target: {p.owner for p in made.pieces if isinstance(p, Field) and not p.number}
+                  for target, made in built.items()}
+
+        def leads_to(start: str, goal: str) -> bool:
+            seen, pending = set(), [start]
+            while pending:
+                heading = pending.pop()
+                if heading == goal:
+                    return True
+                if heading not in seen:
+                    seen.add(heading)
+                    pending += [t for target in inside.get(heading, ()) for t in owners[target]]
+            return False
+
+        found: dict[str, tuple[str, ...]] = {}
+        for heading, targets in inside.items():
+            cyclic = tuple(t for t in targets if any(leads_to(owner, heading) for owner in owners[t]))
+            if cyclic:
+                found[heading] = cyclic
+        return found
 
     def finish(self) -> tuple[dict[str, UnitPlan], dict[str, str], dict[str, RefPlan], tuple[TocEntryPlan, ...]]:
         """The bookmarks, the cross-reference fields and the table of contents, which need the numbering of every
@@ -591,17 +689,24 @@ class _Planner:
             if isinstance(inline, CrossRef) and inline.target_unit is not None:
                 found.setdefault(inline.target_unit, _Reference(inline.target_unit, inline.section_unit,
                                                                 inline.text, None))
-        for inline, line in iter_located_body_inlines(self.tree):
-            if isinstance(inline, CrossRef) and inline.target_unit in found and line is not None:
-                known = found[inline.target_unit]
-                if known.line is None or line < known.line:
-                    found[inline.target_unit] = known._replace(line=line)
+        if found:
+            for inline, line in iter_located_body_inlines(self.tree):
+                if isinstance(inline, CrossRef) and inline.target_unit in found and line is not None:
+                    known = found[inline.target_unit]
+                    if known.line is None or line < known.line:
+                        found[inline.target_unit] = known._replace(line=line)
         built: dict[str, _Built] = {}
         for target, reference in found.items():
             made = self.reference(reference)
             if made is not None:
                 built[target] = made
+        self.report_references()
         needed = {piece.owner for made in built.values() for piece in made.pieces if isinstance(piece, Field)}
+        #: A bookmark holds its paragraph's text only if a field returns that text; any other is a point at the start
+        #: of the paragraph, so that no field ever stands inside the bookmark it points at.
+        enclosing = {piece.owner for made in built.values() for piece in made.pieces
+                     if isinstance(piece, Field) and not piece.number}
+        cyclic = self.cyclic_titles(built)
         word_only = [(found[target].text, made.lo_text) for target, made in built.items() if made.lo_text is not None]
         if word_only:
             first, lo = word_only[0]
@@ -609,6 +714,13 @@ class _Planner:
             self.report("render-docx-reference-word-only", "info",
                         f"The cross-reference '{printable(first)}' leaves out the words of a number with Word's \\t "
                         f"switch, which LibreOffice ignores: there it reads '{printable(lo)}'{more}.", None)
+        for section in self.tree.sections:
+            if section.unit in cyclic:
+                self.report("render-docx-reference-cycle", "warning",
+                            f"The heading '{printable(plain_text(section.title)[:40])}' holds a cross-reference that "
+                            f"leads back to the heading itself, which a field cannot show (the heading's text is what "
+                            f"the reference returns): it is written as text, so it will not follow edits made in Word.",
+                            section.line)
 
         names = BookmarkNames()
         anchors: dict[str, str] = {}
@@ -624,7 +736,9 @@ class _Planner:
             else:
                 continue
             bookmark[unit] = name
-            units[unit] = replace(units[unit], bookmarks=(name,))
+            units[unit] = replace(units[unit], bookmarks=(name,), collapsed=unit not in enclosing)
+        for unit, targets in cyclic.items():
+            units[unit] = replace(units[unit], literal_refs=targets)
         for inline in iter_tree_inlines(self.tree):
             if isinstance(inline, DefinedTerm) and inline.defining and inline.anchor and inline.anchor not in anchors:
                 anchors[inline.anchor] = names.anchor("lddef_", inline.anchor.removeprefix("def:"))
@@ -645,7 +759,7 @@ class _Planner:
                 plain = text_of(self.words(piece.owner)) if piece.number else cached
                 segments.append(FieldSeg(bookmark[piece.owner], piece.number, piece.suppress_text, True, cached,
                                          plain if piece.suppress_text else cached))
-            refs[target] = RefPlan(tuple(segments), made.exact)
+            refs[target] = RefPlan(tuple(segments), made.exact, made.fixed)
 
         toc: list[TocEntryPlan] = []
         for entry in self.tree.contents:
@@ -816,6 +930,7 @@ class _Planner:
         self.parent[unit] = section.parent_unit
         self.section_level[unit] = section.level
         self.desig[unit] = self.section_designation(section)
+        self.heading_text[unit] = _shown(section.title)
         if self.heading_num is None or section.number is None:
             self.add(section, "section", None, None, explicit=False)
             return

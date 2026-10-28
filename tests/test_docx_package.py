@@ -642,6 +642,14 @@ def test_the_planners_findings_follow_the_renderers_in_the_order_of_their_lines_
     assert "ref-broken" in {d.rule for d in text}
 
 
+def test_the_planners_findings_are_ordered_with_the_renderers_own_by_line() -> None:
+    source = FRONT + "# A\n\n" + "- r\n" * 30 + "\nA [link](javascript:alert) here.\n"
+    result = render(source, format="docx")
+    found = [(d.rule, d.line) for d in result.diagnostics if d.rule.startswith("render-")]
+    assert [rule for rule, _ in found] == ["render-docx-letter-overflow", "render-link-refused", "render-docx-interim"]
+    assert found[0][1] < found[1][1] and found[2][1] is None
+
+
 def test_the_interim_warning_names_what_is_still_missing() -> None:
     warning = render(FRONT + "# A\n", format="docx").diagnostics[-1]
     assert warning.rule == "render-docx-interim"
@@ -845,7 +853,7 @@ GOLDEN = {
     '_rels/.rels': 'd6f21829c0081670bdb417d3e3f644b81134a121e074fb153c7686faaa8b167b',
     'docProps/core.xml': '159ed0e537106ab29739fd357a5f6d89a2c0b0154daefd4c13d878bd16dff47e',
     'docProps/app.xml': 'b285204d159fd58da80b6a0242cef523448f9c3a598b357b15faf4627160dcc3',
-    'word/document.xml': '79fb3712f0b4bef4a7139fa2b1049339381e98bb7f2114441638145daece15a8',
+    'word/document.xml': 'fe9fef7508bd6260d6c6fb707080e5e6ef8987d26e4a0088933c8cd19ce664a4',
     'word/_rels/document.xml.rels': 'ada136c2e7d05a317579c9503c1f0dd8dfaa8f0cce687df86fe59e36d5fa5d57',
     'word/styles.xml': 'cdb4ca1d3be44bd27761763c040ee637516ed7aa7cf995e2cc0b60cc80d7f8ac',
     'word/numbering.xml': '368f179b5e26a34c1f23db597966dfd96b43dc96801a9a7ded728c379db07f59',

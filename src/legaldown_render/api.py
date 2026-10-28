@@ -179,6 +179,14 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
         raise RenderRefused(diagnostics)
 
     tree, extra = _resolve(document, result, style, base, options.untrusted)
+    assert_resolved(tree)
+    writer = _writer(options, style, docx)
+    plan = None
+    if isinstance(writer, DocxWriter):
+        # What Word will draw differently from the other formats (docs/decisions/0008) is the planner's to report; its
+        # findings are the renderer's, and are ordered with them.
+        plan, planned = plan_docx(tree, file=document.filename)
+        extra = [*extra, *planned]
     # The renderer's findings that the validator's or the assembly's already
     # name (the same rule, level and message), wherever they are, are not repeated;
     # the rest follow in the order of their lines.
@@ -186,13 +194,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
-    assert_resolved(tree)
-    writer = _writer(options, style, docx)
-    if isinstance(writer, DocxWriter):
-        # What Word will draw differently from the other formats (docs/decisions/0008): the planner's findings follow
-        # the renderer's, in the order of their lines, none repeating one the document has already.
-        plan, planned = plan_docx(tree, file=document.filename)
-        diagnostics += [d for d in planned if not repeats(d, diagnostics)]
+    if plan is not None:
         diagnostics.append(_interim_warning(document.filename))
         written: str | bytes = writer.write(tree, plan)
     else:

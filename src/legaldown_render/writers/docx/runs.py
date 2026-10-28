@@ -105,6 +105,9 @@ class InlineWriter:
         self.placed = placed
         self.attachment_titles = attachment_titles
         self.link_color = link_color
+        #: Targets of the cross-references that are written as their text (the plan's ``literal_refs``), while
+        #: a heading's title is written.
+        self._literal: frozenset[str] = frozenset()
 
     def _is_placed(self, name: str) -> bool:
         return self.placed is None or name.lower() in self.placed
@@ -146,6 +149,15 @@ class InlineWriter:
             content += self._inline(inline, fmt, in_link)
         return content
 
+    def title_runs(self, inlines: Iterable[Inline], literal: Collection[str] = ()) -> list[ET.Element]:
+        """The runs of a heading's title, in which a cross-reference to any of the units *literal* is its text
+        and no field (the plan says its field would lead back into the title)."""
+        self._literal = frozenset(literal)
+        try:
+            return self.runs(inlines)
+        finally:
+            self._literal = frozenset()
+
     def _inline(self, inline: Inline, fmt: Format, in_link: bool) -> list[ET.Element]:
         match inline:
             case Text(text=text):
@@ -167,7 +179,7 @@ class InlineWriter:
                 alt = plain_text(children)
                 return [text_run(alt, props=fmt.props)] if alt else []
             case CrossRef(text=text, target_unit=unit):
-                reference = self.plan.refs.get(unit) if unit is not None else None
+                reference = self.plan.refs.get(unit) if unit is not None and unit not in self._literal else None
                 if reference is None:
                     return [text_run(text, props=fmt.props)]
                 return self.segments(reference.segments, fmt)
@@ -249,6 +261,10 @@ class InlineWriter:
         return text if identifier is None else [hyperlink_external(identifier, linked)]
 
     # -- helpers for paragraphs -----------------------------------------------------------
+
+    def points(self, names: Sequence[str]) -> list[ET.Element]:
+        """Bookmarks that mark a point: each start is followed by its end."""
+        return [element for name in names for element in self.bookmarks.pair(name)]
 
     def wrap(self, names: Sequence[str], content: Sequence[Any]) -> list[ET.Element]:
         """*content* inside nested bookmarks, the first of *names* outermost."""
