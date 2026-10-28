@@ -56,7 +56,7 @@ here.
 - Rendered output is unchanged, except that a comment-only quote past the validator's nesting
   depth no longer renders an empty paragraph
 
-### v0.4 — Hardening (this release)
+### v0.4 — Hardening (released)
 
 Rendering what other people send, and reporting problems where they are. No new output format.
 [`CONFORMANCE.md`](../CONFORMANCE.md) has the exact behaviour of each item.
@@ -90,7 +90,7 @@ Rendering what other people send, and reporting problems where they are. No new 
   self-contained
 - **Project.** CI also runs on Windows, and publishing to PyPI waits for CI
 
-### v0.5 — DOCX (implemented; released after the Word checks)
+### v0.5 — DOCX (this release; the manual Word checks are still to come)
 
 A document lawyers can edit: in the .docx every number, cross-reference, the table of contents and
 the page numbers are live Word features (numbering definitions and fields), and the renderer's
