@@ -462,7 +462,9 @@ def stylesheet(style: Style) -> str:
     lines.append(f"@page {{ size: {_css(style.page.size)}; margin: {_css(style.page.margin)}; }}")
     css = _BASE_CSS + "\n".join(lines) + "\n"
     if style.html.extra_css:
-        css += style.html.extra_css.rstrip() + "\n"
+        # The loader refuses ``</style``; any other ``</`` is made ``<\/`` (the same
+        # inside a CSS string), so that a Style built by hand cannot end the element.
+        css += style.html.extra_css.rstrip().replace("</", "<\\/") + "\n"
     return css
 
 

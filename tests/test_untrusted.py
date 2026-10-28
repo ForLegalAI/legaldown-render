@@ -492,3 +492,173 @@ def test_cli_untrusted_with_stdin_and_a_root(capsys: pytest.CaptureFixture[str],
     monkeypatch.setattr("sys.stdin", io.StringIO(DOC))
     assert main(["-", "--untrusted", "--root", str(DOCUMENTS), "-q", "-f", "text"]) == 0
     assert "One" in capsys.readouterr().out
+
+
+# -- Whatever the YAML holds, an error and never a traceback --------------------------
+
+@pytest.mark.parametrize("text", [
+    f"a: !!int {SECRET}", f"a: !!float {SECRET}", f"a: !!bool {SECRET}", f"a: !!timestamp {SECRET}",
+    "a: 2001-13-45", "a: 2001-01-01 99:99:99", "a: " + "9" * 5000, "a: 0x" + "f" * 5000,
+    "? " + "1" * 5000 + "\n: 1", f"headings:\n  99: {{size: 1em}}\n  {SECRET}: 1\n", "headings:\n  " + "1" * 5000 + ": {}",
+])
+def test_a_yaml_value_that_does_not_convert_is_a_style_error_that_quotes_nothing(text: str) -> None:
+    error = refused("version: 1\n" + text + "\n")
+    assert SECRET not in str(error)
+    assert len(str(error)) < 2000
+
+
+def test_heading_levels_out_of_range_do_not_quote_the_key() -> None:
+    error = refused({"headings": {99: {"size": "1em"}, SECRET: {"size": "1em"}}})
+    assert error.problems == ["headings: heading levels are 1 to 5 (§4.1)", "headings: a key must be a number"]
+    with pytest.raises(StyleError, match=r"headings\.99: heading levels"):
+        load_style({"headings": {99: {"size": "1em"}}})
+
+
+def test_any_other_exception_is_a_generic_style_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from legaldown_render.style import loader
+
+    def explode(*args: object, **kwargs: object) -> None:
+        raise ValueError(f"invalid literal: {SECRET}")
+
+    monkeypatch.setattr(loader, "_build", explode)
+    error = refused({"locale": "cs-CZ"})
+    assert error.problems == ["the style could not be read"]
+    assert SECRET not in str(error)
+    with pytest.raises(ValueError, match=SECRET):  # the operator's own style raises what it raised
+        load_style({"locale": "cs-CZ"})
+
+
+def test_an_enormous_number_in_a_value_or_a_key_is_refused_without_str() -> None:
+    big = 10 ** 5000
+    for style in ({"typography": {"font_size": big}}, {"headings": {big: {}}}, {"x": {big: 1}},
+                  {"enumeration": {"levels": [{"label": big}]}}, {"contents": {"depth": big}}):
+        assert refused(style).problems
+    assert refused("default", {"typography.font_size": big}).problems
+
+
+# -- values.date, free text, characters --------------------------------------------------
+
+@pytest.mark.parametrize("name", ["short", "medium", "long", "full"])
+def test_the_named_date_formats_pass(name: str) -> None:
+    assert load_style({"values": {"date": name}}, trusted=False).values.date == name
+
+
+@pytest.mark.parametrize("pattern", ["dd.MM.yyyy", "y", "GGGGGGG", "QQQQQQ", "ZZZZZZZZ", "<script>", "", "'", "LONG"])
+def test_an_untrusted_date_is_one_of_the_four_names(pattern: str) -> None:
+    error = refused({"values": {"date": pattern}})
+    assert error.problems == ["values.date: must be one of short, medium, long, full in an untrusted style"]
+
+
+#: Every setting that holds free text: the name the output shows is repeated wherever it is used.
+FREE_TEXT = ["name", "references.format", "placeholders.blank", "template_view.choice_separator",
+             "template_view.empty_choice", "numbering.levels.0.label", "numbering.levels.0.ref",
+             "enumeration.levels.0.label", "enumeration.levels.0.ref", "paragraphs.format.label",
+             "paragraphs.format.ref", *(f"labels.{name}" for name in (
+                 "drafting_note", "condition", "identification_number", "date_of_birth", "address", "represented_by",
+                 "effective_date", "version", "attachments", "contents", "colon", "attachment_file", "signatures",
+                 "signature_date", "signature_place", "signature_name", "signature_title"))]
+
+
+def _with_text(key: str, text: str) -> dict:
+    """A style with *text* at the dotted *key*; a list level is written as ``levels.0.label``."""
+    style: dict = {}
+    node = style
+    parts = key.split(".")
+    for index, part in enumerate(parts[:-1]):
+        if parts[index + 1] == "0":
+            node[part] = [{}]
+            node = node[part][0]
+        elif part == "0":
+            continue
+        else:
+            node = node.setdefault(part, {})
+    node[parts[-1]] = text
+    return style
+
+
+def test_the_free_text_table_covers_every_text_setting() -> None:
+    import dataclasses
+
+    from legaldown_render.style import model
+
+    declared = set()
+    for cls, prefix in ((model.Style, ""), (model.References, "references."), (model.Placeholders, "placeholders."),
+                        (model.TemplateView, "template_view."), (model.Labels, "labels."),
+                        (model.LevelFormat, "LEVEL.")):
+        for item in dataclasses.fields(cls):
+            if "str" in str(item.type) and "css" not in item.metadata:
+                declared.add(prefix + item.name)
+    declared -= {"version", "extends", "locale", "LEVEL.counter"}  # Style.version is an int; the others are not text shown
+    listed = {key for key in FREE_TEXT if ".levels." not in key and "paragraphs." not in key}
+    assert declared - {"LEVEL.label", "LEVEL.ref"} <= listed | {"locale"}, declared - listed
+
+
+#: The field a setting must contain (docs/style-templates.md), so that a text of the right length is otherwise valid.
+REQUIRED_FIELD = {"labels.condition": "{condition}", "labels.attachment_file": "{file}",
+                  "references.format": "{designation}", "numbering.levels.0.ref": "{n}",
+                  "enumeration.levels.0.ref": "{n}"}
+
+
+@pytest.mark.parametrize("key", FREE_TEXT)
+def test_free_text_is_capped_at_200_characters(key: str) -> None:
+    prefix = REQUIRED_FIELD.get(key, "")
+    load_style(_with_text(key, prefix + "x" * (200 - len(prefix))), trusted=False)
+    error = refused(_with_text(key, prefix + "x" * (201 - len(prefix))))
+    assert [problem.split(":")[0] for problem in error.problems] == [
+        key.replace(".levels.0", ".levels[0]")]
+    assert "is longer than 200 characters" in error.problems[0]
+
+
+@pytest.mark.parametrize("char", ["\x00", "\ud800", "\udfff"])
+@pytest.mark.parametrize("key", ["name", "labels.colon", "placeholders.blank", "template_view.empty_choice"])
+def test_nul_and_a_lone_surrogate_are_refused_in_free_text(key: str, char: str) -> None:
+    error = refused(_with_text(key, f"a{char}b"))
+    assert any("NUL or a lone surrogate" in problem for problem in error.problems)
+    # The operator's own style is not held to it.
+    assert load_style(_with_text("labels.colon", f"a{char}b"))
+
+
+def test_a_long_text_does_not_add_template_problems() -> None:
+    error = refused({"references": {"format": "A" * 60000 + "{designation}"}})
+    assert error.problems == ["references.format: is longer than 200 characters"]
+
+
+def test_a_reference_format_cannot_amplify_the_output() -> None:
+    doc = FRONT + "\n# One {#one}\n\n" + "x {{ref: one}} " * 300 + "\n"
+    with pytest.raises(StyleError, match="references.format"):
+        render(doc, style={"references": {"format": "A" * 60000 + "{designation}"}}, untrusted=True, document_root=".")
+    page = render(doc, style={"references": {"format": "A" * 100 + "{designation}"}}, untrusted=True,
+                  document_root=".").output
+    assert len(page) < 300 * 400 + 20000
+
+
+# -- A bounded message ------------------------------------------------------------------
+
+def test_a_big_style_with_many_problems_gives_a_short_message() -> None:
+    text = "version: 1\n" + "".join(f"k{index}: 1\n" for index in range(5000))
+    assert len(text) < MAX_UNTRUSTED_STYLE_BYTES
+    error = refused(text)
+    assert len(error.problems) == 21 and error.problems[-1] == "and 4980 more"
+    assert len(str(error)) < 8000
+
+
+# -- print-style ------------------------------------------------------------------------
+
+def test_cli_print_style_untrusted_checks_the_style(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "house.yaml"
+    path.write_text("version: 1\nlocale: cs-CZ\n", encoding="utf-8")
+    assert main(["--print-style", "--untrusted", "--style", str(path)]) == 2
+    assert "never a file" in capsys.readouterr().err
+    assert main(["--print-style", "--untrusted", "--set", "typography.font_size=calc(1em)"]) == 2
+    assert "typography.font_size" in capsys.readouterr().err
+    assert main(["--print-style", "--untrusted", "--style", "continental"]) == 0  # no --root needed
+    assert "scheme" in capsys.readouterr().out
+    # Without --untrusted the file is the operator's own.
+    assert main(["--print-style", "--style", str(path)]) == 0
+
+
+def test_cli_help_says_what_the_style_may_be(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "built-in name or YAML text" in text and "no file path" in text

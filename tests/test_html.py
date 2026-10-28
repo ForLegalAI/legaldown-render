@@ -75,3 +75,16 @@ def test_the_stylesheet_keeps_a_division_sign() -> None:
     from legaldown_render.writers.html import stylesheet
 
     assert "max-width: calc(100% / 3);" in stylesheet(Style(html=Html(max_width="calc(100% / 3)")))
+
+
+def test_the_stylesheet_cannot_end_its_element_through_raw_css() -> None:
+    """The loader refuses ``</style``; a Style built by hand never met it."""
+    from legaldown_render.style import Html, Style
+    from legaldown_render.writers.html import stylesheet
+
+    css = stylesheet(Style(html=Html(extra_css="a { color: red } </style><script>x</script>\n</STYLE >")))
+    assert "</" not in css
+    assert "<\\/style><script>x<\\/script>" in css
+    assert "a { color: red }" in css
+    # A string that holds ``</`` still means the same to CSS.
+    assert "content: '<\\/b>'" in stylesheet(Style(html=Html(extra_css="a::before { content: '</b>' }")))

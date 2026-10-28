@@ -420,3 +420,108 @@ def test_builtin_styles_and_documented_values_still_load() -> None:
     for name in builtin_styles():
         load_style(name)
     load_style("default", overrides={"typography": {"font_family": "Georgia, serif", "justify": True}})
+
+
+# -- Numbers, dates and timestamps in YAML (always) --------------------------------
+
+@pytest.mark.parametrize("trusted", [True, False])
+@pytest.mark.parametrize("text", [
+    "a: !!int SECRETx", "a: !!float SECRETx", "a: !!bool SECRETx", "a: !!timestamp SECRETx",
+    "a: 2001-13-45", "a: 2001-01-01 99:99:99", "a: 0x" + "f" * 5000, "a: " + "9" * 5000, "a: 1_" + "0" * 40,
+    "a: 1" + "0" * 32, "? " + "1" * 5000 + "\n: 1", "a: 1." + "0" * 40,
+])
+def test_a_number_or_date_that_is_not_one_is_a_style_error_not_a_crash(text: str, trusted: bool) -> None:
+    """PyYAML's constructors let ValueError, KeyError and OverflowError out, with the text in the message."""
+    with pytest.raises(StyleError) as caught:
+        load_style(f"version: 1\n{text}\n", trusted=trusted)
+    assert "SECRETx" not in str(caught.value) or trusted
+    assert caught.value.problems[0].startswith("not valid YAML")
+
+
+def test_a_number_up_to_the_limit_and_the_usual_dates_still_load() -> None:
+    from legaldown_render.style.loader import MAX_NUMBER_CHARS
+
+    text = "typography:\n  line_height: 1.5\nheadings:\n  1: {weight: 700}\nx: 2001-01-01\n"
+    with pytest.raises(StyleError, match="x: unknown key"):  # read as a date, then refused as a key
+        load_style(text)
+    assert load_style("typography: {line_height: " + "1" * MAX_NUMBER_CHARS + "}\n").typography.line_height
+    assert load_style("headings: {1: {weight: 0x2BC}, 2: {weight: 7_0_0}}\n").headings[1].weight == "700"
+
+
+@pytest.mark.parametrize("trusted", [True, False])
+def test_an_enormous_number_in_a_mapping_is_a_style_error(trusted: bool) -> None:
+    big = 10 ** 5000
+    for style in ({"headings": {big: {"size": "1em"}}}, {"typography": {"font_size": big}}, {"a": {big: 1}}):
+        with pytest.raises(StyleError):
+            load_style(style, trusted=trusted)
+    with pytest.raises(StyleError):
+        load_style("default", overrides={"typography.font_size": big}, trusted=trusted)
+    with pytest.raises(StyleError):
+        load_style("default", overrides={big: 1}, trusted=trusted)  # type: ignore[dict-item]
+    with pytest.raises(StyleError):
+        load_style("default", overrides={"contents": {"depth": big}}, trusted=trusted)
+
+
+def test_an_infinite_key_is_refused_not_a_crash() -> None:
+    for trusted in (True, False):
+        with pytest.raises(StyleError, match="key must be a number"):
+            load_style("headings: {.inf: {size: 1em}}\n", trusted=trusted)
+
+
+# -- values.date (§13.5) -----------------------------------------------------------
+
+@pytest.mark.parametrize("pattern", ["GGGGGGG", "QQQQQQ", "ZZZZZZZZ", "<script>", "xxxxxx", "bbbbbb"])
+def test_a_date_pattern_babel_refuses_is_a_style_error_naming_the_setting(pattern: str) -> None:
+    """Otherwise every render of a document with a date raises, quoting the pattern."""
+    with pytest.raises(StyleError, match="values.date") as caught:
+        load_style("default", overrides={"values.date": pattern})
+    assert pattern not in str(caught.value)
+    with pytest.raises(StyleError, match="values.date"):
+        render(DOC + "\nOn {{date: 2026-07-01}}.\n", overrides={"values.date": pattern})
+
+
+@pytest.mark.parametrize("pattern", ["short", "medium", "long", "full", "dd.MM.yyyy", "d MMMM y", "EEEE, d. MMMM y",
+                                     "yyyy-MM-dd'T'", "y", "GGGGG"])
+def test_a_valid_date_format_loads_and_renders(pattern: str) -> None:
+    result = render(DOC + "\nOn {{date: 2026-07-01}}.\n", overrides={"values.date": pattern})
+    assert 'class="ld-value ld-date"' in result.output
+
+
+# -- A message lists a bounded number of problems --------------------------------------
+
+def test_a_message_lists_at_most_twenty_problems() -> None:
+    from legaldown_render.style.loader import MAX_PROBLEMS
+
+    style = {f"k{index}": 1 for index in range(5000)}
+    for trusted in (True, False):
+        with pytest.raises(StyleError) as caught:
+            load_style(style, trusted=trusted)
+        problems = caught.value.problems
+        assert len(problems) == MAX_PROBLEMS + 1
+        assert problems[-1] == f"and {5000 - MAX_PROBLEMS} more"
+        assert len(str(caught.value)) < 10_000
+
+
+def test_exactly_twenty_problems_are_all_listed() -> None:
+    with pytest.raises(StyleError) as caught:
+        load_style({f"k{index}": 1 for index in range(20)})
+    assert len(caught.value.problems) == 20
+    assert not caught.value.problems[-1].startswith("and ")
+
+
+# -- Characters no output can write ------------------------------------------------------
+
+@pytest.mark.parametrize("trusted", [True, False])
+@pytest.mark.parametrize("key", CSS_SETTINGS)
+@pytest.mark.parametrize("char", ["\x00", "\ud800", "\udfff"])
+def test_nul_and_a_lone_surrogate_are_refused_in_every_css_setting(key: str, char: str, trusted: bool) -> None:
+    with pytest.raises(StyleError) as caught:
+        load_style("default", overrides={key: f"1em{char}"}, trusted=trusted)
+    assert any(problem.startswith(f"{key}:") for problem in caught.value.problems)
+
+
+def test_nul_and_a_lone_surrogate_are_refused_in_raw_css_too() -> None:
+    for char in ("\x00", "\ud800"):
+        with pytest.raises(StyleError, match="html.extra_css"):
+            load_style("default", overrides={"html.extra_css": f"a {{ color: red }}{char}"})
+    assert load_style("default", overrides={"html.extra_css": "a {\n\tcolor: red\n}"})  # other whitespace is CSS
