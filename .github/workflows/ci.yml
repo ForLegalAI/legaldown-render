@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - run: pip install ruff
       - run: ruff check .
@@ -43,12 +43,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.11", "3.12", "3.13"]
-        include:
-          # Windows: path handling, console encodings and line endings differ.
-          - os: windows-latest
-            python-version: "3.12"
+        # Windows: path handling, console encodings and line endings differ.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.13"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -71,7 +68,7 @@ jobs:
           path: .legaldown-spec
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - run: pip install -e ".[dev]"
       - run: pytest -q -m conformance
@@ -88,7 +85,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - run: pip install -e ".[dev]"
       # Force-reinstalled last, with --no-deps, so main is tested even when its

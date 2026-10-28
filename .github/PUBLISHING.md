@@ -91,8 +91,8 @@ markdown-it-py) come from PyPI.
   tests fail on any `legaldown.LegaldownDeprecationWarning`, so a release never calls what the
   validator's next minor version removes.
 - **The upload is gated on the tests.** `publish.yml` first calls [`ci.yml`](workflows/ci.yml)
-  (`on: workflow_call`) as the job `ci`, and `build` needs it, so the lint, test (Linux on Python
-  3.11-3.13 and Windows on 3.12) and conformance jobs must pass on the commit being published
+  (`on: workflow_call`) as the job `ci`, and `build` needs it, so the lint, test
+  (Linux and Windows on Python 3.13) and conformance jobs must pass on the commit being published
   before anything is built, and `testpypi` and `pypi` need `build`. The `validator-main` job is
   informational (`continue-on-error`) and never blocks a release. The caller grants the called
   workflow `contents: read`; a called workflow cannot hold more permissions than its caller gives.
