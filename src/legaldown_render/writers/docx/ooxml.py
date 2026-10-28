@@ -136,9 +136,13 @@ def serialize(root: ET.Element) -> bytes:
     registers cannot change the bytes. Attributes keep the order they were set in, the
     namespaces are declared on the root sorted by prefix, and the same tree is always the
     same bytes. Every text and attribute is sanitised here as well (:func:`_t`), whoever
-    built the element. Only ``text`` is written, as no part here has mixed content."""
+    built the element. Only ``text`` is written, as no part here has mixed content, so a
+    tail is refused rather than dropped. A carriage return in text is written as ``&#13;``,
+    which a parser reads back as CR, where a raw CR would read as LF."""
     namespaces: set[str] = set()
     for element in root.iter():
+        if element.tail:
+            raise InternalError("mixed content is not written (a bug in the DOCX writer)")
         namespaces.add(_name(element.tag)[0])
         namespaces.update(_name(key)[0] for key in element.attrib)
     namespaces.discard("")
@@ -168,7 +172,8 @@ def serialize(root: ET.Element) -> bytes:
             continue
         out.append(f"<{name}{extra}{attributes}>")
         if text:
-            out.append(_t(text, breaks=True).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+            out.append(_t(text, breaks=True).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                       .replace("\r", "&#13;"))
         stack.append((element, True))
         stack.extend((child, False) for child in reversed(element))
     return _DECLARATION + "".join(out).encode("utf-8")

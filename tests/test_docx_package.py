@@ -768,6 +768,21 @@ def test_the_serialiser_sanitises_whoever_built_the_element() -> None:
         ooxml.serialize(ET.Element("{urn:other}x"))
 
 
+def test_a_carriage_return_in_text_is_written_as_a_character_reference() -> None:
+    root = ET.Element(f"{W}t")
+    root.text = "a\rb"
+    data = ooxml.serialize(root).decode("utf-8")
+    assert "&#13;" in data and "\r" not in data
+    assert ET.fromstring(data).text == "a\rb"
+
+
+def test_an_element_with_a_tail_is_refused_rather_than_dropped() -> None:
+    root = ET.Element(f"{W}p")
+    ET.SubElement(root, f"{W}r").tail = "text"
+    with pytest.raises(InternalError, match="mixed content is not written"):
+        ooxml.serialize(root)
+
+
 def test_a_text_passed_as_a_child_is_a_bug_not_a_recursion_error() -> None:
     for bad in ("text", b"bytes", ["ok", ooxml.el("x")]):
         with pytest.raises(InternalError):
