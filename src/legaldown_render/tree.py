@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
+from typing import Literal
 
 from legaldown.syntax import Directive
 
 from .errors import InternalError
+from .style.model import LevelFormat
 
 # ---------------------------------------------------------------------------
 # Inlines
@@ -96,10 +98,38 @@ class DefinitionSource:
 
 @dataclass(frozen=True, slots=True)
 class CrossRef:
-    """A resolved ``{{ref:}}``: display text and the output anchor it links to."""
+    """A resolved ``{{ref:}}``: display text and the output anchor it links to.
+
+    ``target_unit`` and ``section_unit`` name the units the reference points
+    at (see :class:`Section`), for a writer that builds the
+    reference from the numbers instead of using ``text``:
+
+    * ``target_unit`` is the unit the identifier is on: a section, a list item
+      or a numbered paragraph. When alternatives share the identifier
+      (§15.4), it is the **first** of them, the one that keeps the anchor, as
+      ``target`` does. An item or paragraph the style does not number
+      (``number`` is ``None``) is still the target; ``text`` is then the
+      designation of its section (§6.3, ``ref-not-enumerated``).
+    * ``section_unit`` is the section that qualifies the designation: the
+      section holding the item or paragraph, and for a section target the
+      target itself (so it equals ``target_unit``).
+    * Under the ``none`` scheme (§13.3) both are set as above: ``text`` is the
+      section's heading text with the item or paragraph piece after it, so
+      the section's number is ``None`` and its title is what the designation
+      starts from.
+
+    Both are ``None`` in a copy that no longer links (:func:`unlinked`, as in
+    the table of contents), which names no unit. A reference that does
+    not resolve is a :class:`FailureMarker`, not a ``CrossRef``, and so is a
+    ``{{ref:}}`` to an attachment id, which is a broken reference (§5.6);
+    ``{{attach:}}`` is a :class:`Value` of kind ``attach``, whose ``href`` is
+    ``"#"`` and the attachment's anchor.
+    """
 
     text: str
     target: str
+    target_unit: str | None = None
+    section_unit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +216,16 @@ class Paragraph:
     label: str | None = None
     anchor: str | None = None
     condition_label: str | None = None
+    #: The numbering of a top-level paragraph of a section (see Section):
+    #: its unit id, counter value (None when the style does not number
+    #: paragraphs), the section's unit, and the first alternative it shares
+    #: its number with. Alternatives are the section's top-level paragraphs
+    #: only: a list or table between two of them does not separate them.
+    #: Other paragraphs are not units: all four are None.
+    unit: str | None = None
+    number: int | None = None
+    parent_unit: str | None = None
+    shares_number_with: str | None = None
     #: Its first line in the document's file, counted from 1 (§16.9), which the
     #: renderer's diagnostics name; None when the document has no source to
     #: name a line of. Not part of equality: the same content is equal
@@ -202,8 +242,25 @@ class ListItem:
     label: str | None = None
     anchor: str | None = None
     condition_label: str | None = None
+    #: The item's numbering (see Section): its unit id, counter value (None in
+    #: a list that is not enumerated), the unit its designation is built on (the
+    #: section for an item of a list that is not nested in an item; the enclosing
+    #: item for a nested one; None in the preamble), and the first alternative
+    #: it shares its number with. The counter value does not always start at 1
+    #: in a list: see :class:`List`.
+    unit: str | None = None
+    number: int | None = None
+    parent_unit: str | None = None
+    shares_number_with: str | None = None
     #: The item's marker line (see Paragraph.line).
     line: int | None = field(default=None, compare=False)
+
+
+#: How a list's items are numbered (§13.2): ``renumber``, an ordered list
+#: counted 1., 2., ... whatever its source says; ``enumerated``, items counted
+#: in the format of their nesting depth (``enumeration.levels``); ``bullet``,
+#: no numbers.
+ListFamily = Literal["renumber", "enumerated", "bullet"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +269,34 @@ class List:
     items: tuple[ListItem, ...]
     #: Set by the resolve stage: whether items carry generated labels.
     enumerated: bool = False
+    #: Set by the resolve stage: which numbering the list is under. It is
+    #: ``bullet`` exactly when ``enumerated`` is False.
+    family: ListFamily = "bullet"
+    #: Set by the resolve stage: the nesting depth the list's format was
+    #: chosen at, from 0 for a list that is not inside an item. It selects the
+    #: format and nothing else: a list in a quote or drafting note inside an
+    #: item is one level deeper than the item, yet its items' ``parent_unit``
+    #: is the section. Where a list nests, follow ``parent_unit`` (an item, or
+    #: a section), not ``depth``.
+    depth: int = 0
+    #: Set by the resolve stage: the format its items are numbered in (the
+    #: counter, ``label`` and ``ref`` templates of §13.2), None for ``bullet``.
+    #: It is the entry of :attr:`RenderTree.formats` that the list's family
+    #: and depth select, so that nobody has to select it again.
+    format: LevelFormat | None = None
+
+    @property
+    def start(self) -> int | None:
+        """The number of the first item (``items[0].number``), None when the
+        list is not enumerated. It is 1 unless the list goes on from a sibling:
+        lists nested directly in one item share a counter per way of writing a
+        designation (counter style and ``ref`` template), so that a second
+        list after a paragraph, or a list of another family with the same
+        designations, continues the first's numbers ("(c)" after "(a)", "(b)")
+        and no designation is repeated. Top-level lists, and lists in quotes,
+        always start at 1. A list has no id of its own: name it by
+        ``items[0].unit``."""
+        return self.items[0].number if self.items else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,7 +349,43 @@ Block = Paragraph | List | Quote | DraftingNote | CodeBlock | Table | Rule
 @dataclass(frozen=True, slots=True)
 class Section:
     """One heading and the blocks up to the next heading. Sections are kept
-    flat, in document order; ``level`` gives the hierarchy."""
+    flat, in document order; ``level`` gives the hierarchy.
+
+    **Unit numbering.** The resolve stage names the numbered units of the
+    document (sections, list items, and the top-level paragraphs of a section)
+    so that a writer can follow the structure behind the numbers without
+    working out a rule of §13 again. Four fields, the same on :class:`Section`,
+    :class:`ListItem` and :class:`Paragraph`:
+
+    * ``unit``: an id that is unique in the document and the same on every
+      render of it: ``s<k>`` for the k-th section (from 1), ``u<k>`` for the
+      k-th item or paragraph in document order (the preamble first). It is not
+      the anchor (which alternatives share and some units lack) and carries no
+      meaning beyond identity.
+    * ``number``: the unit's own counter value, the one :attr:`RenderTree.formats`
+      writes with the unit's counter style: the last part of a section's number
+      ("2.1" gives 1), the position of an item in its list, of a paragraph in its
+      section. ``None`` for a unit that is not numbered: any section under the
+      ``none`` scheme, an item of a list that is not enumerated, a paragraph
+      when the style does not number paragraphs.
+    * ``parent_unit``: the unit whose designation this one's is built on: for a
+      section the nearest section above it with a smaller ``level`` (a skipped
+      level counts as 1 and is not a unit, yet that 1 is part of every
+      designation below it, and so of the ``{section}`` of an item or paragraph
+      there); for an item of a list that is not inside an item, and for a
+      paragraph, the section (None in the preamble); for a nested item, the
+      item it is nested in. A list in a quote or drafting note, even inside an
+      item, is built on the section.
+    * ``shares_number_with``: for a later alternative that shares its number
+      (§15.8, §15.4) the unit of the **first** unit that has that number, else
+      None. Items and paragraphs share when they have the same identifier and a
+      presence that excludes that of every unit already holding the number;
+      sections share by number (the validator's): the subsections of a later
+      alternative section repeat the numbers of the earlier one's, whatever
+      their identifiers. It is set only on a numbered unit; the first
+      alternative is a unit like any other, and each alternative has a
+      ``unit`` of its own.
+    """
 
     #: The heading's level as written; after resolution, how many parts
     #: its number has (1 for "2", 2 for "2.1"), clamped to 1-5.
@@ -279,6 +400,10 @@ class Section:
     designation: str | None = None
     anchor: str | None = None
     condition_label: str | None = None
+    unit: str | None = None
+    number: int | None = None
+    parent_unit: str | None = None
+    shares_number_with: str | None = None
     #: The heading's first line (see Paragraph.line).
     line: int | None = field(default=None, compare=False)
 
@@ -328,6 +453,44 @@ class ContentsEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class NumberingFormats:
+    """The numbering formats in effect, after the style is resolved (§13.1,
+    §13.2): the same :class:`~legaldown_render.style.model.LevelFormat` the
+    resolver wrote the labels and designations with, so that a writer builds
+    its own numbering from the same templates.
+
+    A level's ``counter`` styles its number, ``label`` is what shows next to the
+    unit, ``ref`` is its piece of a designation. ``{n}`` is the unit's own
+    number, ``{path}`` the designation up to and including the unit, and
+    ``{section}`` (items and paragraphs) the designation of the enclosing section
+    (nothing for a preamble item, and a ``.`` right after it goes too). A
+    designation is the parent's designation followed by the unit's ``ref``
+    filled in; under the ``none`` scheme the heading text stands in for a
+    section's designation and a space goes before the piece.
+    """
+
+    #: The heading scheme: ``decimal``, ``legal-outline``, ``mixed`` or ``none``.
+    scheme: str = "decimal"
+    #: One format per heading level, 1 to 5 (§4.1); empty under the ``none``
+    #: scheme, where headings are not numbered. The n-th part of a section's
+    #: number takes the n-th format.
+    headings: tuple[LevelFormat, ...] = ()
+    #: The formats of ``enumerated`` lists by nesting depth; a list nested
+    #: deeper than there are formats goes back to the first (``depth %
+    #: len(enumerated)``). Empty when no list is enumerated this way.
+    enumerated: tuple[LevelFormat, ...] = ()
+    #: The format of every ``renumber`` list, at any depth; None when ordered
+    #: lists are enumerated (``enumeration.ordered: enumerate``).
+    renumber: LevelFormat | None = None
+    #: The format of a section's top-level paragraphs; None when the style does
+    #: not number them.
+    paragraphs: LevelFormat | None = None
+    #: What a reference shows around the designation (``references.format``,
+    #: with ``{designation}`` for it).
+    reference: str = "{designation}"
+
+
+@dataclass(frozen=True, slots=True)
 class RenderTree:
     """The whole document. Built with source inlines; resolved in place of
     them by :mod:`.resolve`."""
@@ -355,6 +518,8 @@ class RenderTree:
     attachments_anchor: str = ""
     #: Between a generated label and its value ("Name: ..."), per language.
     colon: str = ": "
+    #: The numbering formats the labels and designations were made with.
+    formats: NumberingFormats = NumberingFormats()
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +671,7 @@ def unlinked(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
                 out.extend(unlinked(children))
                 continue
             case CrossRef():
-                inline = replace(inline, target="")
+                inline = replace(inline, target="", target_unit=None, section_unit=None)
             case TermRef():
                 inline = replace(inline, target=None)
             case DefinedTerm():
