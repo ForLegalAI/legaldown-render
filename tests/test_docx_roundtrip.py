@@ -40,7 +40,7 @@ from dataclasses import dataclass, replace
 import pytest
 from conftest import DOCUMENTS, FRONT, spec_root
 from docx_support import Exported, W, libreoffice_edit, libreoffice_export, parts, repackage, require_libreoffice
-from test_docx_plan import ALTERNATIVES, units
+from test_docx_plan import ALTERNATIVES, ORDERED_PARENT, PATH_ITEMS, units
 
 from legaldown_render import DocumentError, render
 from legaldown_render.resolve.docx_plan import DocxPlan, FieldSeg, Literal_, plan_docx
@@ -313,13 +313,72 @@ Ref {{ref: i1}} {{ref: n2}} {{ref: d3}} {{ref: o2}} {{ref: i3}} {{ref: beta}} {{
 """,
 }
 
+#: Labels that show the path of an item (`{path}`): in a clause (the reserved levels of the heading list carry the clause's
+#: and the section's counters), in a section of another level (the reserved level reads otherwise: detached levels), past
+#: the reserved levels, and below an ordered item.
+STRESS["paths"] = FRONT + """
+# Alpha {#alpha}
+
+- one {#i1}
+  - two {#i2}
+    - three {#i3}
+      - four {#i4}
+        - five {#i5}
+          - six {#i6}
+            - seven {#i7}
+- uno {#j1}
+  - dos {#j2}
+  - tres {#j3}
+
+## Beta {#beta}
+
+- bee {#k1}
+  - kay {#k2}
+  - kay two {#k3}
+- bee two {#k4}
+  - kay three {#k5}
+
+# Second {#second}
+
+- x {#x1}
+  - y {#y1}
+
+Refs: {{ref: i1}} {{ref: i2}} {{ref: i3}} {{ref: i4}} {{ref: i5}} {{ref: i6}} {{ref: i7}} {{ref: j2}} {{ref: j3}}
+{{ref: k2}} {{ref: k3}} {{ref: k5}} {{ref: y1}}
+"""
+STRESS["ordered paths"] = FRONT + """
+# Alpha {#alpha}
+
+- one {#i1}
+  1. ordered {#o}
+     - three {#i3}
+       - four {#i4}
+         - five {#i5}
+         - five b {#i6}
+       - four b {#i7}
+     - three b {#i8}
+       - four c {#i9}
+  1. ordered two {#o2}
+     - x {#x}
+       - y {#y}
+- two {#t}
+  1. o3 {#o3}
+     - z {#z}
+       - w {#w}
+
+Refs: {{ref: i3}} {{ref: i4}} {{ref: i5}} {{ref: i6}} {{ref: i7}} {{ref: i9}} {{ref: y}} {{ref: w}}
+"""
+
 #: The stress documents that are shown under some variants only (each costs LibreOffice time): the continental style, where
 #: the items ride the heading list, the default, and the default with numbered paragraphs.
 FEW_VARIANTS: dict[str, tuple[str, ...]] = {
-    name: ("continental", "default", "paragraphs") for name in ("alternatives in threes", "nested titles", "qualified")}
+    **{name: ("continental", "default", "paragraphs") for name in ("alternatives in threes", "nested titles", "qualified")},
+    "paths": ("continental", "default"), "ordered paths": ("default",)}
 
 #: The variants that show some stress documents only.
-ONLY_DOCS: dict[str, tuple[str, ...]] = {"five levels": ("qualified",), "shared level": ("qualified", "nested")}
+ONLY_DOCS: dict[str, tuple[str, ...]] = {
+    "five levels": ("qualified",), "shared level": ("qualified", "nested"), "path items": ("paths", "lists"),
+    "ordered parent": ("ordered paths", "lists")}
 
 #: The settings that give the numbering words and symbols: a field that returns the same words as the reference's format
 #: stands for them, otherwise Word's ``\t`` switch drops them from the number.
@@ -345,6 +404,8 @@ WORDS: dict[str, dict] = {
         {"counter": "lower-alpha", "label": "{n}.", "ref": "{n}"}]}},
     "shared level": {"style": "continental", "overrides": {"paragraphs.numbered": True, "paragraphs.format": {
         "counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"}}},
+    "path items": PATH_ITEMS,
+    "ordered parent": ORDERED_PARENT,
 }
 
 #: What a diagnostic of the plan has to say when Word numbers a unit differently from the renderer.
@@ -950,3 +1011,94 @@ def test_the_contents_list_the_headings_as_the_plan_does_and_none_of_the_items_o
     assert [e.number for e in plan.toc] == ["1.", "1.1", "2.", "2.1", "2.", "2.1", "3."]  # the alternative's is shared
     assert not any(word in line for line in entries for word in ("item", "nested"))
     assert "1.1 item one" in body and "a) nested" in body  # the items are in the body: on the heading list, not in it
+
+
+# -- Labels that show the path: live on the reserved levels, detached where they cannot be ---------------------------------
+
+PATH_CLAUSES = FRONT + """
+# Alpha {#alpha}
+
+- clause one {#c1}
+  - nested of one {#n1}
+    - deep of one {#d1}
+- clause two {#c2}
+  - nested of two {#n2}
+    - deep of two {#d2}
+
+Refs: {{ref: c1}} {{ref: n1}} {{ref: d1}} {{ref: c2}} {{ref: n2}} {{ref: d2}}
+"""
+
+#: A clause, a nested item and a deeper one inserted before the second clause and what is under it.
+PATH_EDITS = [
+    ("clause two", "NEW clause", "- clause two {#c2}", "- NEW clause"),
+    ("nested of two", "NEW nested", "  - nested of two {#n2}", "  - NEW nested"),
+    ("deep of two", "NEW deep", "    - deep of two {#d2}", "    - NEW deep"),
+]
+
+
+@functools.cache
+def path_clauses() -> str:
+    require_libreoffice()
+    data = render(PATH_CLAUSES, format="docx", **PATH_ITEMS).binary
+    return libreoffice_edit({"paths": (data, [(match, new) for match, new, _, _ in PATH_EDITS])})["paths"]  # type: ignore[arg-type]
+
+
+def test_a_path_label_on_the_reserved_levels_follows_the_items_a_lawyer_inserts_and_so_do_its_references() -> None:
+    """The label and every reference to it are live: after a clause, a nested item and a deeper one are inserted in
+    the editor and the fields are updated, the numbers (with the section's and the clause's counters in them) and the
+    references read as the renderer writes them for the edited source."""
+    source = applied(PATH_CLAUSES, [(before, new) for _, _, before, new in PATH_EDITS])
+    said = lines_of(path_clauses())
+    assert said == lines_of(render(source, format="text", **PATH_ITEMS).output)
+    assert {"1.3(a) NEW nested", "1.3(b) nested of two", "1.3(b)(i) NEW deep", "1.3(b)(ii) deep of two"} <= set(said)
+    assert [line for line in said if line.startswith("(1) Refs")] == [
+        "(1) Refs: 1.1 1.1(a) 1.1(a)(i) 1.3 1.3(b) 1.3(b)(ii)"]
+
+
+ORDERED_PATHS = FRONT + """
+# Alpha {#alpha}
+
+- one {#i1}
+  1. ordered {#o}
+     - three {#i3}
+       - four {#i4}
+       - four b {#i5}
+     - three b {#i6}
+       - four c {#i7}
+
+Refs: {{ref: i4}} {{ref: i5}} {{ref: i7}}
+"""
+
+
+@functools.cache
+def ordered_paths() -> dict[str, str]:
+    """The ordered-parent document as it is, with a nested item inserted in the detached list, and with a new parent whose
+    nested item is a copy of one of the detached list's (Word's paste keeps the list)."""
+    require_libreoffice()
+    data = render(ORDERED_PATHS, format="docx", **ORDERED_PARENT).binary
+    return libreoffice_edit({  # type: ignore[arg-type]
+        "original": (data, []),
+        "nested inserted": (data, [("four b", "NEW four")]),
+        "new parent": (data, [("three b", "NEW three"), ("three b", "NEW copy", "four b")])})
+
+
+def test_a_detached_list_draws_its_own_counter_and_its_references_are_live() -> None:
+    said = lines_of(ordered_paths()["original"])
+    assert [line for line in said if line.endswith(("four", "four b", "four c"))] == ["(A) four", "(B) four b", "(A) four c"]
+    assert "Refs: 1(a)(1)(i)(A) 1(a)(1)(i)(B) 1(a)(1)(ii)(A)" in said[-1]
+    # an item inserted in the detached list renumbers what follows, in the list and in the references to it
+    after = lines_of(ordered_paths()["nested inserted"])
+    assert [line for line in after if line.endswith(("four", "NEW four", "four b", "four c"))] == [
+        "(A) four", "(B) NEW four", "(C) four b", "(A) four c"]
+    assert "Refs: 1(a)(1)(i)(A) 1(a)(1)(i)(C) 1(a)(1)(ii)(A)" in after[-1]
+
+
+def test_a_new_parent_whose_nested_item_is_copied_from_a_detached_list_goes_on_counting_there() -> None:
+    """The documented limit of the detached levels: a nested list restarts at a fixed value under the parent that has it,
+    so a list that is new in Word, made by copying an item of another, goes on from that one (the renderer would start
+    it again at ``(A)``), while the list that was restarted keeps its start."""
+    said = lines_of(ordered_paths()["new parent"])
+    assert [line for line in said if line.endswith(("four b", "NEW copy", "four c"))] == [
+        "(B) four b", "(C) NEW copy", "(A) four c"]
+    assert "ii NEW three" in said and "iii three b" in said
+    assert "Refs: 1(a)(1)(i)(A) 1(a)(1)(i)(B) 1(a)(1)(iii)(A)" in said[-1]

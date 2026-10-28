@@ -681,19 +681,172 @@ def test_an_item_nested_under_a_foreign_parent_reports_a_section_label_once() ->
     assert [d.rule for d in diagnostics].count("render-docx-section-label") == 1
 
 
-def test_a_quote_inside_a_preamble_item_with_a_path_label_is_reported_not_left_unexplained() -> None:
+def test_a_quote_inside_a_preamble_item_with_a_path_label_does_not_show_the_counter_of_a_list_it_is_not_in() -> None:
+    # the quote is built on no item, so its path is its own counter; the enumerated level would show the counter of
+    # whatever the level above counted last ((a)(1)), so the list takes the detached levels, which draw it as it is
     levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
               {"counter": "decimal", "label": "{path}", "ref": "({n})"}]
     tree, plan, diagnostics = planned("- a\n\n  > - quoted\n\n# A\n", overrides={"enumeration.levels": levels})
     _, quoted = items(tree)
-    assert quoted.parent_unit is None
-    assert plan.units[quoted.unit].cause == ("label-fallback",) and plan.units[quoted.unit].label == "(a)(1)"
-    assert rules(diagnostics) == {"render-docx-section-label"}
+    assert quoted.parent_unit is None and quoted.label == "(1)"
+    assert plan.units[quoted.unit].cause == () and plan.units[quoted.unit].label == "(1)"
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "enumerated", "detached"]
+    assert diagnostics == []
 
 
 def test_a_preamble_item_needs_no_section_and_is_not_reported() -> None:
     _, plan, diagnostics = planned("- x\n\n# A\n", style="continental")
     assert plan.units["u1"].label == "1" and diagnostics == []
+
+
+# -- Labels that show the path: the reserved levels of the heading list, and the detached levels ----------------
+
+PATH_ITEMS = {"style": "continental", "overrides": {"enumeration.levels": [
+    {"counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"},
+    {"counter": "lower-alpha", "label": "{path}", "ref": "({n})"},
+    {"counter": "lower-roman", "label": "{path}", "ref": "({n})"},
+    {"counter": "upper-alpha", "label": "{path}", "ref": "({n})"},
+    {"counter": "decimal", "label": "{path}", "ref": "({n})"},
+    {"counter": "lower-alpha", "label": "{path}", "ref": "({n})"}]}}
+
+
+def refs_of(tree: RenderTree, plan: DocxPlan) -> list[tuple[str, str]]:
+    """Each reference's text and its fields, as ``show`` writes them."""
+    return [(i.text, show(plan, plan.refs[i.target_unit].segments))
+            for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)]
+
+
+def test_a_path_label_nested_in_a_clause_rides_the_reserved_levels_with_the_counters_of_its_chain() -> None:
+    body = ("# A {#a}\n\n- one {#i1}\n  - two {#i2}\n    - three {#i3}\n- uno {#j1}\n  - dos {#j2}\n\n"
+            "Refs: {{ref: i1}} {{ref: i2}} {{ref: i3}} {{ref: j2}}\n")
+    tree, plan, diagnostics = planned(body, **PATH_ITEMS)
+    one, two, three, uno, dos = items(tree)[:5]
+    # the label as the renderer writes it, drawn by Word: the section's counter and the clause's are levels of the list
+    assert [(plan.units[i.unit].label, i.label) for i in (one, two, three, uno, dos)] == [
+        (label, label) for label in ("1.1", "1.1(a)", "1.1(a)(i)", "1.2", "1.2(a)")]
+    assert [plan.units[i.unit].ilvl for i in (one, two, three)] == [1, 5, 6]
+    assert [level.lvl_text for level in plan.abstract_nums[0].levels[5:7]] == ["%1.%2(%6)", "%1.%2(%6)(%7)"]
+    assert [plan.units[i.unit].cause for i in (two, three, dos)] == [("reserved-level",)] * 3
+    # the clause's num: no override for the nested lists, which restart by structure under every new clause
+    assert len({plan.units[i.unit].num_id for i in (one, two, three, uno, dos)}) == 1
+    assert [n for n in plan.nums if n.abstract_id == 0] == [plan.nums[0], plan.nums[1]]  # the heading num, the clause's
+    assert diagnostics == []
+    # a field for the label is the whole of the reference
+    assert refs_of(tree, plan) == [("1.1", "REF i1"), ("1.1(a)", "REF i2"), ("1.1(a)(i)", "REF i3"),
+                                   ("1.2(a)", "REF j2")]
+
+
+def test_a_path_list_in_a_section_of_another_level_cannot_share_the_reserved_level_and_is_detached() -> None:
+    # under a level-2 section the clause is on the level after it: the reserved level would read %1.%2.%3(%6), which
+    # the first list has taken as %1.%2(%6)
+    body = ("# A {#a}\n\n- one {#i1}\n  - two {#i2}\n\n## B {#b}\n\n- bee {#k1}\n  - kay {#k2}\n  - kay two {#k3}\n\n"
+            "Refs: {{ref: i2}} {{ref: k2}} {{ref: k3}}\n")
+    tree, plan, diagnostics = planned(body, **PATH_ITEMS)
+    _, two, _, kay, kay_two = [i for i in items(tree) if i.number is not None][:5]
+    assert plan.units[two.unit].cause == ("reserved-level",) and plan.units[two.unit].label == "1.1(a)"
+    assert [(plan.units[i.unit].label, i.label) for i in (kay, kay_two)] == [("(a)", "1.1.1(a)"), ("(b)", "1.1.1(b)")]
+    assert plan.units[kay.unit].cause == ("restart-section", "label-fallback")
+    assert [a.kind for a in plan.abstract_nums if a.kind == "detached"] == ["detached"]
+    assert plan.units[kay.unit].ilvl == 1 and plan.abstract_nums[plan.nums[plan.units[kay.unit].num_id - 1].abstract_id].kind == "detached"
+    # the label is shorter in Word, and the references to it are fields all the same
+    assert refs_of(tree, plan) == [("1.1(a)", "REF i2"), ("1.1.1(a)", "REF k1 + REF k2"),
+                                   ("1.1.1(b)", "REF k1 + REF k3")]
+    [restart] = [d for d in diagnostics if d.rule == "render-docx-static-restart"]
+    [lost] = [d for d in diagnostics if d.rule == "render-docx-section-label"]
+    assert restart.level == "info" and "carries the section" in restart.message
+    assert lost.level == "warning" and lost.line == kay.line
+    assert "shows the number of the enclosing section and item" in lost.message and "it reads '(a)'" in lost.message
+    assert "kept for nested lists are used up or read otherwise" in lost.message
+
+
+def test_a_path_list_nested_past_the_reserved_levels_is_detached() -> None:
+    body = "# A\n\n" + "".join("  " * i + f"- level {i} {{#l{i}}}\n" for i in range(7))
+    body += "\nRefs: " + " ".join(f"{{{{ref: l{i}}}}}" for i in range(7)) + "\n"
+    tree, plan, diagnostics = planned(body, **PATH_ITEMS)
+    found = items(tree)[:7]
+    assert [plan.units[i.unit].ilvl for i in found] == [1, 5, 6, 7, 8, 5, 6]
+    assert [plan.units[i.unit].label for i in found[:5]] == [i.label for i in found[:5]]
+    assert [level.lvl_text for level in plan.abstract_nums[0].levels[5:]] == [
+        "%1.%2(%6)", "%1.%2(%6)(%7)", "%1.%2(%6)(%7)(%8)", "%1.%2(%6)(%7)(%8)(%9)"]
+    # depth 5 and the list under it: the detached levels, one num for both, restarted by structure inside
+    assert [plan.units[i.unit].cause for i in found[5:]] == [("restart-section", "label-fallback"), ("label-fallback",)]
+    assert plan.units[found[5].unit].num_id == plan.units[found[6].unit].num_id
+    assert [plan.units[i.unit].label for i in found[5:]] == ["(a)", "1"]
+    assert [text for text, _ in refs_of(tree, plan)][-2:] == ["1.1(a)(i)(A)(1)(a)", "1.1(a)(i)(A)(1)(a).1"]
+    assert all(plan.refs[i.target_unit].exact and not plan.refs[i.target_unit].fixed
+               for i in iter_tree_inlines(tree) if isinstance(i, CrossRef))
+    assert [d.rule for d in diagnostics] == ["render-docx-static-restart", "render-docx-section-label",
+                                             "render-docx-section-label"]
+
+
+ORDERED_PARENT = {"overrides": {"enumeration.levels": [
+    {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+    {"counter": "decimal", "label": "({n})", "ref": "({n})"},
+    {"counter": "lower-roman", "label": "{n}", "ref": "({n})"},
+    {"counter": "upper-alpha", "label": "{path}", "ref": "({n})"}]}}
+
+
+def test_a_path_list_below_an_ordered_item_is_detached_and_its_references_are_fields() -> None:
+    body = ("# A {#a}\n\n- one {#i1}\n  1. ordered {#o}\n     - three {#i3}\n       - four {#i4}\n       - four b {#i5}\n"
+            "     - three b {#i6}\n       - four c {#i7}\n\nRefs: {{ref: i3}} {{ref: i4}} {{ref: i5}} {{ref: i7}}\n")
+    tree, plan, diagnostics = planned(body, **ORDERED_PARENT)
+    found = {i.unit: i for i in items(tree)}
+    i4, i5, i7 = (found[u] for u in ("u4", "u5", "u7"))
+    assert [i.label for i in (i4, i5, i7)] == ["1(a)(1)(i)(A)", "1(a)(1)(i)(B)", "1(a)(1)(ii)(A)"]
+    # Word draws the level's own counter: the enumerated level would read the (never used) levels above as 0 or as
+    # the counter of another list
+    assert [plan.units[i.unit].label for i in (i4, i5, i7)] == ["(A)", "(B)", "(A)"]
+    assert [plan.units[i.unit].cause for i in (i4, i5, i7)] == [
+        ("restart-family", "label-fallback"), ("label-fallback",), ("restart-family", "label-fallback")]
+    assert plan.units[i4.unit].num_id == plan.units[i5.unit].num_id != plan.units[i7.unit].num_id
+    assert [(a.kind, a.levels[3].lvl_text) for a in plan.abstract_nums][-1] == ("detached", "(%4)")
+    assert [n.start_overrides for n in plan.nums if n.abstract_id == plan.abstract_nums[-1].id] == [((3, 1),)] * 2
+    assert refs_of(tree, plan) == [
+        ("1(a)(1)(i)", 'REF a + REF i1 + "(" + REF o + ")(" + REF i3 + ")"'),
+        ("1(a)(1)(i)(A)", 'REF a + REF i1 + "(" + REF o + ")(" + REF i3 + ")" + REF i4'),
+        ("1(a)(1)(i)(B)", 'REF a + REF i1 + "(" + REF o + ")(" + REF i3 + ")" + REF i5'),
+        ("1(a)(1)(ii)(A)", 'REF a + REF i1 + "(" + REF o + ")(" + REF i6 + ")" + REF i7')]
+    [lost] = [d for d in diagnostics if d.rule == "render-docx-section-label"]
+    assert "shows the number of the enclosing section, ordered item and item" in lost.message
+    assert "it reads '(A)'" in lost.message and "the list is nested in a unit that is on another list" in lost.message
+    assert "section's number" not in lost.message
+
+
+def test_lists_nested_in_a_detached_item_stay_on_the_detached_levels_and_restart_by_structure() -> None:
+    body = ("# A\n\n- one\n  1. ordered\n     - three\n       - four\n         - five\n         - five b\n"
+            "       - four b\n         - five c\n")
+    tree, plan, diagnostics = planned(body, **ORDERED_PARENT)
+    four, five, five_b, four_b, five_c = items(tree)[3:8]
+    kinds = {a.id: a.kind for a in plan.abstract_nums}
+    assert [kinds[plan.nums[plan.units[i.unit].num_id - 1].abstract_id] for i in (four, five, five_b, four_b, five_c)] \
+        == ["detached"] * 5
+    assert len({plan.units[i.unit].num_id for i in (four, five, five_b, four_b, five_c)}) == 1  # one num, no override
+    assert [(plan.units[i.unit].ilvl, plan.units[i.unit].label) for i in (five, five_b, five_c)] == [
+        (4, "(a)"), (4, "(b)"), (4, "(a)")]  # the list under the second "four" starts again, by structure
+    assert [plan.units[i.unit].cause for i in (five, five_b, five_c)] == [()] * 3
+
+
+def test_the_detached_levels_hold_each_levels_own_counter_alone_and_exist_only_when_used() -> None:
+    _, plain, _ = planned("# A\n\n- x\n  - y\n")
+    assert "detached" not in [a.kind for a in plain.abstract_nums]
+    _, plan, _ = planned("# A\n\n- x\n  1. y\n     - z\n       - w\n", **ORDERED_PARENT)
+    [detached] = [a for a in plan.abstract_nums if a.kind == "detached"]
+    enumerated = next(a for a in plan.abstract_nums if a.kind == "enumerated")
+    assert [(level.num_fmt, level.lvl_text) for level in detached.levels[:4]] == [
+        ("lowerLetter", "(%1)"), ("decimal", "(%2)"), ("lowerRoman", "%3"), ("upperLetter", "(%4)")]
+    assert enumerated.levels[3].lvl_text == "(%1)(%2)(%3)(%4)"  # the enumerated list shows the whole path
+    assert detached.multi_level == "hybridMultilevel" and len(detached.levels) == 9
+
+
+def test_a_label_whose_counters_are_not_the_end_of_its_designation_keeps_the_level_that_shows_less() -> None:
+    # {section}.{n} at depth 3 of the continental style would show the section's counter before the item's, but the
+    # designation of the item ends with ".1": no field for the label could stand for it, so the label is written
+    # without the section (reported) and the reference is made of fields
+    body = "# A\n\n- x {#x}\n  - y {#y}\n    - z {#z}\n      - w {#w}\n\nRef {{ref: w}}\n"
+    tree, plan, diagnostics = planned(body, style="continental")
+    [(text, fields)] = refs_of(tree, plan)
+    assert text == "1.1(a)(i).1" and fields == 'REF x + "(" + REF y + "(" + REF z + "." + REF w'
+    assert plan.units["u4"].cause == ("restart-section", "label-fallback") and plan.units["u4"].label == "1"
 
 
 # -- Counters Word writes differently --------------------------------------------------
@@ -1129,7 +1282,8 @@ def test_a_label_that_needs_a_level_nothing_numbers_is_not_left_to_word() -> Non
     tree, plan, diagnostics = planned("1. a\n   - x\n\n# A\n", overrides={"enumeration.levels": levels})
     _, nested = items(tree)
     assert plan.units[nested.unit].cause == ("restart-family", "label-fallback")
-    assert plan.units[nested.unit].label == "()(1)"  # the level above reads as nothing, not as "(a)"
+    assert plan.units[nested.unit].label == "(1)"  # not "()(1)": the detached levels draw their own counter alone
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "renumber", "detached"]
     assert {d.rule for d in diagnostics} == {"render-docx-static-restart", "render-docx-section-label"}
 
 
