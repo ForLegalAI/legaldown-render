@@ -111,7 +111,10 @@ jobs:
       - run: pytest -q -m ooxml_schema
         env:
           LEGALDOWN_SPEC_DIR: .legaldown-spec
+      # The acceptance corpus (tests/test_docx_acceptance.py) is part of both runs; it needs the specification's documents
       - run: pytest -q -m libreoffice
+        env:
+          LEGALDOWN_SPEC_DIR: .legaldown-spec
 
   validator-main:
     # Surfaces changes in legaldown-validator's model before they are released

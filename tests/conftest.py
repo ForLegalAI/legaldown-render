@@ -61,6 +61,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="rewrite the golden files from the current output instead of comparing")
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Leave the DOCX acceptance corpus (marker ``acceptance``) out of a plain ``pytest`` run, which stays as quick as it
+    was: it runs when a marker expression is given (``-m libreoffice``, as the DOCX job does), when
+    ``LEGALDOWN_ACCEPTANCE`` is set, or when a command-line argument names its file."""
+    if config.getoption("markexpr") or os.environ.get("LEGALDOWN_ACCEPTANCE") or any("acceptance" in a for a in config.args):
+        return
+    dropped = [item for item in items if item.get_closest_marker("acceptance")]
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = [item for item in items if item not in dropped]
+
+
 @pytest.fixture
 def update_golden(request: pytest.FixtureRequest) -> bool:
     return bool(request.config.getoption("--update-golden"))
