@@ -119,6 +119,9 @@ jobs:
       - run: pytest -q -m libreoffice
         env:
           LEGALDOWN_SPEC_DIR: .legaldown-spec
+      - run: pytest -q -m "acceptance and not libreoffice and not ooxml_schema"
+        env:
+          LEGALDOWN_SPEC_DIR: .legaldown-spec
 
   validator-main:
     # Surfaces changes in legaldown-validator's model before they are released

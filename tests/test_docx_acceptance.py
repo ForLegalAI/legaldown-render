@@ -7,17 +7,18 @@ results wrong on purpose and compares every number and reference unit by unit), 
 * **Equivalence.** LibreOffice opens each document with its fields and indexes updated, and what it shows is what the
   plain-text writer prints, line by line, **modulo the differences the formats have by nature** (:func:`normalise`:
   borders for rules and signing lines, a table's cells, the markup of the plain-text layout) **and the gaps the plan
-  reports** (:data:`GAPS`: a number Word draws differently from the renderer's, with a ``render-docx-*`` diagnostic).
+  reports** (:data:`GAPS`: a number Word draws differently from the renderer's, with a ``render-docx-*`` diagnostic;
+  :data:`GAP_LINES` pins each line that differs, so that nothing else may).
   The numbers, the cross-references, the entries of the contents, the attachments and the signature blocks are in that
   text. The page numbers of the contents are checked on their own: they are positive, never decrease and never pass the
   number of pages.
 * **Live after edits.** In one LibreOffice session, for a handful of documents under each style, a heading, a list
   item, a nested item and (under the continental style) a numbered paragraph are inserted, and a clause is deleted,
   as a lawyer does (:mod:`tests/lo/uno_edit.py`); the fields and indexes are updated; the result is what the text
-  writer prints for the source with the same edits made. A document may differ only where the plan reports a number it
-  fixes (:data:`FIXED`), and every such difference is listed.
+  writer prints for the source with the same edits made, exactly: in the documents of the subset no number is fixed in a
+  way these edits reach.
 * **Valid and deterministic.** Every part of every document validates against the ISO/IEC 29500 schemas, and rendering a
-  document twice gives the same bytes.
+  document twice gives the same bytes (that test has the marker ``acceptance`` alone).
 
 The LibreOffice tests are skipped when ``soffice`` or ``python3-uno`` is missing and fail instead when
 ``LEGALDOWN_REQUIRE_DOCX_TOOLS`` is set (``tests/docx_support.py``). The module is part of the DOCX job (``pytest -m
@@ -80,12 +81,6 @@ STYLES: dict[str, dict] = {
 #: counters Word's list cannot (``render-docx-section-label``), a number off by a count (``render-docx-number-mismatch``),
 #: and the two readings of a reference that only LibreOffice has (``\t`` ignored, a level nothing numbered counted).
 GAPS = EXPLAINING | {"render-docx-number-mismatch", "render-docx-reference-word-only", "render-docx-libreoffice-count"}
-
-#: The diagnostics that say a number is fixed in the file: it is right when the file is opened and does not follow what
-#: is inserted or deleted before it (a restart by a fixed value, a counter shared with others, a reference that is text),
-#: besides the gaps above.
-FIXED = GAPS | {"render-docx-shared-counter", "render-docx-static-restart", "render-docx-reference",
-                "render-docx-reference-cycle"}
 
 
 # -- The corpus ---------------------------------------------------------------------------------------------------
@@ -260,27 +255,46 @@ def normalise(written: str, shown: str, tree: RenderTree) -> tuple[list[str], li
     return written_lines, seen, pages
 
 
-def words(lines: list[str]) -> list[str]:
-    """The words of *lines* that are not numbers or counters: four letters or more, which is what a gap leaves alone."""
-    return [word for line in lines for word in re.findall(r"[^\W\d_]{4,}", line)]
-
-
 def difference(written: list[str], shown: list[str]) -> str:
     return "\n".join(difflib.unified_diff(written, shown, "text writer", "LibreOffice", lineterm="", n=1))
 
 
+#: The lines that differ, by (style, document), where the plan reports a gap: what the text writer prints, then what LibreOffice
+#: (which follows Word's numbering) shows. Nothing else may differ: not a line more, not a word of any length.
+GAP_LINES: dict[tuple[str, str], list[tuple[str, str]]] = {
+    # letters past 26: Word repeats them (bb), the renderer counts on (ab) -- render-docx-letter-overflow
+    ("default", "stress/letters"): [
+        ("(ab) item 28", "(bb) item 28"), ("(ac) item 29", "(cc) item 29"), ("(ad) item 30", "(dd) item 30"),
+        ("(ae) item 31", "(ee) item 31"), ("Ref 1(a) 1(z) 1(aa) 1(ab) 1(ae)", "Ref 1(a) 1(z) 1(aa) 1(bb) 1(ee)")],
+    ("outline", "stress/letters"): [
+        ("(ab) item 28", "(bb) item 28"), ("(ac) item 29", "(cc) item 29"), ("(ad) item 30", "(dd) item 30"),
+        ("(ae) item 31", "(ee) item 31"), ("Ref I(a) I(z) I(aa) I(ab) I(ae)", "Ref I(a) I(z) I(aa) I(bb) I(ee)")],
+    # a list that cannot show the section's number draws its own counter alone -- render-docx-section-label
+    ("continental", "stress/qualified"): [("1.1 deeper", "1 deeper")],
+    ("continental", "stress/paths"): [("1.1 four", "1 four"), ("1.1 seven", "1 seven")],
+    ("continental", "stress/ordered paths"): [
+        ("1.1 four", "1 four"), ("1.2 four b", "2 four b"), ("1.1 four c", "1 four c"), ("1.1 y", "1 y"), ("1.1 w", "1 w")],
+    ("continental", "stress/deep"): [
+        ("1.1 level 3", "1 level 3"), ("1.1 level 6", "1 level 6"), ("1.1 level 9", "1 level 9"),
+        ("1.1 level 9 again", "1 level 9 again")],
+}
+
+
 def check(case: Shown) -> bool:
-    """Assert the equivalence of *case*; returns True if it holds exactly, False if it holds modulo a reported gap."""
+    """Assert the equivalence of *case*; returns True if it holds exactly, False if it holds modulo the reported gap that
+    :data:`GAP_LINES` pins line by line (and that the render must report)."""
     assert case.shown is not None
     written, seen, pages = normalise(case.written, case.shown.text, case.tree)
     if case.tree.contents:
         assert pages, "the contents lists no page numbers"
         assert pages == sorted(pages) and pages[0] >= 1 and pages[-1] <= case.shown.pages, (pages, case.shown.pages)
     if written == seen:
+        assert (case.style, case.name) not in GAP_LINES, "the gap that was pinned is gone: remove it from GAP_LINES"
         return True
     assert case.rules & GAPS, f"the numbers differ and the render reports no gap:\n{difference(written, seen)}"
-    assert words(written) == words(seen), f"a gap changes numbers, not words:\n{difference(written, seen)}"
-    assert len(written) == len(seen), f"a gap changes numbers, not lines:\n{difference(written, seen)}"
+    assert len(written) == len(seen), f"a gap changes lines, not their number:\n{difference(written, seen)}"
+    differing = [(a, b) for a, b in zip(written, seen, strict=True) if a != b]
+    assert differing == GAP_LINES.get((case.style, case.name)), f"not the pinned gap:\n{difference(written, seen)}"
     return False
 
 
@@ -525,18 +539,12 @@ def edited_corpus() -> dict[str, tuple[Edited, ...]]:
 def test_the_document_follows_the_edits_a_lawyer_makes(style: str) -> None:
     """After a heading, an item, a nested item and a numbered paragraph are inserted and a clause is deleted, and the fields
     and indexes are updated, the document reads as the plain-text writer prints the source with the same edits: every number
-    and reference moved, the contents list the new heading. A document may differ only where its render reported a number
-    that is fixed in the file, and then the difference is in numbers alone."""
-    live = 0
+    and reference moved, the contents list the new heading. The text is equal, line for line, in every document: an edit
+    that reached a number fixed in the file (a restart by a fixed value) would show, and none does in this subset."""
     for case in edited_corpus()[style]:
         written, seen, _ = normalise(case.written, case.shown, case.after)
-        if written == seen:
-            live += 1
-            continue
-        fixed = case.rules & FIXED
-        assert fixed, f"{style}/{case.name}: not live after {[e.kind for e in case.edits]}:\n{difference(written, seen)}"
-        assert words(written) == words(seen), f"{style}/{case.name}:\n{difference(written, seen)}"
-    assert live >= 7, [(c.name, [e.kind for e in c.edits]) for c in edited_corpus()[style]]
+        assert written == seen, (f"{style}/{case.name}: not live after {[e.kind for e in case.edits]}:\n"
+                                 f"{difference(written, seen)}")
 
 
 @pytest.mark.libreoffice
@@ -568,11 +576,19 @@ def test_every_kind_of_edit_is_made_in_the_corpus() -> None:
 
 @pytest.mark.ooxml_schema
 @pytest.mark.parametrize("style", STYLES)
-def test_every_part_of_every_corpus_document_validates_and_a_second_render_is_the_same_bytes(style: str) -> None:
+def test_every_part_of_every_corpus_document_validates(style: str) -> None:
     require_schemas()
+    for name, source in documents().items():
+        made_ = rendered(source, style)
+        if made_ is not None:
+            assert validation_errors(made_[0]) == [], f"{style}/{name}"
+
+
+@pytest.mark.parametrize("style", STYLES)
+def test_rendering_a_corpus_document_twice_gives_the_same_bytes(style: str) -> None:
+    """Needs no tool but the corpus (marker ``acceptance`` alone: ``pytest -m acceptance`` runs it)."""
     for name, source in documents().items():
         first, second = rendered(source, style), rendered(source, style)
         assert (first is None) == (second is None), f"{style}/{name}"
         if first is not None and second is not None:
             assert first[0] == second[0], f"{style}/{name}: two renders differ"
-            assert validation_errors(first[0]) == [], f"{style}/{name}"

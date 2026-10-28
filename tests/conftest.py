@@ -64,8 +64,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Leave the DOCX acceptance corpus (marker ``acceptance``) out of a plain ``pytest`` run, which stays as quick as it
     was: it runs when a marker expression is given (``-m libreoffice``, as the DOCX job does), when
-    ``LEGALDOWN_ACCEPTANCE`` is set, or when a command-line argument names its file."""
-    if config.getoption("markexpr") or os.environ.get("LEGALDOWN_ACCEPTANCE") or any("acceptance" in a for a in config.args):
+    ``LEGALDOWN_ACCEPTANCE`` is set, or when a command-line argument is its file (``tests/test_docx_acceptance.py``,
+    with or without a ``::test``)."""
+    if config.getoption("markexpr") or os.environ.get("LEGALDOWN_ACCEPTANCE") or any(
+            Path(argument.split("::")[0]).name == "test_docx_acceptance.py" for argument in config.args):
         return
     dropped = [item for item in items if item.get_closest_marker("acceptance")]
     if dropped:
