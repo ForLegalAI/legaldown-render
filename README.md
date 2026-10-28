@@ -151,7 +151,7 @@ numbering definitions (headings by the heading styles, nested lists restarting b
 `{{ref: clause}}` is `REF` fields on bookmarks whose cached results are the text the plain-text writer prints, so
 "1(b)(ii)" or "I.A.1" stays right when a lawyer inserts a clause and updates fields. A defined term or an attachment
 reference is an internal link. A reference that Word's fields cannot reproduce is written as its text (it will not follow edits) and reported. Where Word cannot draw what the renderer does (letters past 26, a label that shows the
-section's number in a list item, alternatives that share a number, a list restarted by a fixed setting), the render
+section's number where the heading list cannot show it, a number restarted by a fixed value, a list restarted by a fixed setting), the render
 reports it as a `render-docx-*` Warning or Info with the line, see
 [the conformance notes](https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md). The body writer also
 lays out paragraphs, quotes, drafting notes, code, tables with a repeated header row, rules, links, blanks and

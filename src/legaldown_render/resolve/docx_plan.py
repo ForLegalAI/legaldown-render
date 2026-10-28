@@ -12,8 +12,11 @@ A plan holds the numbering definitions and the numbering of every unit, the book
 renderer's designation of the target covered by ``REF`` fields and the delimiters between them, with Word's value as
 each field's cached result; :mod:`.docx_cover`) and the entries of the table of contents (``toc``,
 ``UnitPlan.toc_bookmark``), with the diagnostics for what Word will not show as the renderer does.
-``UnitPlan.ind`` is never set. :func:`docx_style_errors` is the part that runs on every DOCX render, before it
-(ADR 0006).
+A label that needs the section's number is numbered on the heading abstractNum's level after the section's, and a list
+nested in such an item on its reserved levels (§13.2); a later alternative that shares a number (§15.8) is a ``numId 0``
+paragraph whose number is a field of the unit that holds it (``UnitPlan.alt``); a unit Word would count off the
+resolver's is restarted at a fixed value (``UnitPlan.ind`` is set for the units that carry an indent of their own).
+:func:`docx_style_errors` is the part that runs on every DOCX render, before it (ADR 0006).
 
 **Data model.** Frozen data only; the planner assigns bookmark *names*, never ids (the writer allocates those);
 names are valid Word bookmark names of at most 40 characters and unique ignoring case. All sequences are tuples, all
@@ -188,8 +191,12 @@ class UnitPlan:
     word_ref: str
     #: Word's counter value (None for an alternative, a bullet and an unnumbered unit).
     count: int | None
-    #: Why the unit is not on the plain path: ``resync``, ``alternative``, ``reserved-level``, ``restart-family``,
-    #: ``restart-section``, ``restart-alternative``, ``label-fallback``, ``clamped``, ``skipped-level``.
+    #: Why the unit is not on the plain path: ``resync`` (restarted at a fixed value), ``alternative`` (``numId`` 0),
+    #: ``reserved-level`` (a list nested in an item on the heading list, on one of its reserved levels),
+    #: ``restart-family`` / ``restart-section`` / ``restart-alternative`` (a nested list in a list of another kind, in
+    #: an item whose number carries the section, in an alternative: a num of its own that restarts by a fixed setting),
+    #: ``label-fallback`` (the label is written without a number Word cannot show there), ``clamped``,
+    #: ``skipped-level``.
     cause: tuple[str, ...]
     #: Names to wrap around the paragraph's title/first paragraph content: the bookmark of the unit's anchor when it
     #: has one, else a hidden one when a reference field points at it, else none.

@@ -88,6 +88,22 @@ ancestor, joined by the literals the reference templates give. Only when no cove
 planner fall back to one field on the target, with a warning. Under the `none` scheme a reference is
 a `REF` to the heading text.
 
+### Numbering the hard cases
+
+- **Items and paragraphs whose label needs the section** ("5.1" under `{section}.{n}`) go on the heading
+  list's level after their section's, where the level reads as the label does (`%1.%2`). Such an item has
+  no heading style, no outline level and so no entry in the table of contents. A list nested in one goes on
+  the heading list's levels 6 to 9 (headings have five), which are reserved for that: the level text is the
+  label's without the section (`%6)`), on the parent's num with no override, so the list restarts under every
+  new item and sibling lists go on counting, as in any list. Where the level after the section's reads
+  otherwise (the outline and mixed schemes, `none`), the label is written without the section and reported.
+- **Alternatives that share a number** (§15.8). Word cannot give two paragraphs one number on one level, except
+  by `numId 0` and a field: the later alternative is such a paragraph, with a `REF \n` field of the unit that
+  holds the number as its number. The units under it restart in a num of their own with a `startOverride`.
+- **A unit that Word would number off the resolver's** because it shares a counter with others of its
+  abstractNum (a sub-heading after the items of its section) is restarted at a fixed value and reported, so the
+  file is right when it is opened and a heading inserted or deleted before it in Word does not renumber it.
+
 ### Rejected alternatives
 
 - **python-docx** (0004's choice), for the reasons in point 2.
@@ -97,8 +113,9 @@ a `REF` to the heading text.
   produce "2.(a)" for an item of section 2 and "I.A.1.a.(i)" for an outline, not the designation the
   style asks for. The renderer composes the designation from `\n` fields instead.
 - **List items that need the section number ("5.1", "5.2" under `{section}`) on reserved deeper
-  levels of the heading list.** Word's levels are one hierarchy, so reserving levels 6 to 9 for items
-  changes how the headings above them count.
+  levels of the heading list.** The items would count on a level that is not the one after their
+  section's, and could not show the section's counters. Only the lists nested in such items use the reserved
+  levels 6 to 9, which no heading uses.
 - **`STYLEREF "Heading 1" \n` with a `SEQ` field** for the section prefix of those items. It works
   only in Word, cannot be tested in LibreOffice, and gives no number when the lawyer presses Enter in
   the middle of a list. The items instead go on the heading list's next level, which numbers them
@@ -110,8 +127,9 @@ a `REF` to the heading text.
 - A DOCX lawyers can edit: insert a clause, update fields (Word does it on open by default), and the
   numbers, references, table of contents and page numbers follow.
 - Some restarts cannot be kept live in Word and are documented and warned about, not prevented: a
-  nested list of another family than its parent, list items under `{section}` labels, and paragraph
-  numbering in a section the user adds. A lawyer who adds a parent item restarts such a list by hand.
+  nested list of another family than its parent, a list nested in an alternative, a unit restarted at a fixed
+  value because it shares a counter, and paragraph numbering in a section the user adds. A lawyer who adds a
+  parent item restarts such a list by hand.
 - Viewers that never update fields (Word Online, Quick Look, the Google Docs import, Outlook's
   preview) show the cached results, which are right, but the table of contents without page numbers.
 - Verification is part of the design: every part is validated against the schemas, the documents are

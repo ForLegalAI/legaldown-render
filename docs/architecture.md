@@ -271,16 +271,54 @@ ordered by line with the renderer's own) to the result's. The style check, `docx
   starts at that number by a fixed setting, which does not follow items added or removed before it.
 - A bullet counts nothing: one num serves every bullet list.
 - Paragraph numbering has one num per section, and a section added in Word does not restart it by itself.
+- Word has no way to give two paragraphs the same number on one level, except `numId 0` and a field: a paragraph with
+  a counter always counts. A unit that must read the number of the one before it (an alternative, §15.8) is a
+  `numId 0` paragraph that starts with a `REF \n` field of that unit.
 - `REF <bookmark> \n` returns the paragraph's level text with its counters, minus trailing periods.
 
 **What is planned.** Heading numbering (one multilevel abstractNum linked to the heading styles, the label templates
 turned into `lvlText`, the counters into `numFmt`), list families (enumerated, renumbered, bullets) with their nesting
 and restarts, depth beyond Word's nine levels (clamped to level 9 in that level's format), and numbered paragraphs.
-A level shows only counters of its own list. A label whose filled-in form shows the section's number (`{section}`,
-or the `{path}` of an item or paragraph in a section: the continental style's `5.1`), or a number of an enclosing
-item that Word cannot show (a list nested in another kind of list, or in a quote), is written without it and
-reported (`render-docx-section-label`). Alternatives that share a number are not planned yet (they are numbered in
-sequence and reported). `UnitPlan.ind` is the one part of the plan this leaves unset.
+A level of a list shows only counters of its own list, which settles where the rest of the planner puts things:
+
+- **Labels that need the section** (`{section}`, or the `{path}` of an item or paragraph in a section: the continental
+  style's `5.1`, the default style's numbered paragraphs `1.1`). Only the heading list can show the counters of a
+  section, so a unit whose label needs them goes on the heading abstractNum at the level after its section's
+  (`%1.%2` after a level-1 section), where the level reads exactly as the label does (`candidate` equals the heading
+  level; the first top-level list of the section gets one num with a `startOverride`, as every top-level list does).
+  Such an item is no heading: it has no heading style, no outline level and no entry in the table of contents, and
+  carries an indent of its own (`UnitPlan.ind`; a heading level's `w:ind` serves the heading). A list nested directly
+  in an item that is on the heading list goes on the heading abstractNum's **reserved levels**, level `4 + d` for
+  nesting depth `d` of 1 to 4, defined on first use with the label's text without the section (`%6)`, `%7)`), on the
+  same num as its parent with no override: it restarts by structure under every new item and sibling lists go on
+  counting, as in any other list. A level may be shared by units whose definitions are equal and is kept for the first
+  that needs it otherwise; the level after the fifth heading level is kept for a level-5 section's units when the
+  document has one, and a nested list then falls back. What does not fit (an outline or mixed scheme, where the
+  level after the section's reads otherwise; the `none` scheme, where the section's number is its text; a nested
+  item whose label shows the section; items in a quote; ordered and bullet lists nested in such an item; depth past
+  4) keeps the family's own abstractNum with the label written without the section and reported
+  (`render-docx-section-label`); the references still cover it.
+- **Alternatives that share a number** (§15.8). A unit that shares its number with the one before it and that Word
+  would number differently (the live number would continue) is a `numId 0` paragraph with its own indent that starts
+  with a `REF \n \h` field of the unit that holds the number now, then the label's text beyond what the field returns
+  (the period) and a tab or space (`UnitPlan.alt`, `ind`); that unit gets a bookmark, a `{{ref:}}` to the shared
+  identifier is a reference to the first alternative, and the table of contents shows the shared number for the later
+  one. The units under a later alternative restart in a num of their own with a `startOverride` (the sections after a
+  later alternative section until one of its level or above; a list nested in a later alternative item), because the
+  alternative counts nothing and Word would go on counting from the holder's children. A later alternative whose live
+  number is already right (the children of a later alternative section repeat the numbers of the first's) is numbered
+  live. Designations below an alternative are made of the holder's counters.
+- **Resynchronising.** A numbered unit that Word would number differently from the resolver for want of a place where it
+  can count by structure (it goes on a counter that other units of the same abstractNum have used) is put on a num with
+  a `startOverride` at its number, and the units after it go on counting on the original. This is a fixed value: a
+  heading or clause inserted or deleted in Word before it does not renumber it. It repairs a sub-heading after the
+  items and paragraphs of its section on the heading list (`1.1` for the sub-heading and for the first item share a
+  counter in Word and a designation in every output format: `render-docx-shared-counter` says so), a list that
+  resumes a sibling's count after another list in the same item, and a list past level 9.
+
+A label that shows a counter of a unit outside the unit's own chain (a quote's list inside an item of the preamble,
+whose label starts from the item; a list nested in another kind of list) is written with the counters Word has there
+and reported. Nothing is left to be shown by Word differently without a diagnostic.
 
 **Cross-references: the designation cover** (`resolve/docx_cover.py`, §6.3, §13.3). The renderer's text of a
 `{{ref:}}` is the designation of the target (`1.1.1`, `I.A.1.a(i)`, `1(b)(ii)`) inside `references.format`; the planner
@@ -324,7 +362,13 @@ heading under the `none` scheme): every other bookmark is a point at the start o
 a self-reference that Word cannot show and LibreOffice expands without end. Under the `none` scheme a heading whose
 title holds a reference that leads back to the heading, directly or through the titles of other headings, would have
 exactly that; the plan lists those references (`UnitPlan.literal_refs`, by target) and the writer writes them as
-their text, and `render-docx-reference-cycle` says so (the renderer already warns with `render-designation-cycle`).
+their text, and `render-docx-reference-cycle` says so, naming the heading's line (the renderer already warns with
+`render-designation-cycle`). The headings are the nodes of a graph, an edge for each heading whose text a field in
+another's title returns, and a reference in a title is a cycle exactly when such a field's heading is in the title's
+own strongly connected component (found once, iteratively: linear in the headings and references). The text a
+heading field returns is worked out from the runs, in the order the components complete: a reference in the title is
+the text of the fields it is written as (the cached results of other headings' fields), or its own text where it is
+written as text.
 
 **The table of contents.** `ContentsEntry.unit` (the section's unit; None for the attachments heading and an
 attachment) keys each entry of `tree.contents` to its section. `plan.toc` lists the entries in order with
@@ -335,15 +379,18 @@ complex `TOC` field that uses them is written with the title block.
 
 **Diagnostics** (all `render-docx-*`, with the line of the unit or of the reference, once per finding): `section-label`,
 `list-depth`, `letter-overflow` (Word repeats letters after 26, the renderer counts on: `aa`, `ab`), `roman-overflow`
-(4000 and beyond), `shared-counter` (a list that goes on from another, or whose level another list used in between,
-starts at a fixed number), `number-mismatch` (any other difference: the first unit of a run that Word counts off by the
-same amount, with how many follow; it does not occur without an alternative that shares a number), `reference` (a
+(4000 and beyond), `shared-counter` (a unit that goes on a counter of its abstractNum that others have used, so that it is restarted at
+its number, a fixed value that will not follow edits before it: a sub-heading that shares a designation with the
+items of its section, a list that goes on from another, a list whose level another used in between), `number-mismatch` (any
+other difference: the first unit of a run that Word counts off by the same amount, with how many follow; it is the
+catch-all of the planner and does not occur), `reference` (a
 cross-reference that cannot be built from fields, because a heading level is skipped before the target with a
 `{n}`-style scheme, or Word draws text around a counter that `\t` cannot drop (`({n})`, `{n}:`, `No. {n}`): it is
 written as fixed text; or one that reads differently in Word for a reason that no diagnostic of a unit already
 gives; references that fail alike are one finding), `reference-cycle` (a heading's title holds a reference that
 leads back to it: written as text), and, as information, `static-restart` (a list that restarts at 1 by a
-fixed setting) and `reference-word-only` (a cover relies on `\t`, which LibreOffice ignores, once per document). A
+fixed setting: nested in a list of another kind, in an item whose number is on the heading list but which the list
+cannot ride, or in an alternative that shares a number) and `reference-word-only` (a cover relies on `\t`, which LibreOffice ignores, once per document). A
 heading level that is skipped is the Core Error `heading-skip`; the plan only notes it on the unit.
 
 ### 5. Write (`writers/`)
@@ -583,7 +630,7 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_values.py` | Money, dates and durations in a locale: exact digits, plural of the value shown, currency display, CLDR fallback to English |
 | `tests/test_numbering.py` | Counter formats, label templates and the preamble's `{section}` |
 | `tests/test_numbering_structure.py` | The numbering structure in the tree (`formats`, unit ids, numbers, parents, alternatives, list families, cross-reference units): headings in each scheme and with skipped levels, nested lists, section-qualified items, numbered paragraphs, alternatives, the `none` scheme and its second pass; and that every label, designation and reference can be written again from the structure alone, over the tests' and the specification's documents |
-| `tests/test_docx_plan.py` | The DOCX plan: abstractNums per style and scheme, heading levels, top-level, nested, sibling, cross-family, quoted and clamped lists, numbered paragraphs, labels that need the section, letter and Roman overflow, diagnostics (lines, file, order, repeats, runs of units counted off), style errors (also through `docx_settings`), determinism; and, unit by unit, that Word's simulated count and label are the resolver's unless the unit's own counter reads differently in Word or the plan notes why, over the tests' and the specification's documents under each style and list setting, and over random documents and alternatives. Also the cross-references: the worked table of covers for each style (default, outline, mixed, continental, `none`, `Article {n}`, `§ {n}`), the cover algorithm on its own, references to other sections and to unnumbered units, `references.format`, every reason a reference cannot be covered, bookmark names (prefixes, length, collisions, hidden names, determinism), the table of contents, the render's diagnostics, and the property that every cached reference reads as the renderer's text or a diagnostic says why not, over the same documents and random documents with an anchor on every unit |
+| `tests/test_docx_plan.py` | The DOCX plan: abstractNums per style and scheme, heading levels, top-level, nested, sibling, cross-family, quoted and clamped lists, numbered paragraphs, labels that need the section and where they go (the heading list's levels, the reserved levels of lists nested in them, the fallback), alternatives that share a number (of sections, items and paragraphs, in twos and threes, with children), resynchronised units, letter and Roman overflow, diagnostics (lines, file, order, repeats, the catch-all that groups runs of units counted off), style errors (also through `docx_settings`), determinism; and, unit by unit, that Word's simulated count and label are the resolver's unless the unit's own counter reads differently in Word or the plan notes why, over the tests' and the specification's documents under each style and list setting, and over random documents and alternatives (each variant plans its own sample, and every unit is referred to by some document). Also the cross-references: the worked table of covers for each style (default, outline, mixed, continental, `none`, `Article {n}`, `§ {n}`), the cover algorithm on its own, references to other sections and to unnumbered units, `references.format`, every reason a reference cannot be covered, bookmark names (prefixes, length, collisions, hidden names, determinism), the table of contents, the components of the headings' graph of title references (and that a chain of thousands of headings is planned in linear time), the render's diagnostics, and the property that every cached reference reads as the renderer's text or a diagnostic says why not, over the same documents and random documents with an anchor on every unit |
 | `tests/test_docx_simulator.py` | Word's counters, label templates as tokens (equal to filling the template as text), `lvlText`, and the simulator: restarts, start overrides, shared counters, skipped levels, `peek`/`current` |
 | `tests/test_build.py` | Building the tree: comment-only items and quotes, emphasis next to a directive, spacing where an inline comment was dropped |
 | `tests/test_terms.py` | What `{{term:}}` shows, references inside terms, terms that name themselves or each other, the cap on a term text |
@@ -605,7 +652,8 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_docx_package.py` | The OOXML package: parts, relationships, content types, settings order, styles, page setup, headers and footers, properties, the body of a planned document, determinism, the sanitiser and builders, the API and command line |
 | `tests/test_docx_body.py` | The DOCX body from hand-made plans: numbering definitions, `w:numPr`/`w:ind`/alternatives, bookmarks and `REF` fields with cached results, hyperlinks, every inline and block, escaping, schema validity (marker `ooxml_schema`) and a LibreOffice round trip of headings, nested lists and references whose cached values are wrong on purpose (marker `libreoffice`) |
 | `tests/test_docx_escaping.py` | Well-formedness of every part for any text, with a seeded fuzz and the characters XML cannot carry |
+| `tests/test_docx_special.py` | What the planner's hard cases become in the file: the heading list's levels that hold items, the reserved levels of lists nested in them, and later alternatives as `numId 0`, `w:ind` and `REF` fields; and that documents with them validate against the schemas (marker `ooxml_schema`) |
 | `tests/test_docx_validation.py` | Every part of every generated document against the ISO/IEC 29500-4 schemas (marker `ooxml_schema`; needs lxml and `python tests/schemas/fetch.py`) |
-| `tests/test_docx_roundtrip.py` | LibreOffice as the oracle of the numbering and the cross-references, in one LibreOffice session: every document of the corpus (the tests', the specification's, stress documents with cycles and unanchored ancestors) under the default, outline, continental, mixed and `none` schemes, with every cached field result made wrong (`XXX`), every numbered paragraph marked and a line per reference added; the number LibreOffice draws, every reference it computes and every body paragraph's text equal what the file cached and the renderer wrote, modulo the gaps the plan reports (`\t` ignored, letters past 26, labels that need the section, alternatives; the table of contents is not written yet, so its entries and the `_Toc` bookmarks are not exercised); and edit-then-update (`tests/lo/uno_edit.py`): items and headings inserted before the targets as a lawyer does, fields updated, every reference and the numbers equal the renderer's for the edited source (marker `libreoffice`) |
+| `tests/test_docx_roundtrip.py` | LibreOffice as the oracle of the numbering and the cross-references, in one LibreOffice session: every document of the corpus (the tests', the specification's, stress documents with cycles and unanchored ancestors) under the default, outline, continental, mixed and `none` schemes, with every cached field result made wrong (`XXX`), every numbered paragraph marked and a line per reference added; the number LibreOffice draws, every reference it computes and every body paragraph's text equal what the file cached and the renderer wrote, modulo the gaps the plan reports (`\t` ignored, letters past 26, labels the heading list cannot show); alternatives are checked against the renderer (their `numId 0` number is the holder's, as fields), and so are the continental items on the heading list and the lists on its reserved levels; the table of contents is built by LibreOffice from a `TOC` field the test adds and must list the headings with the numbers the plan gives and none of the items; and edit-then-update (`tests/lo/uno_edit.py`, which inserts and deletes paragraphs): items, headings, a clause and a nested item inserted before the targets as a lawyer does, fields updated, every reference and the numbers equal the renderer's for the edited source (the new nested item under the continental style reads `a)`), and, for a sub-heading restarted by a fixed value, the plan's warning and what an edit before it keeps right (marker `libreoffice`) |
 | `tests/test_docx_libreoffice.py` | The documents opened in LibreOffice through UNO (`tests/lo/uno_export.py`), fields updated: the words in order, header, footer, page count (marker `libreoffice`; skipped without `soffice` and `python3-uno`) |
 | `tests/conformance/` | Every example and fixture in the specification repository renders, every internal link has a target, and each invalid fixture renders its rule's failure marker. Needs `$LEGALDOWN_SPEC_DIR` or a sibling `../LegalDown` checkout |

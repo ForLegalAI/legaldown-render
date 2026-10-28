@@ -519,6 +519,13 @@ def test_a_reserved_level_is_defined_on_first_use_and_only_when_it_is_used() -> 
     assert [level.lvl_text for level in nested.abstract_nums[0].levels[5:]] == ["%6)", "%7)", "%8", "%9"]
 
 
+def test_a_reserved_level_is_shared_by_every_list_that_reads_as_it_does() -> None:
+    tree, plan, diagnostics = planned("# A\n\n- x\n  - y\n\n# B\n\n- z\n  - w\n", style="continental")
+    _, y, _, w = items(tree)
+    assert (plan.units[y.unit].ilvl, plan.units[w.unit].ilvl) == (5, 5) and diagnostics == []
+    assert [level.lvl_text for level in plan.abstract_nums[0].levels[5:7]] == ["%6)", "%7"]
+
+
 def test_a_nested_label_that_shows_the_section_does_not_ride_the_reserved_levels() -> None:
     # depth 3 of the continental style is the first level's label again, {section}.{n}
     body = "# A\n\n- x\n  - y\n    - z\n      - w\n        - v\n"
@@ -1470,6 +1477,7 @@ COVERS = [
     # nested in an item is written "b)" and referred to as "(b)"
     ("continental", {"style": "continental"}, "i1", "1.1", "REF i1"),
     ("continental", {"style": "continental"}, "n2", "1.2(b)", 'REF i2 + "(" + REF n2'),
+    ("continental", {"style": "continental"}, "d1", "1.2(b)(i)", 'REF i2 + "(" + REF n2 + "(" + REF d1'),
     ("continental", {"style": "continental"}, "p1", "1(1)", "REF alpha + REF p1"),
     ("continental", {"style": "continental"}, "gamma", "1.1.1", "REF gamma"),
     # the none scheme: the text of the heading, then the pieces after a space

@@ -120,9 +120,14 @@ values appear only as the cached results of fields. Decided in
   and the table of contents is planned from Word's numbers; `render` runs the planner and reports its
   `render-docx-*` diagnostics. A LibreOffice round trip with wrong cached results checks the numbers and references
   against the plain-text oracle
-- **Next.** Qualified labels (the continental `5.1`) on the heading list, alternatives that share a number,
-  restarts Word would otherwise get wrong; the table of contents field, title block, attachments and signature
-  blocks; the corpus checked also after edits made through UNO; a manual Word checklist for releases
+- **Planner: qualified labels, alternatives and resynchronised numbers (done).** The continental `5.1` items and the
+  numbered paragraphs ride the heading list's level after their section's, and lists nested in them its reserved
+  levels, so they restart by structure; alternatives that share a number (§15.8) are `numId 0` paragraphs whose
+  number is a `REF` field of the first, with the units under them on a num of their own; a unit Word would count
+  off the resolver's is restarted at a fixed value and reported. Clauses and nested items inserted through UNO are
+  numbered as the renderer numbers them
+- **Next.** The table of contents field, title block, attachments and signature blocks; a manual Word checklist for
+  releases
 
 ### v0.6 — PDF
 
