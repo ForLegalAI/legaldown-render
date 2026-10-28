@@ -121,16 +121,6 @@ class RenderResult:
         return not any(diagnostic.level == "error" for diagnostic in self.diagnostics)
 
 
-def _interim_warning(filename: str) -> Diagnostic:
-    """The Warning that DOCX output is not complete yet: the writer does not yet write the title block, the
-    table of contents, the attachments or the signature blocks. It goes when the body is complete."""
-    return Diagnostic(
-        rule="render-docx-interim", level="warning", file=filename,
-        message="DOCX output is incomplete in this version: the title block, the table of contents, the "
-                "attachments and the signature blocks are not written yet (the numbering and the "
-                "cross-references are). Do not use the file as the finished document.")
-
-
 def render(source: str, options: RenderOptions | None = None, /, **settings: Any) -> RenderResult:
     """Render LegalDown *source*.
 
@@ -195,7 +185,6 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
         raise RenderRefused(diagnostics)
 
     if plan is not None:
-        diagnostics.append(_interim_warning(document.filename))
         written: str | bytes = writer.write(tree, plan)
     else:
         written = writer.write(tree)

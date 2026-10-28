@@ -156,7 +156,10 @@ def test_the_styles_the_body_and_word_need_exist_under_the_names_word_knows() ->
         "TOC3": "toc 3", "TOC4": "toc 4", "TOC5": "toc 5", "Hyperlink": "Hyperlink", "InlineCode": "Inline Code",
         "DefinedTerm": "Defined Term", "TermReference": "Term Reference", "Blank": "Blank", "Choice": "Choice",
         "FailureMarker": "Failure Marker", "ConditionLabel": "Condition Label",
-        "DraftingNoteLabel": "Drafting Note Label"}
+        "DraftingNoteLabel": "Drafting Note Label", "TitleBlockText": "Title Block Text",
+        "PartySide": "Party Side", "PartyName": "Party Name", "AttachmentsHeading": "Attachments Heading",
+        "AttachmentTitle": "Attachment Title", "AttachmentFile": "Attachment File",
+        "SignatureSide": "Signature Side", "SignatureText": "Signature Text", "SignatureLine": "Signature Line"}
     assert by_id["Normal"].get(f"{W}default") == "1"
     assert by_id["TableGrid"].get(f"{W}type") == "table"
     assert by_id["Hyperlink"].get(f"{W}type") == "character"
@@ -409,8 +412,10 @@ def test_the_body_without_a_plan_has_the_title_headings_and_text_and_no_numbers(
     body = xml(contents["word/document.xml"]).find(f"{W}body")
     styles_used = [(p.find(f"{W}pPr/{W}pStyle").get(f"{W}val") if p.find(f"{W}pPr/{W}pStyle") is not None else None,
                     texts(p)[0]) for p in body.iter(f"{W}p")]
-    assert styles_used[:5] == [("Title", "Services Agreement"), ("Subtitle", "A subtitle"), (None, "Preamble text."),
-                               ("Heading1", "First"), (None, "Body one.")]
+    # the header row of the title block (effective date, in Czech) comes between the subtitle and the preamble
+    assert styles_used[:7] == [("Title", "Services Agreement"), ("Subtitle", "A subtitle"),
+                               ("TitleBlockText", "Datum účinnosti"), ("TitleBlockText", "4. března 2026"),
+                               (None, "Preamble text."), ("Heading1", "First"), (None, "Body one.")]
     assert ("Heading2", "Nested") in styles_used
     assert (None, "item a") in styles_used and ("Quote", "quoted") in styles_used
     assert [text for style, text in styles_used if style == "Code"] == ["code 1", "code 2"]
@@ -615,21 +620,17 @@ def test_render_file_renders_docx(tmp_path: Path) -> None:
     assert render_file(source, format="docx").binary == render(SOURCE, format="docx").binary
 
 
-def test_diagnostics_are_the_other_formats_plus_the_interim_warning() -> None:
+def test_diagnostics_are_the_other_formats_plus_the_planners() -> None:
     document = (DOCUMENTS / "features.lgd").read_text(encoding="utf-8")
     docx_result = render(document, format="docx").diagnostics
-    assert docx_result[:-1] == render(document, format="text").diagnostics
-    warning = docx_result[-1]
-    assert (warning.rule, warning.level, warning.file) == ("render-docx-interim", "warning", "")
-    assert warning.message.startswith("DOCX output is incomplete in this version:")
+    assert [d for d in docx_result if not d.rule.startswith("render-docx")] == render(document, format="text").diagnostics
+    assert "render-docx-interim" not in {d.rule for d in docx_result}
 
 
-def test_the_interim_warning_is_one_warning_that_does_not_refuse_under_strict() -> None:
+def test_a_clean_document_has_no_docx_diagnostics_and_does_not_refuse_under_strict() -> None:
     result = render(FRONT + "# A\n", format="docx", strict=True, filename="d.lgd")
-    assert [(d.rule, d.file) for d in result.diagnostics if d.rule.startswith("render-")] == [
-        ("render-docx-interim", "d.lgd")]
+    assert [d for d in result.diagnostics if d.rule.startswith("render-docx")] == []
     assert result.ok
-    assert not [d for d in render(FRONT + "# A\n", format="html").diagnostics if d.rule == "render-docx-interim"]
 
 
 def test_the_planners_findings_follow_the_renderers_in_the_order_of_their_lines_with_the_documents_file() -> None:
@@ -637,7 +638,7 @@ def test_the_planners_findings_follow_the_renderers_in_the_order_of_their_lines_
     result = render(source, format="docx", filename="deal.lgd")
     text = render(source, format="text", filename="deal.lgd").diagnostics
     assert [d.rule for d in result.diagnostics] == [
-        *(d.rule for d in text), "render-docx-letter-overflow", "render-docx-interim"]
+        *(d.rule for d in text), "render-docx-letter-overflow"]
     assert result.diagnostics[:len(text)] == text and {d.file for d in result.diagnostics} == {"deal.lgd"}
     assert "ref-broken" in {d.rule for d in text}
 
@@ -646,16 +647,8 @@ def test_the_planners_findings_are_ordered_with_the_renderers_own_by_line() -> N
     source = FRONT + "# A\n\n" + "- r\n" * 30 + "\nA [link](javascript:alert) here.\n"
     result = render(source, format="docx")
     found = [(d.rule, d.line) for d in result.diagnostics if d.rule.startswith("render-")]
-    assert [rule for rule, _ in found] == ["render-docx-letter-overflow", "render-link-refused", "render-docx-interim"]
-    assert found[0][1] < found[1][1] and found[2][1] is None
-
-
-def test_the_interim_warning_names_what_is_still_missing() -> None:
-    warning = render(FRONT + "# A\n", format="docx").diagnostics[-1]
-    assert warning.rule == "render-docx-interim"
-    for missing in ("title block", "table of contents", "attachments", "signature blocks"):
-        assert missing in warning.message
-    assert "carry no numbers" not in warning.message
+    assert [rule for rule, _ in found] == ["render-docx-letter-overflow", "render-link-refused"]
+    assert found[0][1] < found[1][1]
 
 
 def test_the_writer_gets_the_plan_the_render_reported_on() -> None:
@@ -853,9 +846,9 @@ GOLDEN = {
     '_rels/.rels': 'd6f21829c0081670bdb417d3e3f644b81134a121e074fb153c7686faaa8b167b',
     'docProps/core.xml': '159ed0e537106ab29739fd357a5f6d89a2c0b0154daefd4c13d878bd16dff47e',
     'docProps/app.xml': 'b285204d159fd58da80b6a0242cef523448f9c3a598b357b15faf4627160dcc3',
-    'word/document.xml': 'fe9fef7508bd6260d6c6fb707080e5e6ef8987d26e4a0088933c8cd19ce664a4',
+    'word/document.xml': '39cbe0403104ccefefb9b936e3e432b266d651e54628873ff2d71a57dde798c8',
     'word/_rels/document.xml.rels': 'ada136c2e7d05a317579c9503c1f0dd8dfaa8f0cce687df86fe59e36d5fa5d57',
-    'word/styles.xml': 'cdb4ca1d3be44bd27761763c040ee637516ed7aa7cf995e2cc0b60cc80d7f8ac',
+    'word/styles.xml': '5c6b9461b055c8c123fbb8e57385fffb2effe991107316ba065da778854d0862',
     'word/numbering.xml': '368f179b5e26a34c1f23db597966dfd96b43dc96801a9a7ded728c379db07f59',
     'word/settings.xml': 'b3c72bc5720862c1a9c1449d89903673777f30df6ff38ceb23da73e21cad22e1',
     'word/footer1.xml': 'e693781f92e5a7ccf747fd2ed3facb627e448f389b021882cac589d746aa709b',
