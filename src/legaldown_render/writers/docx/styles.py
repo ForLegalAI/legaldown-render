@@ -295,6 +295,8 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                run=[el("color", {"val": _FAILURE_TEXT}), _shade(_FAILURE_FILL)]),
         _style(CONDITION_LABEL, "Condition Label", kind="character", priority=38, custom=True,
                run=[el("color", {"val": _CONDITION_TEXT}), _size(half_points(0.8)), _shade(_CONDITION_FILL)]),
+        _style(TITLE_BLOCK_LABEL, "Title Block Label", kind="character", priority=41, custom=True,
+               run=[el("i"), el("iCs")]),
         _style(DRAFTING_NOTE_LABEL, "Drafting Note Label", kind="character", priority=40, custom=True,
                run=[el("b"), el("bCs"), _size(half_points(0.9))]),
     ]

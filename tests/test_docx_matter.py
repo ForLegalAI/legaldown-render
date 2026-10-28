@@ -548,6 +548,44 @@ def test_the_attachments_listed_in_the_contents_carry_its_bookmarks() -> None:
     assert len(set(bookmark_names(root))) == len(bookmark_names(root))
 
 
+BAD_ATTACHMENTS = {
+    "no ids": "  - {title: NoId, file: a.lgd}\n  - {title: NoId2, file: b.lgd}\n",
+    "a duplicate id": "  - {id: x, title: A}\n  - {id: x, title: B}\n",
+    "an id that is a section's": "  - {id: a, title: A}\n  - {id: a, title: B}\n",
+}
+
+
+@pytest.mark.parametrize("which", BAD_ATTACHMENTS)
+@pytest.mark.parametrize("overrides", [{}, {"labels.attachments": ""}, {"contents.depth": 1}])
+def test_attachments_without_a_usable_id_are_still_written_and_listed(which: str, overrides: dict[str, Any]) -> None:
+    """Attachments with no id, or an id another has (validator Errors: the document still renders), have no anchor of their
+    own: the contents lists each by position, and no bookmark is written twice."""
+    source = ("---\nlegaldown: '0.2'\ntitle: T\nattachments:\n" + BAD_ATTACHMENTS[which]
+              + "---\n\n# A {#a}\n\nSee {{attach: x}}.\n")
+    result = render(source, format="docx", overrides={"contents.enabled": True, **overrides})
+    assert result.binary is not None
+    root = document_xml(result.binary)
+    names = bookmark_names(root)
+    assert len(names) == len({n.lower() for n in names})
+    assert len(paragraphs(result.binary, "AttachmentTitle")) == 2
+    toc = [text_of(p).rstrip("\t") for p in toc_paragraphs(result.binary)]
+    assert toc[-2:] == [text_of(p) for p in paragraphs(result.binary, "AttachmentTitle")]
+    anchors = [p.find(f"{W}hyperlink").get(f"{W}anchor") for p in toc_paragraphs(result.binary)]  # type: ignore[union-attr]
+    assert set(anchors) <= set(names)
+    if schema_available():
+        assert validation_errors(result.binary) == []
+
+
+def schema_available() -> bool:
+    from docx_support import schema_directory
+
+    try:
+        import lxml  # noqa: F401
+    except ImportError:
+        return False
+    return schema_directory() is not None
+
+
 # -- Signature blocks ------------------------------------------------------------------------------------------
 
 
@@ -651,7 +689,8 @@ def hostile_document(rnd: random.Random) -> str:
              "sides": [{"name": f"s{i}", "label": soup(rnd, 8) + "l", "parties": [party(i * 3 + j) for j in range(2)]}
                        for i in range(2)],
              "attachments": [{"id": f"a{i}", "title": soup(rnd, 15) + "t", "file": soup(rnd, 10) + "f"}
-                             for i in range(3)]}
+                             for i in range(3)] + [{"title": soup(rnd, 6) + "n"}, {"id": "a1", "title": soup(rnd, 6) + "d"},
+                                                   {"id": "h1", "title": soup(rnd, 6) + "s"}]}
     return (f"---\n{yaml.safe_dump(front, allow_unicode=True)}---\n\n{soup(rnd, 20)}\n\n# {soup(rnd, 15)} {{#h1}}\n\n"
             f"{soup(rnd, 30)} {{{{attach: a1}}}}\n\n## {soup(rnd, 10)}\n\ntext\n")
 
@@ -736,6 +775,7 @@ def shown() -> dict[str, Exported]:
     contents = {"contents.enabled": True, "contents.depth": 3}
     documents = {
         "master": docx(FRONT, overrides=contents),
+        "depth1": docx(FRONT, overrides={"contents.enabled": True, "contents.depth": 1}),
         "features": docx(features, overrides=contents),
         "template": docx(template, style="continental", overrides=contents),
         "long_break": docx(LONG, overrides={"contents.enabled": True}),
@@ -758,12 +798,19 @@ def test_the_contents_lists_exactly_the_html_entries(shown: dict[str, Exported])
                                                                                   "contents.depth": 3})
     assert toc_lines(shown["master"]) == expected_entries(FRONT, overrides={"contents.enabled": True,
                                                                              "contents.depth": 3})
+    assert toc_lines(shown["depth1"]) == expected_entries(FRONT, overrides={"contents.enabled": True,
+                                                                             "contents.depth": 1})
     # An alternative that shares a number (§15.8) is numbered in sequence by LibreOffice until the planner keeps it
-    # on the first one's number: the titles are the contents' either way.
+    # on the first one's number, and the entries after it are numbered one more: the numbers are the contents' up to
+    # the first alternative, the titles are the contents' throughout.
     template = (DOCUMENTS / "template.lgd").read_text(encoding="utf-8")
-    drawn = [line.split(" ", 1)[1] for line in toc_lines(shown["template"])]
-    entries = expected_entries(template, style="continental", overrides={"contents.enabled": True, "contents.depth": 3})
-    assert drawn == [line.split(" ", 1)[1] for line in entries]
+    settings = {"style": "continental", "overrides": {"contents.enabled": True, "contents.depth": 3}}
+    result = render(template, format="text", **settings)
+    sharing = {section.unit for section in result.tree.sections if section.shares_number_with}
+    first_alternative = next(i for i, e in enumerate(result.tree.contents) if e.unit in sharing)
+    drawn, entries = toc_lines(shown["template"]), expected_entries(template, **settings)
+    assert drawn[:first_alternative] == entries[:first_alternative]
+    assert [line.split(" ", 1)[1] for line in drawn] == [line.split(" ", 1)[1] for line in entries]
 
 
 @pytest.mark.libreoffice
@@ -772,6 +819,29 @@ def test_page_numbers_appear_after_the_update(shown: dict[str, Exported]) -> Non
     assert len(pages) == len(toc_lines(shown["master"])) and all(p >= 1 for p in pages)
     assert pages == sorted(pages)
     assert max(pages) <= shown["master"].pages
+    # Where the pages are known: the long document's six headings of about a page each run in order from page 1, and
+    # the attachments after them end the document.
+    long = shown["long_break"]
+    by_title = dict(zip(toc_lines(long), toc_pages(long), strict=True))
+    headings = [by_title[f"{n + 1}. Heading {n}"] for n in range(6)]
+    assert headings[0] == 1 and all(0 <= b - a <= 1 for a, b in zip(headings, headings[1:], strict=False))
+    assert headings[-1] > headings[0] and by_title["Attachments"] > headings[-1]
+    assert by_title["Third"] == long.pages == by_title["Attachments"] + 2
+
+
+@pytest.mark.libreoffice
+def test_the_cached_contents_reads_right_before_any_update() -> None:
+    """The entries in the file are what the HTML shows, so a viewer that never updates fields shows them (without page
+    numbers, which Word computes)."""
+    require_libreoffice()
+    settings = {"overrides": {"contents.enabled": True, "contents.depth": 3}}
+    template = (DOCUMENTS / "features.lgd").read_text(encoding="utf-8")
+    for source in (FRONT, template):
+        cached = libreoffice_export({"cached": docx(source, **settings)}, update=False)["cached"]
+        lines = cached.text.splitlines()
+        start = lines.index("Contents") + 1
+        entries = lines[start:lines.index("", start)]
+        assert [" ".join(line.split()) for line in entries] == expected_entries(source, **settings)
 
 
 @pytest.mark.libreoffice
@@ -852,7 +922,7 @@ def test_a_heading_inserted_in_the_editor_is_listed_once_the_contents_is_updated
 #: depend on the zlib). When the matter changes on purpose, run this test, review the change, and replace the digests.
 MATTER_GOLDEN = {
     "word/document.xml": "d67511803cd53640fbd96c3c2f6531cc5cf649158c7f56a0d0681db4da5c1b98",
-    "word/styles.xml": "6ccea95d23325c1d13fd3f11d953567df2ce075bbb00f0f537cac57939c6dcfc",
+    "word/styles.xml": "458e86ca2ad045ce3a714a7e5ba7f3c714e8ab41edf35afb754611046c082d98",
 }
 
 
@@ -863,3 +933,37 @@ def test_the_matter_of_a_fixed_document_is_what_it_was() -> None:
                      .write(render(FRONT, format="text", overrides={"contents.enabled": True}).tree))
     digests = {name: hashlib.sha256(contents[name]).hexdigest() for name in MATTER_GOLDEN}
     assert digests == MATTER_GOLDEN, "\n".join(f'    "{name}": "{digest}",' for name, digest in digests.items())
+
+
+def used_styles(data: bytes) -> dict[str, set[str]]:
+    """The paragraph, character and table styles the parts of the document use, by kind."""
+    used: dict[str, set[str]] = {"pStyle": set(), "rStyle": set(), "tblStyle": set()}
+    for name, content in parts(data).items():
+        if name.startswith("word/") and name.endswith(".xml") and name != "word/styles.xml":
+            for node in ET.fromstring(content).iter():
+                local = node.tag.removeprefix(W)
+                if local in used:
+                    used[local].add(node.get(f"{W}val"))  # type: ignore[arg-type]
+    return used
+
+
+@pytest.mark.parametrize("settings", [
+    {"overrides": {"contents.enabled": True, "contents.depth": 5}},
+    {"style": "continental", "overrides": {"contents.enabled": True, "title_block.version": True}},
+])
+@pytest.mark.parametrize("name", ["master", "features", "template"])
+def test_every_style_a_document_uses_is_defined(name: str, settings: dict[str, Any]) -> None:
+    source = FRONT if name == "master" else (DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8")
+    data = docx(source, **settings)
+    defined = {s.get(f"{W}styleId"): s.get(f"{W}type") for s in ET.fromstring(parts(data)["word/styles.xml"]).iter(f"{W}style")}
+    used = used_styles(data)
+    assert used["pStyle"] and used["rStyle"]
+    for kind, expected in (("pStyle", "paragraph"), ("rStyle", "character"), ("tblStyle", "table")):
+        for style in used[kind]:
+            assert defined.get(style) == expected, f"{kind} {style} is not a defined {expected} style"
+
+
+def test_the_title_block_labels_are_italic() -> None:
+    styles = {s.get(f"{W}styleId"): s for s in ET.fromstring(parts(docx())["word/styles.xml"]).iter(f"{W}style")}
+    label = styles["TitleBlockLabel"]
+    assert label.get(f"{W}type") == "character" and label.find(f"{W}rPr/{W}i") is not None

@@ -156,7 +156,7 @@ def test_the_styles_the_body_and_word_need_exist_under_the_names_word_knows() ->
         "TOC3": "toc 3", "TOC4": "toc 4", "TOC5": "toc 5", "Hyperlink": "Hyperlink", "InlineCode": "Inline Code",
         "DefinedTerm": "Defined Term", "TermReference": "Term Reference", "Blank": "Blank", "Choice": "Choice",
         "FailureMarker": "Failure Marker", "ConditionLabel": "Condition Label",
-        "DraftingNoteLabel": "Drafting Note Label", "TitleBlockText": "Title Block Text",
+        "DraftingNoteLabel": "Drafting Note Label", "TitleBlockText": "Title Block Text", "TitleBlockLabel": "Title Block Label",
         "PartySide": "Party Side", "PartyName": "Party Name", "AttachmentsHeading": "Attachments Heading",
         "AttachmentTitle": "Attachment Title", "AttachmentFile": "Attachment File",
         "SignatureSide": "Signature Side", "SignatureText": "Signature Text", "SignatureLine": "Signature Line"}
@@ -848,7 +848,7 @@ GOLDEN = {
     'docProps/app.xml': 'b285204d159fd58da80b6a0242cef523448f9c3a598b357b15faf4627160dcc3',
     'word/document.xml': '39cbe0403104ccefefb9b936e3e432b266d651e54628873ff2d71a57dde798c8',
     'word/_rels/document.xml.rels': 'ada136c2e7d05a317579c9503c1f0dd8dfaa8f0cce687df86fe59e36d5fa5d57',
-    'word/styles.xml': '5c6b9461b055c8c123fbb8e57385fffb2effe991107316ba065da778854d0862',
+    'word/styles.xml': 'eec93405688edd872f0c341deeea171d8c5b72a6c83aeea3ff8cd01646c78bc1',
     'word/numbering.xml': '368f179b5e26a34c1f23db597966dfd96b43dc96801a9a7ded728c379db07f59',
     'word/settings.xml': 'b3c72bc5720862c1a9c1449d89903673777f30df6ff38ceb23da73e21cad22e1',
     'word/footer1.xml': 'e693781f92e5a7ccf747fd2ed3facb627e448f389b021882cac589d746aa709b',

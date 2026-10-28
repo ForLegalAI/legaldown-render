@@ -113,11 +113,16 @@ class MatterWriter:
         if tree.contents and len(tree.contents) != len(plan.toc):
             raise InternalError("the plan's table of contents does not hold the entries of the tree's "
                                 "(a bug in the DOCX plan)")
-        #: The ``_Toc`` name of the contents entries that list the attachments heading and an attachment, by anchor
-        #: (a section's is the plan's ``UnitPlan.toc_bookmark``, written with its heading).
-        self._toc_of: dict[str, str] = {
-            entry.anchor: planned.bookmark for entry, planned in zip(tree.contents, plan.toc, strict=False)
-            if entry.unit is None and entry.anchor}
+        #: The ``_Toc`` names of the contents entries that are not a section's (a section's is the plan's
+        #: ``UnitPlan.toc_bookmark``, written with its heading), in order: the attachments heading when the style
+        #: gives it a label, then one per attachment. Paired by position, not by anchor: an attachment with no id
+        #: or the same id as another (validator Errors, still rendered) has no anchor of its own.
+        self._toc_of = [planned.bookmark for entry, planned in zip(tree.contents, plan.toc, strict=False)
+                        if entry.unit is None]
+        wanted = (1 if tree.attachments_label else 0) + len(tree.attachments)
+        if self._toc_of and len(self._toc_of) != wanted:
+            raise InternalError("the table of contents does not list the attachments heading and each attachment "
+                                "(a bug in the DOCX plan)")
 
     # -- header rows and parties ----------------------------------------------------------
 
@@ -243,6 +248,7 @@ class MatterWriter:
         if not tree.attachments:
             return []
         content: list[ET.Element] = []
+        toc = list(self._toc_of)
         separator = self.settings.separator
         # The page break goes before the first thing of the part, whichever that is, and before every title after the
         # first: the heading stays with the first attachment.
@@ -250,7 +256,7 @@ class MatterWriter:
         level = 1
         if tree.attachments_label:
             level = 2
-            names = self._names(tree.attachments_anchor)
+            names = self._names(tree.attachments_anchor, toc.pop(0) if toc else None)
             content.append(p(self.inlines.wrap(names, [text_run(tree.attachments_label)]) if names
                              else text_run(tree.attachments_label),
                              style=ATTACHMENTS_HEADING,
@@ -258,20 +264,22 @@ class MatterWriter:
                                     self._outline(1)]))
             breaking = False
         for attachment in tree.attachments:
-            content += self._attachment(attachment, level, page_break=breaking, rule=separator == "rule")
+            content += self._attachment(attachment, level, toc.pop(0) if toc else None, page_break=breaking,
+                                        rule=separator == "rule")
             breaking = separator == "page-break"
         return content
 
-    def _names(self, anchor: str | None) -> list[str]:
-        """The bookmarks of an attachments paragraph: the plan's name for its anchor, and the contents
-        entry's ``_Toc``."""
-        names = [self.plan.anchors[anchor]] if anchor and anchor in self.plan.anchors else []
-        if anchor and anchor in self._toc_of:
-            names.append(self._toc_of[anchor])
-        return names
+    def _names(self, anchor: str | None, toc: str | None) -> list[str]:
+        """The bookmarks of an attachments paragraph: the plan's name for its *anchor*, unless the document already
+        holds a bookmark of that name (a second attachment with the same id, or an id that is a section's), and
+        the contents entry's ``_Toc`` name *toc*."""
+        name = self.plan.anchors.get(anchor) if anchor else None
+        names = [name] if name is not None and name.lower() not in self.bookmarks.names else []
+        return [*names, *([toc] if toc else [])]
 
-    def _attachment(self, attachment: AttachmentPart, level: int, *, page_break: bool, rule: bool) -> list[ET.Element]:
-        names = self._names(attachment.anchor)
+    def _attachment(self, attachment: AttachmentPart, level: int, toc: str | None, *, page_break: bool,
+                    rule: bool) -> list[ET.Element]:
+        names = self._names(attachment.anchor, toc)
         title = self.inlines.runs(attachment.title)
         shown = self.inlines.wrap(names, title) if names else title
         if attachment.condition_label:
