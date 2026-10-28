@@ -1911,19 +1911,20 @@ def references_of(tree: RenderTree, plan: DocxPlan) -> list[tuple[str, str, bool
             for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)]
 
 
-def test_a_skipped_heading_level_leaves_a_part_of_the_designation_no_field_stands_for() -> None:
+def test_a_skipped_heading_level_is_the_one_part_of_a_reference_that_is_written_as_text() -> None:
     body = "# A {#a}\n\n### B {#b}\n\nSee {{ref: b}}.\n"
     tree, plan, diagnostics = planned(body, style="outline")
-    # no field can stand for the missing level: the reference is the renderer's text, right now and not a field
-    assert references_of(tree, plan) == [("I.A.1", '"I.A.1"', True)] and plan.refs["s2"].fixed
+    # no unit holds the number of the level the document skips (an error, §4.1), so it is text between two fields
+    assert references_of(tree, plan) == [("I.A.1", 'REF a + ".A." + REF b', True)]
+    assert plan.refs["s2"].ghost and not plan.refs["s2"].fixed
     [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
     assert found.level == "warning" and found.line == tree.sections[1].blocks[0].line
-    assert found.message.startswith("The cross-reference 'I.A.1' cannot be built from Word's numbering fields: a "
-                                    "heading level is skipped before it")
-    assert "written as the text 'I.A.1'" in found.message and "not a field" in found.message
+    assert found.message.startswith("The cross-reference 'I.A.1' holds the number of a heading level that the document skips")
+    assert "'A' is written as text there and will not follow edits made in Word; the rest is made of fields" in found.message
     # the decimal scheme writes the whole number in the heading's own field, so nothing is missing there
     tree, plan, diagnostics = planned(body)
-    assert references_of(tree, plan) == [("1.1.1", "REF b", True)] and not diagnostics and not plan.refs["s2"].fixed
+    assert references_of(tree, plan) == [("1.1.1", "REF b", True)] and not diagnostics
+    assert not plan.refs["s2"].fixed and not plan.refs["s2"].ghost
 
 
 def test_text_around_a_counter_that_word_cannot_drop_leaves_the_reference_as_one_field() -> None:
@@ -2222,9 +2223,9 @@ def test_references_that_fail_in_the_same_way_are_one_finding_naming_the_first_a
     body = "# A {#a}\n\n### B {#b}\n\n### C {#c}\n\n# D {#d}\n\n### E {#e}\n\n{{ref: b}} {{ref: c}} {{ref: e}}\n"
     tree, plan, diagnostics = planned(body, style="outline")
     found = [d for d in diagnostics if d.rule == "render-docx-reference"]
-    assert len(found) == 1 and found[0].message.startswith("The cross-reference 'I.A.1' cannot be built")
-    assert found[0].message.endswith(" 2 more cross-references fail in the same way.")
-    assert all(plan.refs[t].fixed for t in ("s2", "s3", "s5"))
+    assert len(found) == 1 and found[0].message.startswith("The cross-reference 'I.A.1' holds the number")
+    assert found[0].message.endswith(" 2 more cross-references are written the same way.")
+    assert all(plan.refs[t].ghost for t in ("s2", "s3", "s5"))
     assert found[0].line == tree.sections[-1].blocks[-1].line  # the lowest line of the three: all in one paragraph
 
 
@@ -2260,14 +2261,26 @@ def test_a_field_fits_where_the_counters_belong_to_the_same_units_whatever_their
     designation = [Count("a", "ab")]
     assert cover(designation, [field("a", Count("a", "bb"))]) == [field("a", Count("a", "bb"))]
     assert cover(designation, [field("a", Count("other", "ab"))]) is None
-    assert cover([Count(Ghost("s2", 1), "1")], [field("s2", Count("s2", "1"))]) is None
 
 
 def test_the_atom_nothing_can_stand_for_is_found() -> None:
-    designation = [Count("a", "I"), Lit("."), Count(Ghost("s2", 1), "1"), Lit("."), Count("b", "1")]
+    designation = [Count("a", "I"), Lit("."), Count("c", "1"), Lit("."), Count("b", "1")]
     fields = [field("a", Count("a", "I")), field("b", Count("b", "1"))]
     assert cover(designation, fields) is None and uncovered(designation, fields) == 2
     assert uncovered([Count("a", "I")], fields) is None
+
+
+def test_the_counter_of_a_skipped_heading_level_is_literal_text_since_no_unit_holds_it() -> None:
+    ghost = Count(Ghost("s2", 1), "A")
+    designation = [Count("a", "I"), Lit("."), ghost, Lit("."), Count("b", "1")]
+    fields = [field("a", Count("a", "I")), field("b", Count("b", "1"))]
+    assert cover(designation, fields) == [fields[0], ".A.", fields[1]]
+    # a field that returns the ghost's text covers it too (the decimal scheme's number holds every level's counter)
+    whole = field("b", Count("a", "1"), Lit("."), Count(Ghost("s2", 1), "1"), Lit("."), Count("b", "1"))
+    assert cover([Count("a", "1"), Lit("."), Count(Ghost("s2", 1), "1"), Lit("."), Count("b", "1")], [whole]) == [whole]
+    assert uncovered(designation, fields) is None
+    # any other counter that no field returns is still not literal text
+    assert cover([Count("a", "I"), Lit("."), Count("c", "A")], fields) is None
 
 
 def test_the_switch_that_drops_text_is_modelled_only_where_its_result_is_known() -> None:
@@ -2488,8 +2501,12 @@ def assert_references_as_resolved(result, plan, diagnostics) -> None:  # noqa: A
     templates = [f.ref for f in (*tree.formats.headings, *tree.formats.enumerated, tree.formats.renumber,
                                  tree.formats.paragraphs) if f is not None]
     delimiters_only = not any(c.isalnum() for t in templates for c in re.sub(r"\{(n|path|section)\}", "", t))
+    # The one counter a cover may write as text is that of a heading level the document skips (a Core error), which no
+    # unit holds: it reads as the first counter of that level.
+    skipping = any("skipped-level" in u.cause for u in plan.units.values())
+    ghost_text = {c for level in tree.formats.headings for c in format_counter(1, level.counter)}
     needing_a_finding = 0
-    fixed = 0
+    fixed = ghosts = 0
     for target, text in texts.items():
         reference = plan.refs[target]
         assert all(s.bookmark in marked for s in reference.segments if isinstance(s, FieldSeg))
@@ -2502,9 +2519,11 @@ def assert_references_as_resolved(result, plan, diagnostics) -> None:  # noqa: A
             fixed += 1
             assert reference.segments == ((Literal_(text),) if text else ()) and reference.exact
             continue
+        assert not reference.ghost or skipping, (target, text)
         if delimiters_only:
-            assert not any(c.isalnum() for c in literal_text_of_a_cover(tree, reference.segments)), (
-                target, text, show(plan, reference.segments))
+            written = {c for c in literal_text_of_a_cover(tree, reference.segments) if c.isalnum()}
+            assert written <= (ghost_text if reference.ghost else set()), (target, text, show(plan, reference.segments))
+        ghosts += reference.ghost
         assert any(isinstance(s, FieldSeg) for s in reference.segments) or not text, (target, text)
         if reference.exact:
             continue
@@ -2523,11 +2542,13 @@ def assert_references_as_resolved(result, plan, diagnostics) -> None:  # noqa: A
     # Every fixed text and every other difference is in a finding, named or counted among "N more".
     counted = 0
     for finding in reported:
-        more = re.search(r" (\d+) more cross-references fail in the same way\.$", finding.message)
+        more = re.search(r" (\d+) more cross-references (?:fail in|are written) the same way\.$", finding.message)
         counted += 1 + (int(more.group(1)) if more else 0)
-    assert needing_a_finding + fixed <= counted <= len(texts)
+    assert needing_a_finding + fixed + ghosts <= counted <= len(texts)
     if fixed:
         assert any("not a field" in d.message for d in reported)
+    if ghosts:
+        assert any("heading level that the document skips" in d.message for d in reported)
 
 
 @pytest.mark.parametrize("variant", VARIANTS)

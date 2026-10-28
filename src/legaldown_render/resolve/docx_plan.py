@@ -228,6 +228,10 @@ class RefPlan:
     #: No cover exists, so the reference is the renderer's text with no field: right when the file is opened, but
     #: fixed (an edit in Word does not change it). The plan reports each (``render-docx-reference``).
     fixed: bool = False
+    #: The cover writes the number of a heading level the document skips (a Core error, ``heading-skip``, §4.1) as text,
+    #: since no unit holds that level's counter and so no field returns it; the rest is fields. Reported like a fixed
+    #: reference (``render-docx-reference``).
+    ghost: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -580,10 +584,12 @@ class _Built(NamedTuple):
     exact: bool
     lo_text: str | None
     fixed: bool
+    ghost: bool = False
 
 
 class _Finding(NamedTuple):
-    """A reference that is fixed text (*kind* ``fixed``, *reason* why) or reads differently in Word (``differs``)."""
+    """A reference that is fixed text (*kind* ``fixed``, *reason* why), has the number of a skipped heading level as
+    fixed text (``ghost``) or reads differently in Word (``differs``)."""
 
     kind: str
     reason: str
@@ -727,9 +733,7 @@ class _Planner:
     def why_uncovered(self, designation: Sequence[Shown], fields: Sequence[Field]) -> str:
         """Why no combination of *fields* and delimiters reads like *designation* (§13.1)."""
         wanted = atoms(designation)
-        kind, owner = wanted[uncovered(designation, fields) or 0]
-        if kind == "c" and isinstance(owner, Ghost):
-            return "a heading level is skipped before it, and no field stands for the level that is missing"
+        _, owner = wanted[uncovered(designation, fields) or 0]
         for candidate in fields:
             if candidate.number and any(isinstance(t, Count) and t.owner == owner for t in candidate.tokens):
                 return (f"Word draws its number as '{printable(text_of(candidate.tokens))}', with text or punctuation "
@@ -761,6 +765,9 @@ class _Planner:
         if pieces is None:
             self.unreferable.append(_Finding("fixed", self.why_uncovered(designation, fields), found, found.text))
             return _Built([found.text] if found.text else [], True, None, True)
+        ghost = self.skipped_part(whole, pieces)
+        if ghost:
+            self.unreferable.append(_Finding("ghost", "", found, ghost))
         shown = "".join(piece if isinstance(piece, str) else text_of(piece.tokens) for piece in pieces)
         if shown != found.text:
             chain = {t.owner for t in designation if not isinstance(t, Lit) and isinstance(t.owner, str)}
@@ -770,7 +777,23 @@ class _Planner:
         if any(isinstance(piece, Field) and piece.suppress_text for piece in pieces):
             lo_text = "".join(piece if isinstance(piece, str) else text_of(self.words(piece.owner) if piece.number
                                                                            else piece.tokens) for piece in pieces)
-        return _Built(pieces, shown == found.text, lo_text, False)
+        return _Built(pieces, shown == found.text, lo_text, False, bool(ghost))
+
+    @staticmethod
+    def skipped_part(whole: Sequence[Shown], pieces: Sequence[str | Field]) -> str:
+        """The text of the counters of heading levels the document skips (a :class:`Ghost`: nothing holds them) that the
+        cover writes as literal text, in order; empty when it writes none (a field returns them, or the reference has
+        none)."""
+        ghosts: list[bool] = []
+        for token in whole:
+            ghosts += [isinstance(token, Count) and isinstance(token.owner, Ghost)] * len(atoms([token]))
+        text, at = "", 0
+        for piece in pieces:
+            size = len(piece) if isinstance(piece, str) else len(atoms(piece.tokens))
+            if isinstance(piece, str):
+                text += "".join(character for character, ghost in zip(piece, ghosts[at:at + size], strict=True) if ghost)
+            at += size
+        return text
 
     def report_references(self) -> None:
         """One finding for the references that fail in the same way (the first, by line, and how many more), as
@@ -783,7 +806,13 @@ class _Planner:
             first = members[0]
             text, shown = printable(first.found.text), printable(first.shown)
             more = f" {len(members) - 1} more cross-references fail in the same way." if len(members) > 1 else ""
-            if kind == "fixed":
+            if kind == "ghost":
+                more = f" {len(members) - 1} more cross-references are written the same way." if len(members) > 1 else ""
+                message = (f"The cross-reference '{text}' holds the number of a heading level that the document skips "
+                           f"(a heading level must follow the one above, §4.1), which no Word number returns: "
+                           f"'{shown}' is written as text there and will not follow edits made in Word; the rest is "
+                           f"made of fields.{more}")
+            elif kind == "fixed":
                 message = (f"The cross-reference '{text}' cannot be built from Word's numbering fields: {reason}. It is "
                            f"written as the text '{text}', which is right now but is not a field: it will not follow "
                            f"edits made in Word.{more}")
@@ -941,7 +970,7 @@ class _Planner:
                 plain = text_of(self.words(piece.owner)) if piece.number else cached
                 segments.append(FieldSeg(bookmark[piece.owner], piece.number, piece.suppress_text, True, cached,
                                          plain if piece.suppress_text else cached))
-            refs[target] = RefPlan(tuple(segments), made.exact, made.fixed)
+            refs[target] = RefPlan(tuple(segments), made.exact, made.fixed, made.ghost)
 
         toc: list[TocEntryPlan] = []
         for entry in self.tree.contents:

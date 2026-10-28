@@ -4,8 +4,9 @@ A reference shows the designation of its target: the number of the section, the 
 with the ``ref`` templates of every unit on the way (``1.1.1``, ``I.A.1.a(i)``, ``1(b)(ii)``). In Word every part of
 it that Word can compute must be a field, so that it stays right when a clause is inserted: ``REF <bookmark> \\n``
 returns the number Word draws for the bookmarked paragraph (its whole ``lvlText``, trailing periods dropped), and
-nothing else Word could know may be written as literal text. This module finds, for one designation, the
-combination of such fields and literal delimiters that reads exactly like it.
+nothing else Word could know may be written as literal text, but for the part of a number that belongs to a heading
+level the document skips (§4.1: a Core error the renderer still numbers), which no unit holds. This module finds, for
+one designation, the combination of such fields and literal delimiters that reads exactly like it.
 
 Everything here works on token strings (:mod:`.docx_numbering`): the text of a reference as the renderer wrote it (the
 designation inside the text of ``references.format``, so that a field may stand for the words of the format when the
@@ -33,7 +34,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal, NamedTuple
 
-from .docx_numbering import Count, Lit, Token
+from .docx_numbering import Count, Ghost, Lit, Token
 
 #: The characters Word keeps when ``\t`` drops the text of a number. Between two counters they stay; in the text before
 #: the first counter or after the last, what Word does with them is not documented (:func:`suppressed`).
@@ -70,10 +71,11 @@ def text_of(tokens: Sequence[Shown]) -> str:
 
 def atoms(tokens: Sequence[Shown]) -> list[tuple[str, object]]:
     """*tokens* as atoms: ``("d", character)`` for each character of literal text, ``("c", owner)`` for a counter and
-    ``("t", owner)`` for a title."""
+    ``("t", owner)`` for a title. The counter of a heading level the document skips (a :class:`~.docx_numbering.Ghost`:
+    no unit holds it, so no field can return it) is literal text, which is all that can stand for it."""
     out: list[tuple[str, object]] = []
     for token in tokens:
-        if isinstance(token, Lit):
+        if isinstance(token, Lit) or (isinstance(token, Count) and isinstance(token.owner, Ghost)):
             out.extend(("d", character) for character in token.text)
         elif isinstance(token, Count):
             out.append(("c", token.owner))

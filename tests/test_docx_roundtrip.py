@@ -1149,3 +1149,45 @@ def test_items_nested_past_nine_levels_are_numbered_by_the_list_they_go_on_in_an
     assert [line for line in said if line.endswith(("NEW eight", "level 8", "NEW nine", "level 9", "NEW ten",
                                                     "level 10", "level 11"))] == [
         "(A) NEW eight", "(B) level 8", "(a) NEW nine", "(b) level 9", "(i) NEW ten", "(ii) level 10", "(A) level 11"]
+
+
+# -- A skipped heading level: the one part of a reference that is text ----------------------------------------------------
+
+SKIPPED = FRONT + """
+# One {#one}
+
+### Deep {#deep}
+
+- item {#i}
+
+# Two {#two}
+
+### Deeper {#deeper}
+
+Refs: {{ref: one}} {{ref: deep}} {{ref: i}} {{ref: two}} {{ref: deeper}}
+"""
+
+
+@functools.cache
+def skipped() -> tuple[str, str]:
+    """What LibreOffice says about the document that skips a heading level (outline numbering) after a heading is inserted
+    before its first section, and what the text writer prints for the edited source."""
+    require_libreoffice()
+    data = render(SKIPPED, format="docx", style="outline").binary
+    said = libreoffice_edit({"skipped": (data, [("One", "NEWH")])})["skipped"]  # type: ignore[arg-type]
+    edited_source = applied(SKIPPED, [("# One {#one}", "# NEWH\n")])
+    return said, render(edited_source, format="text", style="outline").output
+
+
+def test_the_live_parts_of_a_reference_below_a_skipped_level_follow_a_heading_inserted_before_it() -> None:
+    """The skipped level has no number of its own, so its part of the reference is text (``A``) between two fields; the
+    fields are updated by the edit, so ``I.A.1`` becomes ``II.A.1`` with the text kept, as the renderer writes it."""
+    said, written = skipped()
+    assert lines_of(said) == lines_of(written)
+    assert [line for line in lines_of(said) if line.startswith("Refs")] == ["Refs: II II.A.1 II.A.1(a) III III.A.1"]
+    result = render(SKIPPED, format="docx", style="outline")
+    plan, diagnostics = plan_docx(result.tree)
+    assert [r.ghost for r in plan.refs.values()] == [False, True, True, False, True]
+    assert not any(r.fixed for r in plan.refs.values())
+    assert any(d.rule == "render-docx-reference" and "heading level that the document skips" in d.message
+               for d in diagnostics)
