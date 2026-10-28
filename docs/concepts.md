@@ -21,7 +21,7 @@ these. Its inputs are:
 - **an answers set** (optional, templates only): the values used to assemble a template before
   rendering (§15.7)
 
-Its outputs are the **rendered file** (HTML or plain text, later DOCX and PDF) and a list of
+Its outputs are the **rendered file** (HTML, plain text or DOCX, later PDF) and a list of
 **diagnostics**.
 
 The source never changes during rendering. Given the same source, style template, and options,
@@ -99,7 +99,7 @@ style template, and the answers file the CLI is given with `--answers`.
 | **Render tree** | This package's format-neutral tree of blocks and inlines, built from the source and document model. It is structurally complete: nested lists, inline formatting, and directives are all nodes |
 | **Resolution** | The stage that computes everything the specification leaves to render time: numbers, designations, link targets, display text, formatted values, markers |
 | **Resolved document** | The render tree after resolution. It is immutable and holds no unresolved LegalDown semantics. It is the only input to writers |
-| **Writer** | A backend that turns the resolved document into a file format (`html`, `text`, later `docx` and `pdf`). A writer contains no LegalDown rules, only layout |
+| **Writer** | A backend that turns the resolved document into a file format (`html`, `text`, `docx`, later `pdf`). A writer contains no LegalDown rules, only layout |
 | **Style template** | The configuration file that controls presentation (§13.7). See [style templates](style-templates.md) |
 | **Numbering scheme** | How headings are numbered: `decimal`, `legal-outline`, `mixed`, or `none` (§13.1) |
 | **Enumeration** | How list items are labelled at each nesting level, for example (a) / (i) / (A) (§13.2) |

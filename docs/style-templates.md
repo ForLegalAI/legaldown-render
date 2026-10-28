@@ -279,6 +279,18 @@ Settings that were already part of the template gain a DOCX meaning:
 | `signatures.enabled` | Borderless tables with a signing line, kept together on one page as far as one page allows. They follow the last attachment, as in the HTML. A name, title, date or place row whose label is blanked (`labels.signature_*`) and whose value is empty is left out, as the plain-text writer leaves it out |
 | `title_block.parties`, `title_block.effective_date`, `title_block.version` | The header rows and the parties, as borderless tables |
 
+The numbering and wording settings are the same as in the other formats; what they become in the file:
+
+| Setting | In the DOCX |
+|---|---|
+| `numbering.*` | The multilevel list the heading styles are linked to: `counter` is the level's number format, `label` its level text (`{n}` the level's own counter, `{path}` the counters of the levels above it joined as the label says). A label with a literal `%` before a digit or a counter cannot be written as a level text and is a style error for DOCX. With `scheme: none` the headings are not numbered |
+| `enumeration.*`, `paragraphs.*` | The lists of items and the numbered paragraphs, one numbering definition for each kind. A label that shows `{section}` can be live only on the heading list's next level, and is otherwise written without it and reported (`render-docx-section-label`) |
+| `references.format`, `numbering.levels[].ref`, `enumeration.levels[].ref` | The literal text around the `REF` fields of a cross-reference and between them; the cached result of the field is what Word draws. See `docx.reference_text_switch` |
+| `definitions.style`, `definitions.term_style` | The character styles of a defining occurrence and of a `{{term:}}` reference |
+| `typography.justify` | The justification of `Normal` |
+| `locale`, `values.*`, `placeholders.*`, `template_view.*`, `labels.*` | As in the other formats: dates, amounts, blanks, choices and labels are written as text (they are not numbers Word can compute) |
+| `html.max_width`, `html.extra_css` | Not read |
+
 The styles for this matter (`Title Block Text`, `Party Side`, `Party Name`, `Attachments Heading`, `Attachment Title`,
 `Attachment File`, `Signature Side`, `Signature Text`, `Signature Line`) are Word styles like the others: a lawyer who
 changes one in Word changes every paragraph that uses it.

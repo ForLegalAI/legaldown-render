@@ -548,28 +548,31 @@ def test_the_attachments_listed_in_the_contents_carry_its_bookmarks() -> None:
     assert len(set(bookmark_names(root))) == len(bookmark_names(root))
 
 
+#: What the attachments say, and how many there are: two with no id, two with the same id, and one whose id is the
+#: identifier of a heading (``# A {#a}`` below; ``attachment-id-collision``).
 BAD_ATTACHMENTS = {
-    "no ids": "  - {title: NoId, file: a.lgd}\n  - {title: NoId2, file: b.lgd}\n",
-    "a duplicate id": "  - {id: x, title: A}\n  - {id: x, title: B}\n",
-    "an id that is a section's": "  - {id: a, title: A}\n  - {id: a, title: B}\n",
+    "no ids": ("  - {title: NoId, file: a.lgd}\n  - {title: NoId2, file: b.lgd}\n", 2),
+    "a duplicate id": ("  - {id: x, title: A}\n  - {id: x, title: B}\n", 2),
+    "an id that is a section's": ("  - {id: a, title: A}\n", 1),
 }
 
 
 @pytest.mark.parametrize("which", BAD_ATTACHMENTS)
 @pytest.mark.parametrize("overrides", [{}, {"labels.attachments": ""}, {"contents.depth": 1}])
 def test_attachments_without_a_usable_id_are_still_written_and_listed(which: str, overrides: dict[str, Any]) -> None:
-    """Attachments with no id, or an id another has (validator Errors: the document still renders), have no anchor of their
-    own: the contents lists each by position, and no bookmark is written twice."""
-    source = ("---\nlegaldown: '0.2'\ntitle: T\nattachments:\n" + BAD_ATTACHMENTS[which]
+    """Attachments with no id, or an id another attachment or a heading has (validator Errors: the document still
+    renders), have no anchor of their own: the contents lists each by position, and no bookmark is written twice."""
+    yaml, count = BAD_ATTACHMENTS[which]
+    source = ("---\nlegaldown: '0.2'\ntitle: T\nattachments:\n" + yaml
               + "---\n\n# A {#a}\n\nSee {{attach: x}}.\n")
     result = render(source, format="docx", overrides={"contents.enabled": True, **overrides})
     assert result.binary is not None
     root = document_xml(result.binary)
     names = bookmark_names(root)
     assert len(names) == len({n.lower() for n in names})
-    assert len(paragraphs(result.binary, "AttachmentTitle")) == 2
+    assert len(paragraphs(result.binary, "AttachmentTitle")) == count
     toc = [text_of(p).rstrip("\t") for p in toc_paragraphs(result.binary)]
-    assert toc[-2:] == [text_of(p) for p in paragraphs(result.binary, "AttachmentTitle")]
+    assert toc[-count:] == [text_of(p) for p in paragraphs(result.binary, "AttachmentTitle")]
     anchors = [p.find(f"{W}hyperlink").get(f"{W}anchor") for p in toc_paragraphs(result.binary)]  # type: ignore[union-attr]
     assert set(anchors) <= set(names)
     if schema_available():
@@ -815,13 +818,13 @@ def test_page_numbers_appear_after_the_update(shown: dict[str, Exported]) -> Non
     assert len(pages) == len(toc_lines(shown["master"])) and all(p >= 1 for p in pages)
     assert pages == sorted(pages)
     assert max(pages) <= shown["master"].pages
-    # Where the pages are known: the long document's six headings of about a page each run in order from page 1, and
-    # the attachments after them end the document.
+    # What holds in any font: the long document's six headings (a fifth of a page of text each) run in order from page 1,
+    # and the attachments, which each start a page, come after them and end the document.
     long = shown["long_break"]
     by_title = dict(zip(toc_lines(long), toc_pages(long), strict=True))
     headings = [by_title[f"{n + 1}. Heading {n}"] for n in range(6)]
     assert headings[0] == 1 and all(0 <= b - a <= 1 for a, b in zip(headings, headings[1:], strict=False))
-    assert headings[-1] > headings[0] and by_title["Attachments"] > headings[-1]
+    assert by_title["Attachments"] > headings[-1]
     assert by_title["Third"] == long.pages == by_title["Attachments"] + 2
 
 
@@ -866,7 +869,8 @@ def test_a_page_break_separator_puts_each_attachment_on_its_own_page(shown: dict
 def test_rule_and_none_keep_the_attachments_on_the_pages_they_fall_on(shown: dict[str, Exported]) -> None:
     for name in ("long_rule", "long_none"):
         by_title = dict(zip(toc_lines(shown[name]), toc_pages(shown[name]), strict=True))
-        assert by_title["First"] == by_title["Second"] == by_title["Third"]
+        # a few lines each: no break between them, so at most the bottom of one page and the top of the next
+        assert 0 <= by_title["Third"] - by_title["First"] <= 1 and by_title["First"] <= by_title["Second"] <= by_title["Third"]
     assert shown["long_break"].pages >= shown["long_rule"].pages + 2
 
 

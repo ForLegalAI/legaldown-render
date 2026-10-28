@@ -20,7 +20,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `{{include:}}` below Full (§17.5) | ✅ Renders `[NOT PROCESSED: include path]` with a Warning (`render-not-processed`); the path is checked as a file reference (§2.3) |
 | Party and side display rules (§3.6) | ✅ |
 | At least one output format (§13.6) | ✅ HTML (recommended) and plain text (optional) |
-| DOCX output (§13.6, recommended) | 🚧 In progress, not claimed. Written, as bytes, by `-o x.docx` / `format="docx"`: a valid OOXML package (every part validates against the ISO/IEC 29500-4 transitional schemas in CI; LibreOffice opens it) with styles, page setup, running header and footer (`PAGE`/`NUMPAGES` fields), document properties and deterministic output. **Numbering and cross-references are live Word features:** headings, list items and numbered paragraphs take their numbers from Word numbering definitions (the heading styles are linked to a multilevel list; lists restart by structure where Word can; the continental `5.1` items and the numbered paragraphs `1.1` ride the heading list's next level, with the lists nested in them on its reserved levels, so they stay live; alternatives that share a number (§15.8) are `numId 0` paragraphs whose number is a `REF` field of the first, with the sections and lists under them on a num of their own: live for edits elsewhere, but **deleting the first alternative in Word breaks them and every reference to the shared identifier** (reported; render with the condition values for a final document); the built-in continental style uses the heading list's levels 6 and 7 for lists nested in its clauses, a label that shows the path of an item keeps its section's, clause's and own counters on those levels, and a list nested where Word cannot show the counters above it, or in a level the heading list has no room for, is drawn with its own counter alone on a detached list and restarts by a fixed setting, reported; a list nested past Word's nine levels goes on in further lists, up to 36 levels), and every `{{ref:}}` is the literal delimiters and `REF` fields on bookmarks with the values the renderer computed as cached results (`1.1.1`, `I.A.1.a(i)`, `1(b)(ii)` read as the plain-text writer reads them, and stay right when a clause is inserted and fields are updated); `{{term:}}` and `{{attach:}}` are internal links. A reference is fixed text, reported, only where Word's fields cannot reproduce the designation: a number with text or punctuation around its counter that the reference does not have (`(a)`, `{n}:`, `No. {n}`) where Word's `\t` switch is not documented to leave it out (`docx.reference_text_switch`: `off`, `documented`, `guess`), and a number that holds the counters of other units the reference writes itself (`{section}.{n}` under a ref `{n}`); the counter of a heading level that the document skips (`heading-skip`, an Error) is text between the fields of the units that hold theirs; the words of `references.format` that a number repeats (`Article I`) are returned by the field itself. A LibreOffice round trip over the test and specification documents (the cached results made wrong on purpose) draws the same numbers and reads the same references as the text writer, except where the plan reports otherwise. The body writer lays out every block and inline (headings, paragraphs, lists, quotes, drafting notes, code, tables, rules, links, defined terms, blanks and choices) as a plan says. **The front and back matter are written too**, in the order the HTML shows them: the title block (header rows and parties), a live table of contents (`TOC \o "1-N" \h \z \u` with cached entries equal to the HTML contents, each a link with a `PAGEREF` page number Word fills in on update; the attachments are listed by outline level, so that no locale-dependent style list is in the field; at `contents.depth: 1` the attachment titles are listed as first-level entries, where the HTML indents them one level more), the attachments (bookmarked so `{{attach:}}` resolves, separated by a page break or a rule per `attachments.separator`) and the signature blocks (§3.6, borderless tables kept together on one page as far as one page allows). A LibreOffice round trip shows that after its indexes are updated the contents lists exactly the HTML entries with page numbers, also after a heading is inserted in the editor, and that the document reads in the plain-text writer's order. Remaining differences are the reported ones: a label that shows the section's number that the heading list cannot show (an outline scheme's `{section}.{n}`, the `none` scheme) is drawn without it. The contents show the shared number for a later alternative. The design is that numbers, references, the table of contents and page numbers are Word numbering definitions and fields, never text ([ADR 0008](docs/decisions/0008-docx-word-native.md)). What Word draws differently from the other formats is a diagnostic with a `render-docx-*` rule id, the renderer's own (not the specification's): Warnings `render-docx-section-label` (a label that shows a number Word cannot show there: the section's, or the enclosing items' on a list that cannot carry them), `render-docx-list-depth` (nested past 36 levels), `render-docx-letter-overflow` and `render-docx-roman-overflow` (Word repeats letters after 26 and writes Roman numerals from 4000 differently), `render-docx-shared-counter` (a unit that shares a counter with others in Word, such as a sub-heading and the items of its section that have the same designation in every output format, and that is restarted at a fixed value, which will not follow edits), `render-docx-number-mismatch` (any other difference: a catch-all that does not occur outside documents that skip a heading level), `render-docx-reference` (a cross-reference that cannot be built from fields is the renderer's text, right at open but fixed: it will not follow edits, with the class it falls in; one that has the number of a skipped heading level as text; or one that reads differently in Word), `render-docx-reference-cycle` (a heading's title refers back to the heading, under the `none` scheme: written as text); Infos `render-docx-alternative` (alternatives share a number as fields of the first, which must not be deleted in Word), `render-docx-static-restart` (a list that restarts by a fixed setting: in a list of another kind, in an item on the heading list that it cannot ride, in an alternative, or the one that begins the next list past nine levels) `render-docx-libreoffice-count` (items numbered as in Word but one or more higher in LibreOffice, which counts a level nothing numbered before a deeper item of its list) and `render-docx-reference-word-only` (a reference relies on Word's `\t` switch, which LibreOffice ignores). The Word-only checks (the contents' page numbers, what `\t` does, numbering after an insertion) are a manual checklist before a release (`.github/PUBLISHING.md`). HTML is the format this renderer claims §13.6 with |
+| DOCX output (§13.6, recommended) | ⚠️ Written by `-o x.docx` / `format="docx"` (0.5): numbers, cross-references, the table of contents and page numbers are Word features, not text. Checked against the ISO/IEC 29500 schemas and in LibreOffice in CI; **not yet checked in Word itself**, which is a manual step before the release. See "DOCX output", below. HTML is the format this renderer claims §13.6 with |
 | A heading in a list item or a quote | ✅ Shown as a bold line: it is not a section (§4.1), so it has no number or anchor |
 | Comment stripping (§8.6) | ✅ Inline comments, and comment blocks across any number of lines. As in CommonMark, a comment block left unclosed runs to the end of the document |
 | Templates with answers (§15.8) | ✅ Assembled first with `legaldown-validator`'s Assembly capability (§15.7), then rendered: `answers=` / `--answers answers.yaml`. A template that needs other files is refused (see below) |
@@ -47,6 +47,73 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Visual blank for a placeholder (§13.5 rule 6) | ✅ `placeholders.blank`; a blank that is empty, or only whitespace or invisible format characters (U+200B, U+FEFF), renders `[TBD: id]` |
 | Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
 | Final check (§15.9, SHOULD) | ✅ `--final` / `final=True`: the validator's `placeholder-unfilled` and `template-construct-present` Errors; with `--strict`, the document is refused |
+
+## DOCX output (§13.6)
+
+[ADR 0008](docs/decisions/0008-docx-word-native.md) decides the design: in the `.docx` every number, cross-reference,
+table of contents entry and page number is a Word numbering definition or field, never literal text, and the values the
+renderer computed are only the cached results of the fields. The document therefore reads right before any field is
+updated, and stays right when a lawyer inserts a clause and updates fields.
+
+**What is written**, in the order the HTML shows it:
+
+- The title block (header rows and parties, borderless tables), a live table of contents (`TOC \o "1-N" \h \z \u` with cached
+  entries equal to the HTML contents, each a link with a `PAGEREF` page number that Word fills in when it updates the
+  field), the sections, the attachments (a heading and a titled placeholder, separated by a page break or a rule per
+  `attachments.separator`), and the signature blocks (§3.6, borderless tables with signing lines, kept together on one page as
+  far as one page allows).
+- Headings, list items and numbered paragraphs take their numbers from Word numbering definitions: the heading styles are
+  linked to a multilevel list; lists restart by structure where Word can; the continental `5.1` items and the numbered
+  paragraphs ride the heading list's next level, with the lists nested in them on its reserved levels; a list nested past
+  Word's nine levels goes on in further lists, up to 36 levels.
+- Every `{{ref:}}` is the delimiters of its designation and `REF` fields on bookmarks, with the values the renderer computed as the cached results (`1.1.1`,
+  `I.A.1.a(i)`, `1(b)(ii)`). `{{term:}}` and `{{attach:}}` are internal links; under the `none` scheme a reference is a
+  field for the text of the heading.
+- The template view (§15.8): condition labels, drafting notes and choices are shown as in the other formats. Alternatives that
+  share a number are paragraphs with no number of their own whose number is a `REF` field of the first.
+- Images are their alt text (no file is read, §2.3, §17.6). A link is a hyperlink for the same schemes as in HTML.
+- A style setting that Word cannot express (a `%` length, a colour name Word does not know) is a style error when the
+  format is `docx`, before anything is rendered.
+
+**Differences from the other formats**, each reported with a `render-docx-*` diagnostic (the renderer's own rule ids, not the
+specification's) at the line of the unit or the reference, once per finding and once for references that fail alike:
+
+| Rule | Level | Meaning |
+|---|---|---|
+| `render-docx-reference` | Warning | A `{{ref:}}` that Word's fields cannot compose is written as its text: right when the file is opened, but it does not follow edits. The message names the class: a number with text or punctuation around its counter that the reference does not have, where Word's `\t` switch may not be relied on to leave it out (`docx.reference_text_switch`: `off`, `documented`, `guess`); or a number holding the counters of other units that the reference writes itself (`{section}.{n}` under a ref `{n}`). Also this rule: the counter of a heading level the document skips (the Core Error `heading-skip`) is text between the fields of the units that do hold theirs, and a reference that reads differently in Word for another reason |
+| `render-docx-reference-cycle` | Warning | Under the `none` scheme, a heading's title refers back to the heading: the reference is written as text |
+| `render-docx-section-label` | Warning | A label shows a number that Word's list cannot show there (the section's number on a list that is not the heading list, or the counters of the enclosing items on a list that cannot carry them): Word draws a shorter label, named in the message. References stay fields |
+| `render-docx-letter-overflow` | Warning | Past 26 a letter counter reads `aa`, `bb`, `cc` in Word and `aa`, `ab`, `ac` in the renderer |
+| `render-docx-roman-overflow` | Warning | Word writes Roman numerals of 4000 and over differently |
+| `render-docx-list-depth` | Warning | A list is nested past 36 levels: the items past it are numbered in the format of the last level and restart by fixed values |
+| `render-docx-shared-counter` | Warning | A unit shares a counter with others in Word (a sub-heading and the items of its section, a list that goes on from another) and is restarted at its number: right when opened, but a fixed value that does not follow edits made before it |
+| `render-docx-number-mismatch` | Warning | Any other difference between Word's number and the renderer's: a catch-all that does not occur outside documents that skip a heading level |
+| `render-docx-alternative` | Info | Alternatives that share a number show it as a field of the first: deleting the first in Word breaks the others and every reference to the shared identifier. Render with the condition values or answers for a final document. Once per document |
+| `render-docx-static-restart` | Info | A list restarts by a fixed setting, not by structure: nested in a list of another kind, in an item on the heading list that it cannot ride, in an alternative, or the one that begins the next list past nine levels. A parent item added in Word does not restart it |
+| `render-docx-libreoffice-count` | Info | Items are numbered as the renderer does in Word but one or more higher in LibreOffice, which counts a level that nothing in the list numbered before a deeper item as 1. Nothing in the file is wrong for Word. Once per document |
+| `render-docx-reference-word-only` | Info | A reference relies on Word's `\t` switch, which LibreOffice ignores: there it shows the whole number. Once per document |
+
+Two more differences are not reported, since they follow from the format: at `contents.depth: 1` the attachment titles are
+first-level entries of the contents, where the HTML indents them one level more; and the contents show a later
+alternative's shared number.
+
+**How it is checked.** In CI, on every part of every document of the corpus (the specification's examples and valid
+fixtures, the test documents and documents written to stress the numbering) under the `default`, `outline` and
+`continental` styles:
+
+- every part validates against the ISO/IEC 29500-4 transitional schemas, and rendering twice gives the same bytes;
+- LibreOffice opens the document, updates its fields and indexes, and what it shows is what the plain-text writer prints
+  (numbers, references, contents entries, attachments, signatures), except where a diagnostic above says Word draws a
+  number differently (`tests/test_docx_acceptance.py`);
+- after a heading, a list item, a nested item and a numbered paragraph are inserted and a clause is deleted in
+  LibreOffice, as a lawyer does, and the fields are updated, the document reads as the plain-text writer prints the source
+  with the same edits (the same module; the finer cases, with the cached results made wrong on purpose, are in
+  `tests/test_docx_roundtrip.py`).
+
+LibreOffice is the oracle available to CI, and it differs from Word in a few places: it ignores `\t`, `lvlRestart`,
+`SEQ \s` and `w:updateFields`, and counts a level that nothing numbered before a deeper item as 1. What only Word shows
+(the contents' page numbers, what `\t` does, the count of an unused level, numbering after an insertion, and every
+other Word-only assumption of the plan) is a manual checklist before each release (`.github/PUBLISHING.md`).
 
 ## Known limitations
 

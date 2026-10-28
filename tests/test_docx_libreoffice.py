@@ -53,6 +53,22 @@ code line 1
 
 LONG = "---\ntitle: Long\n---\n\n" + "".join(f"# Heading {n}\n\nParagraph {n} " + "word " * 120 + "\n\n" for n in range(40))
 
+#: A few lines and three attachments, each of which starts a page (``attachments.separator: page-break``, the default):
+#: how many pages it has is the layout's business, but never fewer than the breaks make, and in the order of the document.
+PAGED = """---
+legaldown: '0.2'
+title: Paged
+attachments:
+  - {id: alpha, title: Alpha Schedule}
+  - {id: beta, title: Beta Schedule}
+  - {id: gamma, title: Gamma Schedule}
+---
+
+# One
+
+See {{attach: gamma}}.
+"""
+
 HOSTILE = "---\nlegaldown: '0.2'\ntitle: \"a\\x01b\"\n---\n\n# H\x01\x08\x0b\x0c\x1f\x7f\x85x\n\nbody\x01 <&> ]]>\n"
 
 
@@ -89,6 +105,7 @@ def shown() -> dict[str, Exported]:
         "features": docx((DOCUMENTS / "features.lgd").read_text(encoding="utf-8")),
         "template": docx((DOCUMENTS / "template.lgd").read_text(encoding="utf-8"), style="continental"),
         "long": docx(LONG),
+        "paged": docx(PAGED, overrides={"contents.enabled": True, "page.footer": {"left": "{page}", "center": "", "right": "{pages}"}}),
         "hostile": docx(HOSTILE),
         "no_footer": docx(ROUND_TRIP, overrides={"page.footer": {"center": ""}}),
         "landscape": docx(ROUND_TRIP, overrides={"page.size": "A4 landscape", "page.footer.right": "{page}"}),
@@ -120,18 +137,34 @@ def test_the_header_shows_the_templates_and_the_page_field(shown: dict[str, Expo
 
 def test_the_default_footer_counts_the_pages(shown: dict[str, Exported]) -> None:
     footer = shown["round_trip"].footer
-    assert re.fullmatch(r"1 / 1", footer), footer
-    assert shown["round_trip"].pages == 1
+    match = re.fullmatch(r"1 / (\d+)", footer)  # a few lines: one page in any font
+    assert match is not None, footer
+    assert int(match.group(1)) == shown["round_trip"].pages == 1
     assert shown["round_trip"].header.count("\t") == 2
 
 
 def test_the_page_count_field_follows_the_layout(shown: dict[str, Exported]) -> None:
-    long = shown["long"]
-    assert long.pages > 2
+    """How many pages a text takes depends on the fonts of the machine, so the counts are compared with each other: the
+    long document has more pages than the short one, and its footer reads the first page and the number of pages the
+    layout has."""
+    long, short = shown["long"], shown["round_trip"]
+    assert long.pages > short.pages
     match = re.fullmatch(r"(\d+) / (\d+)", long.footer)
     assert match is not None, long.footer
     assert int(match.group(2)) == long.pages
     assert 1 <= int(match.group(1)) <= long.pages
+
+
+def test_each_attachment_starts_a_page_and_the_contents_give_their_pages_in_order(shown: dict[str, Exported]) -> None:
+    """The page breaks hold in any font: three attachments are on three different pages, in the order of the document, the
+    first not on the first page, and the footer's page count is the layout's."""
+    paged = shown["paged"]
+    pages = [int(m[1]) for title in ("Alpha", "Beta", "Gamma")
+             for m in [re.search(rf"^\s*{title} Schedule\t(\d+)$", paged.text, re.M)] if m]
+    assert len(pages) == 3, paged.text
+    assert 2 <= pages[0] < pages[1] < pages[2] <= paged.pages
+    left, right = paged.footer.split("\t")[0], paged.footer.split("\t")[-1]
+    assert 1 <= int(left) <= paged.pages and right == str(paged.pages), paged.footer  # {page} is that of the view's cursor
 
 
 def test_no_footer_means_none(shown: dict[str, Exported]) -> None:
