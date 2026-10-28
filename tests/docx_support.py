@@ -24,6 +24,7 @@ import pytest
 
 ROOT = Path(__file__).parent
 UNO_EXPORT = ROOT / "lo" / "uno_export.py"
+UNO_EDIT = ROOT / "lo" / "uno_edit.py"
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 W = f"{{{W_NS}}}"
@@ -232,7 +233,7 @@ def libreoffice_export(documents: dict[str, bytes], *, update: bool = True) -> d
             Path(folder, f"{name}.docx").write_bytes(data)
         done = subprocess.run([python, str(UNO_EXPORT), *([] if update else ["--no-update"]), str(out),
                                *(str(Path(folder, f"{n}.docx")) for n in documents)],
-                              capture_output=True, text=True, timeout=300, check=False)
+                              capture_output=True, text=True, timeout=300 + 3 * len(documents), check=False)
         if done.returncode != 0:
             pytest.fail(f"LibreOffice export failed:\n{done.stdout}\n{done.stderr}")
         result = {}
@@ -241,3 +242,23 @@ def libreoffice_export(documents: dict[str, bytes], *, update: bool = True) -> d
             info = json.loads(Path(out, f"{name}.json").read_text(encoding="utf-8"))
             result[name] = Exported(text, info["header"], info["footer"], info["pages"])
         return result
+
+
+def libreoffice_edit(jobs: dict[str, tuple[bytes, list[tuple[str, str]]]]) -> dict[str, str]:
+    """Open each document (name to DOCX bytes and edits) in one LibreOffice instance, insert a paragraph with the text
+    ``new`` before the first paragraph that holds ``match`` for each ``(match, new)``, update the fields and indexes,
+    and return the text of each (tests/lo/uno_edit.py)."""
+    python = require_libreoffice()
+    with tempfile.TemporaryDirectory(prefix="ld-lo-") as folder:
+        out = Path(folder, "out")
+        out.mkdir()
+        specification = []
+        for name, (data, edits) in jobs.items():
+            Path(folder, f"{name}.docx").write_bytes(data)
+            specification.append({"name": name, "file": str(Path(folder, f"{name}.docx")), "edits": edits})
+        Path(folder, "jobs.json").write_text(json.dumps(specification), encoding="utf-8")
+        done = subprocess.run([python, str(UNO_EDIT), str(out), str(Path(folder, "jobs.json"))],
+                              capture_output=True, text=True, timeout=300, check=False)
+        if done.returncode != 0:
+            pytest.fail(f"LibreOffice edit failed:\n{done.stdout}\n{done.stderr}")
+        return {name: Path(out, f"{name}.txt").read_text(encoding="utf-8-sig") for name in jobs}

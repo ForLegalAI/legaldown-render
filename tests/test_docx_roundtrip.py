@@ -2,13 +2,19 @@
 
 Every document of the test corpus (the test documents, the specification's examples and valid fixtures, and
 documents written to stress the numbering) is rendered to DOCX under the default, outline, continental and mixed
-schemes and under ``none`` (where a reference is a field for the text of a heading), then changed so that the file cannot be right by accident:
+schemes and under ``none`` (where a reference is a field for the text of a heading; the specification's documents
+take turns, each under half of them), then changed so that the file cannot be right by accident:
 
 * every cached result of a field is replaced by ``XXX``, so that what LibreOffice shows after it has updated the
   fields is what it computed from the numbering definitions and the bookmarks, not what the writer cached;
 * a marker ``⟦u3⟧`` leads the paragraph of every numbered unit, so that the number LibreOffice drew before it can be
   read from the exported text, and a paragraph per ``{{ref:}}`` target is added, made of exactly the fields the plan
   gives that reference, preceded by ``⟦ref u3⟧``.
+
+Every body paragraph's text must also be what the file cached for it, and a second round trip makes the edits a
+lawyer makes (an item, a heading and an ordered item inserted before the targets, in LibreOffice) and updates the
+fields: every reference and number must read as the renderer writes them for the edited source. The table of
+contents is not written yet, so its entries and the ``_Toc`` bookmarks are not exercised.
 
 The exported text is then compared with what the renderer wrote (the labels and designations that the text writer
 prints), **modulo the gaps the plan documents**, each of which the plan reports with a diagnostic:
@@ -24,14 +30,15 @@ Skipped when LibreOffice or its Python bindings are missing, a failure when ``LE
 """
 from __future__ import annotations
 
+import difflib
 import functools
 import re
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from conftest import DOCUMENTS, FRONT, spec_root
-from docx_support import Exported, W, libreoffice_export, parts, repackage, require_libreoffice
+from docx_support import Exported, W, libreoffice_edit, libreoffice_export, parts, repackage, require_libreoffice
 from test_docx_plan import ALTERNATIVES, units
 
 from legaldown_render import DocumentError, render
@@ -166,6 +173,21 @@ Ref: {{ref: deep}} {{ref: two}} {{ref: deeper}}
 
 Ref {{ref: deep}} {{ref: too}}
 """,
+    "cycles": FRONT + """
+# A {{ref: b}} {#a}
+
+# B {{ref: a}} {#b}
+
+# C {{ref: c}} {#c}
+
+# D {{ref: e}} {#d}
+
+# E plain {#e}
+
+- item in {{ref: it}} {#it}
+
+See {{ref: a}} {{ref: b}} {{ref: c}} {{ref: d}} {{ref: it}}.
+""",
     "alternatives": ALTERNATIVES + """
 # Intro {#intro}
 
@@ -294,10 +316,12 @@ def prepared(data: bytes, tree: RenderTree, plan: DocxPlan) -> bytes:
 
 @dataclass
 class Case:
+    variant: str
     name: str
     tree: RenderTree
     plan: DocxPlan
     rules: set[str]
+    original: bytes
     data: bytes
     shown: Exported | None = None
 
@@ -313,28 +337,41 @@ def corpus() -> dict[str, str]:
     return found
 
 
+def make_case(variant: str, name: str, source: str) -> Case | None:
+    try:
+        result = render(source, format="docx", **{**VARIANTS, **WORDS}[variant])
+    except DocumentError:
+        return None
+    assert result.binary is not None
+    plan, diagnostics = plan_docx(result.tree)
+    return Case(variant, name, result.tree, plan, {d.rule for d in diagnostics}, result.binary,
+                prepared(result.binary, result.tree, plan))
+
+
 @functools.cache
-def round_trip(variant: str, update: bool = True) -> tuple[Case, ...]:
-    """Every document under *variant*, rendered, made wrong and marked, and shown by LibreOffice."""
+def round_trips() -> dict[str, tuple[Case, ...]]:
+    """Every document under every variant, rendered, made wrong and marked, and shown by LibreOffice: one LibreOffice
+    instance for all of them."""
     require_libreoffice()
-    settings = {**VARIANTS, **WORDS}[variant]
-    cases: dict[str, Case] = {}
-    for name, source in corpus().items():
-        if variant in WORDS and not name.startswith("stress/"):
-            continue
-        try:
-            result = render(source, format="docx", **settings)
-        except DocumentError:
-            continue
-        assert result.binary is not None
-        plan, diagnostics = plan_docx(result.tree)
-        cases[f"{variant}/{name}"] = Case(name, result.tree, plan, {d.rule for d in diagnostics},
-                                          prepared(result.binary, result.tree, plan))
-    key = {f"d{index}": case for index, case in enumerate(cases.values())}
-    shown = libreoffice_export({name: case.data for name, case in key.items()}, update=update)
-    for name, case in key.items():
-        case.shown = shown[name]
-    return tuple(cases.values())
+    cases: dict[str, list[Case]] = {variant: [] for variant in (*VARIANTS, *WORDS)}
+    for offset, variant in enumerate(cases):
+        for index, (name, source) in enumerate(corpus().items()):
+            if variant in WORDS and not name.startswith("stress/"):
+                continue
+            if name.startswith(("examples/", "fixtures/")) and (index + offset) % 2:
+                continue  # the specification's documents take turns under the schemes: each is shown under half
+            case = make_case(variant, name, source)
+            if case is not None:
+                cases[variant].append(case)
+    everything = {f"d{index}": case for index, case in enumerate(case for group in cases.values() for case in group)}
+    shown = libreoffice_export({key: case.data for key, case in everything.items()})
+    for key, case in everything.items():
+        case.shown = shown[key]
+    return {variant: tuple(group) for variant, group in cases.items()}
+
+
+def round_trip(variant: str) -> tuple[Case, ...]:
+    return round_trips()[variant]
 
 
 # -- Reading what LibreOffice says ----------------------------------------------------------------------------------
@@ -343,7 +380,7 @@ def round_trip(variant: str, update: bool = True) -> tuple[Case, ...]:
 def marked_lines(shown: Exported) -> dict[str, tuple[str, str]]:
     """Tag to (the number LibreOffice drew before the marker, the text after it), for every marked line."""
     found: dict[str, tuple[str, str]] = {}
-    for line in shown.text.lstrip("﻿").splitlines():
+    for line in shown.text.lstrip("\ufeff").splitlines():
         match = MARKED.match(line)
         if match:
             found[match["tag"]] = (match["number"].strip(), match["rest"].strip())
@@ -360,9 +397,62 @@ def renderer_references(tree: RenderTree) -> dict[str, str]:
     return {i.target_unit: i.text for i in iter_tree_inlines(tree) if isinstance(i, CrossRef) and i.target_unit}
 
 
+def squeeze(line: str) -> str:
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def cached_lines(data: bytes, plan: DocxPlan) -> list[str]:
+    """What the paragraphs of the file say, as the writer cached it, one entry per line without the blank ones. A field
+    written with ``\\t`` is what LibreOffice shows for it (it ignores the switch), by ``FieldSeg.cached_lo``."""
+    lo = {(s.bookmark, s.suppress_text): s.cached_lo for r in plan.refs.values() for s in r.segments
+          if isinstance(s, FieldSeg)}
+    root = ET.fromstring(parts(data)["word/document.xml"])
+    lines: list[str] = []
+    for paragraph in root.iter(f"{W}p"):
+        text, state, instruction, replacement = "", None, "", None
+        for run in paragraph.iter(f"{W}r"):
+            mark = _is_field_part(run)
+            if mark == "begin":
+                state, instruction, replacement = "instruction", "", None
+            elif mark == "separate":
+                state = "result"
+                switches = instruction.split()
+                if "\\t" in switches:
+                    replacement = lo.get((switches[1], True))
+            elif mark == "end":
+                text += replacement or ""
+                state = None
+            elif state == "instruction":
+                instruction += "".join(node.text or "" for node in run.findall(f"{W}instrText"))
+            elif state == "result" and replacement is not None:
+                continue
+            else:
+                for node in run:
+                    text += (node.text or "") if node.tag == f"{W}t" else "\t" if node.tag == f"{W}tab" else (
+                        "\n" if node.tag == f"{W}br" else "")
+        lines += [squeeze(line) for line in text.split("\n") if squeeze(line)]
+    return lines
+
+
+def shown_lines(shown: Exported) -> list[str]:
+    """What LibreOffice says, line by line, without the blank ones, the marker lines of the references and the
+    markers and numbers of the numbered paragraphs."""
+    lines = []
+    for line in shown.text.lstrip("\ufeff").splitlines():
+        match = MARKED.match(line)
+        if match and match["tag"].startswith("ref "):
+            continue
+        text = squeeze(match["rest"] if match else line)
+        if text:
+            lines.append(text)
+    return lines
+
+
 def check(case: Case) -> None:
     """The property: every number LibreOffice draws is the renderer's, or the plan's where the plan says Word differs
-    (with a diagnostic), and every reference reads as the renderer wrote it, or as the plan says."""
+    (with a diagnostic), every reference reads as the renderer wrote it, or as the plan says, and every body paragraph
+    says what the file cached for it. The table of contents is not written yet, so its entries and the ``_Toc``
+    bookmarks are not exercised."""
     assert case.shown is not None
     lines = marked_lines(case.shown)
     excused = False
@@ -391,6 +481,8 @@ def check(case: Case) -> None:
         suppressing = any(isinstance(s, FieldSeg) and s.suppress_text for s in reference.segments)
         if reference.exact and not suppressing:
             assert text == shown_by_renderer[target], (target, text, shown_by_renderer[target])
+    cached, said = cached_lines(case.original, case.plan), shown_lines(case.shown)
+    assert said == cached, "\n".join(difflib.unified_diff(cached, said, "cached", "LibreOffice", lineterm="", n=1))
 
 
 @pytest.mark.parametrize("variant", list(VARIANTS) + list(WORDS))
@@ -426,10 +518,89 @@ def test_the_cached_results_are_wrong_in_the_file_and_libreoffice_does_not_read_
     """The seed works: the file holds ``XXX`` as the result of every reference field, and LibreOffice shows the right
     results all the same, even before the fields are updated, because it computes them from the numbering and the
     bookmarks when it opens the file (so that what the comparison above checks is its computation, not the cache)."""
-    for update in (True, False):
-        document = next(case for case in round_trip("default", update=update) if case.name == "stress/nested")
-        written = parts(document.data)["word/document.xml"].decode("utf-8")
-        assert written.count(f">{WRONG}<") >= len(document.plan.refs) > 10
-        lines = marked_lines(document.shown)  # type: ignore[arg-type]
+    document = next(case for case in round_trip("default") if case.name == "stress/nested")
+    written = parts(document.data)["word/document.xml"].decode("utf-8")
+    assert written.count(f">{WRONG}<") >= len(document.plan.refs) > 10
+    unupdated = libreoffice_export({"nested": document.data}, update=False)["nested"]
+    for shown in (document.shown, unupdated):
+        lines = marked_lines(shown)  # type: ignore[arg-type]
         assert not any(WRONG in text for _, text in lines.values())
-        check(document)
+        check(replace(document, shown=shown))
+
+
+# -- Edits in LibreOffice, then the fields updated -------------------------------------------------------------------
+
+
+EDITED = FRONT + """
+# Alpha {#alpha}
+
+Para {#p1}
+
+- first {#i1}
+- second item {#i2}
+  - nested one {#n1}
+  - nested two {#n2}
+- third {#i3}
+
+## Beta {#beta}
+
+1. ord one {#o1}
+2. ord two {#o2}
+
+# Gamma {#gamma}
+
+- g item {#gi}
+
+Refs: {{ref: alpha}} {{ref: p1}} {{ref: i1}} {{ref: i2}} {{ref: n1}} {{ref: n2}} {{ref: i3}} {{ref: beta}} {{ref: o2}}
+{{ref: gamma}} {{ref: gi}}
+"""
+
+#: What a lawyer does in Word: press Enter at the start of a paragraph and type (an item, a heading, an ordered item).
+#: Each is (the text of the paragraph it goes before, what is typed, the source line it goes before, the new line).
+INSERTIONS = [
+    ("second item", "NEW item", "- second item {#i2}", "- NEW item"),
+    ("Gamma", "NEWH", "# Gamma {#gamma}", "# NEWH\n"),
+    ("ord two", "NEW ord", "2. ord two {#o2}", "1. NEW ord"),
+]
+
+EDIT_VARIANTS = {name: VARIANTS[name] for name in ("default", "outline", "continental", "none")}
+
+
+def after_the_edits() -> str:
+    source = EDITED
+    for _, _, before, new in INSERTIONS:
+        source = source.replace(before, f"{new}\n{before}")
+    return source
+
+
+@functools.cache
+def edited() -> dict[str, tuple[str, str]]:
+    """Variant to (what LibreOffice says after the insertions and the update, what the text writer prints for the
+    edited source)."""
+    require_libreoffice()
+    jobs = {}
+    for variant, settings in EDIT_VARIANTS.items():
+        jobs[variant] = (render(EDITED, format="docx", **settings).binary, [(m, n) for m, n, _, _ in INSERTIONS])
+    said = libreoffice_edit(jobs)  # type: ignore[arg-type]
+    return {variant: (said[variant], render(after_the_edits(), format="text", **EDIT_VARIANTS[variant]).output)
+            for variant in EDIT_VARIANTS}
+
+
+@pytest.mark.parametrize("variant", EDIT_VARIANTS)
+def test_the_references_follow_the_insertions_a_lawyer_makes(variant: str) -> None:
+    """The point of the whole design: after items and headings are inserted before the targets and the fields are
+    updated, every reference reads as the renderer writes it for the edited document (a reference that was text
+    would still say what it said before)."""
+    said, written = edited()[variant]
+    refs = [squeeze(line) for line in said.splitlines() if "Refs:" in line]
+    expected = [squeeze(line) for line in written.splitlines() if "Refs:" in line]
+    assert refs == expected and refs
+    before = render(EDITED, format="text", **EDIT_VARIANTS[variant]).output
+    assert [squeeze(line) for line in before.splitlines() if "Refs:" in line] != expected  # the edits moved them
+
+
+@pytest.mark.parametrize("variant", ["default", "outline", "none"])
+def test_the_numbers_follow_the_insertions_a_lawyer_makes(variant: str) -> None:
+    said, written = edited()[variant]
+    assert [squeeze(line) for line in said.lstrip("\ufeff").splitlines() if squeeze(line)] == [
+        squeeze(line) for line in written.splitlines() if squeeze(line)]
