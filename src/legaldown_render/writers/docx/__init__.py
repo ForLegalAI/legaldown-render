@@ -12,8 +12,9 @@ Layout of this package:
 * :mod:`.package` -- parts, relationships, content types and the deterministic ZIP;
 * :mod:`.styles`, :mod:`.settings`, :mod:`.headers`, :mod:`.properties` -- the parts that come from the style template;
 * :mod:`.numbering` -- ``numbering.xml``, from the plan's numbering definitions;
-* :mod:`.body` and :mod:`.runs` -- the body of the document and its inlines, laid out as the plan says (interim
-  for the title block, contents, attachments and signatures, see there).
+* :mod:`.body` and :mod:`.runs` -- the body of the document and its inlines, laid out as the plan says;
+* :mod:`.matter` -- the front and back matter: header rows and parties, the table of contents, the attachments and
+  the signature blocks.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from ...tree import RenderTree
 from . import package as pkg
 from .body import BodyWriter, document_title
 from .headers import build_footer, build_header
+from .matter import MatterSettings
 from .numbering import numbering_part
 from .ooxml import Bookmarks, el, serialize
 from .properties import build_app, build_core
@@ -82,7 +84,8 @@ class DocxWriter:
         if page.footer:
             footer_id = rels.add(pkg.REL_FOOTER, "footer1.xml")
 
-        body = BodyWriter(tree, plan, Bookmarks(), rels, text_width, settings.link_color).body(
+        matter = MatterSettings(text_width, settings.points, self.style.contents.depth, self.style.attachments.separator)
+        body = BodyWriter(tree, plan, Bookmarks(), rels, text_width, settings.link_color, matter).body(
             settings.page, header_id=header_id, footer_id=footer_id)
         document = el("document", None, body)
         package.add("docProps/core.xml", pkg.CT_CORE_PROPERTIES, build_core(title, language))

@@ -866,48 +866,18 @@ CONTENTS = ALTERNATIVES + """
 """
 
 
-def with_contents_field(data: bytes) -> bytes:
-    """*data* with a ``TOC \\o "1-5" \\h \\z \\u`` field at the start of the body, with a result that is wrong, for LibreOffice to
-    build the index from (the writer does not write the field itself)."""
-    def change(document: str) -> str:
-        ET.register_namespace("w", W.strip("{}"))
-        root = ET.fromstring(document.encode("utf-8"))
-        body = root.find(f"{W}body")
-        assert body is not None
-
-        def run(child: ET.Element) -> ET.Element:
-            holder = ET.Element(f"{W}r")
-            holder.append(child)
-            return holder
-
-        paragraph = ET.Element(f"{W}p")
-        for kind in ("begin", "instruction", "separate", "text", "end"):
-            if kind == "instruction":
-                child = ET.Element(f"{W}instrText")
-                child.text = ' TOC \\o "1-5" \\h \\z \\u '
-            elif kind == "text":
-                child = ET.Element(f"{W}t")
-                child.text = WRONG
-            else:
-                child = ET.Element(f"{W}fldChar")
-                child.set(f"{W}fldCharType", kind)
-            paragraph.append(run(child))
-        body.insert(0, paragraph)
-        return ET.tostring(root, encoding="unicode")
-
-    return repackage(data, "word/document.xml", change)
-
-
 @functools.cache
 def contents() -> tuple[DocxPlan, tuple[str, ...], str]:
+    """The plan, the entries of the contents LibreOffice builds from the ``TOC`` field the writer wrote (the lines that
+    end in a page number), and the rest of what it shows."""
     require_libreoffice()
     result = render(CONTENTS, format="docx", style="continental", overrides={"contents.enabled": True,
                                                                               "contents.depth": 5})
     assert result.binary is not None
     plan, _ = plan_docx(result.tree)
-    shown = libreoffice_export({"contents": with_contents_field(result.binary)})["contents"]
-    lines = shown.text.lstrip("\ufeff").splitlines()
-    return plan, tuple(lines[:len(plan.toc)]), "\n".join(lines[len(plan.toc):])
+    lines = libreoffice_export({"contents": result.binary})["contents"].text.lstrip("\ufeff").splitlines()
+    entries = tuple(line for line in lines if re.fullmatch(r".*\t\d+", line))
+    return plan, entries, "\n".join(line for line in lines if line not in entries)
 
 
 def test_the_contents_list_the_headings_as_the_plan_does_and_none_of_the_items_on_the_heading_list() -> None:
@@ -915,6 +885,7 @@ def test_the_contents_list_the_headings_as_the_plan_does_and_none_of_the_items_o
     expected = [squeeze(f"{entry.number} {plain_text(entry.title)} {entry.condition_label or ''}") for entry in plan.toc]
     said = [re.sub(r"\s+\d+$", "", squeeze(line)) for line in entries]
     assert said == expected
+    assert len(plan.toc) == 7
     assert [e.number for e in plan.toc] == ["1.", "1.1", "2.", "2.1", "2.", "2.1", "3."]  # the alternative's is shared
     assert not any(word in line for line in entries for word in ("item", "nested"))
     assert "1.1 item one" in body and "a) nested" in body  # the items are in the body: on the heading list, not in it

@@ -16,9 +16,9 @@ the tree gives each section, list item and top-level paragraph:
 * the other blocks of an item, and a quote's or a drafting note's, are plain paragraphs at the indent
   of what they belong to.
 
-**Interim.** The title block (the header rows and parties), the table of contents, the attachments
-and the signature blocks are not written yet: only the title and the subtitle are. The
-:func:`section_properties` and the builders in :mod:`.ooxml` are what the rest will keep.
+The title block, the table of contents, the attachments and the signature blocks are laid out by
+:mod:`.matter`, in the order the HTML writer shows them: title, subtitle, header rows and parties, contents,
+preamble, sections, attachments, signatures.
 """
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ from ...tree import (
     Table,
     plain_text,
 )
+from .matter import MatterSettings, MatterWriter
 from .ooxml import Bookmarks, el, p, tbl_pr, tc_pr, text_run, tr_pr, val
 from .package import Relationships
 from .runs import InlineWriter
@@ -117,21 +118,24 @@ class BodyWriter:
 
     *bookmarks* and *relationships* are the document's (the bookmark ids are unique across the package;
     the relationships receive the external links); *text_width* is the width between the margins in
-    twips, which tables take."""
+    twips, which tables take; *matter* says what the front and back matter need of the style (it defaults
+    to what the built-in styles give)."""
 
     def __init__(self, tree: RenderTree, plan: DocxPlan, bookmarks: Bookmarks, relationships: Relationships,
-                 text_width: int, link_color: str) -> None:
+                 text_width: int, link_color: str, matter: MatterSettings | None = None) -> None:
         self.tree = tree
         self.plan = plan
         self.bookmarks = bookmarks
         self.relationships = relationships
         self.text_width = text_width
         self.link_color = link_color
+        self.matter_settings = matter if matter is not None else MatterSettings(text_width)
         abstracts = {abstract.id: abstract for abstract in plan.abstract_nums}
         self._levels = {num.id: abstracts[num.abstract_id].levels for num in plan.nums if num.abstract_id in abstracts}
         attachment_titles = {a.anchor: plain_text(a.title) for a in tree.attachments if a.anchor}
         #: Not known until a first, dry run has written the document: see :meth:`body`.
         self.inlines = InlineWriter(plan, relationships, bookmarks, None, attachment_titles, link_color)
+        self.matter = MatterWriter(tree, plan, self.inlines, bookmarks, self.matter_settings)
 
     def _left(self, left: int) -> int:
         """*left* twips of indent, kept where a paragraph can still be read: not past Word's limit, and leaving
@@ -149,13 +153,16 @@ class BodyWriter:
         (:class:`~legaldown_render.errors.InternalError`), and a link or a term reference to one shows its text
         without the link. Whatever :meth:`content` writes counts, so the attachments' bookmarks need no list of
         their own."""
-        dry = BodyWriter(self.tree, self.plan, Bookmarks(), Relationships(), self.text_width, self.link_color)
+        dry = BodyWriter(self.tree, self.plan, Bookmarks(), Relationships(), self.text_width, self.link_color,
+                         self.matter_settings)
         dry.content()
         self.inlines.placed = dry.bookmarks.names
         return el("body", None, self.content(), section_properties(page, header_id=header_id, footer_id=footer_id))
 
     def content(self) -> list[ET.Element]:
-        """The block-level content of the body: the title and the subtitle, the preamble and the sections."""
+        """The block-level content of the body, in the order the HTML writer shows it: the title and the subtitle,
+        the header rows and the parties, the table of contents, the preamble, the sections, the attachments and
+        the signature blocks."""
         tree = self.tree
         content: list[ET.Element] = []
         title = document_title(tree)
@@ -164,12 +171,28 @@ class BodyWriter:
         subtitle = plain_text(tree.subtitle).strip()
         if subtitle:
             content.append(p(text_run(subtitle), style=SUBTITLE))
+        content += self.matter.title_block()
+        content += self.matter.contents()
         content += self.blocks(tree.preamble, Context())
         for section in tree.sections:
             content += self.section(section)
+        content += self.matter.attachments()
+        content += self.matter.signatures()
+        content = self._apart(content)
         if content and content[-1].tag.endswith("}tbl"):
             content.append(p())  # a table cannot be the last thing before the section properties
         return content
+
+    @staticmethod
+    def _apart(content: list[ET.Element]) -> list[ET.Element]:
+        """*content* with an empty paragraph between two tables that follow each other (Word merges them
+        otherwise), as :meth:`blocks` does inside a block."""
+        out: list[ET.Element] = []
+        for element in content:
+            if element.tag.endswith("}tbl") and out and out[-1].tag.endswith("}tbl"):
+                out.append(p())
+            out.append(element)
+        return out
 
     def section(self, section: Section) -> list[ET.Element]:
         """The heading paragraph of *section* (``heading N``: the resolver has clamped the level to

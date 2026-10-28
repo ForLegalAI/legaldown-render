@@ -2,7 +2,8 @@
 """Edit DOCX files in headless LibreOffice through UNO the way a lawyer does, update the fields, and write what
 the document says: for each job, a paragraph is inserted before the first paragraph that holds some text (so that
 it takes that paragraph's numbering and style, as pressing Enter at its start does), or that paragraph is deleted,
-then every field and index is updated and the body is exported as plain text (``JOB.txt``, UTF-8).
+then every field and index is updated (the indexes too, so a table of contents lists what was inserted) and the body
+is exported as plain text (``JOB.txt``, UTF-8).
 
 Run it with the system Python that has the ``uno`` module, **not** with the project's virtual environment:
 
@@ -55,7 +56,9 @@ def _edit(document: object, match: str, new: str | None) -> None:
     paragraphs = text.createEnumeration()
     while paragraphs.hasMoreElements():
         paragraph = paragraphs.nextElement()
-        if paragraph.supportsService("com.sun.star.text.Paragraph") and match in paragraph.getString():
+        # A line of a table of contents holds the heading's words too: only the document's own paragraphs count.
+        if (paragraph.supportsService("com.sun.star.text.Paragraph") and match in paragraph.getString()
+                and not paragraph.ParaStyleName.startswith("Contents")):
             if new is None:
                 cursor = text.createTextCursorByRange(paragraph.getStart())
                 cursor.gotoEndOfParagraph(True)
@@ -90,6 +93,9 @@ def edit(out_dir: str, jobs: list[dict]) -> None:
                 for match, new in job["edits"]:
                     _edit(document, match, new)
                 for _ in range(2):  # page numbers and indexes settle after the first layout
+                    indexes = document.getDocumentIndexes()
+                    for position in range(indexes.getCount()):
+                        indexes.getByIndex(position).update()
                     document.getTextFields().refresh()
                     document.refresh()
                 document.storeToURL(uno.systemPathToFileUrl(os.path.join(out_dir, f"{job['name']}.txt")),
