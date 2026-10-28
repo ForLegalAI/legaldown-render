@@ -58,7 +58,9 @@ p.ld-condition { margin: 0 0 0.5em; }
 .ld-signature-line { border-top: 1px solid currentColor; width: 80%; margin-bottom: 0.3em; }
 @media print {
   .ld-document { max-width: none; padding: 0; }
-  .ld-separator-page-break .ld-attachment { break-before: page; }
+  .ld-attachments.ld-separator-page-break { break-before: page; }
+  .ld-separator-page-break .ld-attachment + .ld-attachment { break-before: page; }
+  .ld-attachments-heading { break-after: avoid; }
   .ld-signatures { break-inside: avoid; }
   a { color: inherit; }
 }
@@ -87,7 +89,7 @@ body { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 11p
 <div class="ld-party">
 <p class="ld-party-name">Acme Corporation</p>
 <dl class="ld-party-details">
-<dt>Registration No.</dt><dd>DE-12345678</dd>
+<dt>Identification No.</dt><dd>DE-12345678</dd>
 <dt>Address</dt><dd>123 Main Street, Dover, DE 19901</dd>
 <dt>Represented by</dt><dd>John Smith, Chief Executive Officer</dd>
 </dl>
@@ -169,7 +171,7 @@ for setup, within <span class="ld-value ld-duration">30 days</span> of <span cla
 <mark class="ld-failure">[INVALID FIELD: value]</mark>, <mark class="ld-failure">[UNKNOWN DIRECTIVE: trem]</mark>, <mark class="ld-failure">[UNKNOWN ATTACHMENT: schedule-z]</mark>, <mark class="ld-failure">[INVALID PLACEHOLDER: fee]</mark>,
 and <mark class="ld-failure">[NOT PROCESSED: include includes/extra.lgd]</mark>.</p>
 <p class="ld-p">Raw HTML is dropped. <a href="https://example.com">A safe link</a> stays;
-[an unsafe one](javascript:alert(1)) does not.</p>
+an unsafe one does not.</p>
 </section>
 <section class="ld-attachments ld-separator-page-break" id="ld:attachments">
 <h2 class="ld-attachments-heading">Attachments</h2>

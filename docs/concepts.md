@@ -75,16 +75,19 @@ errors, because a draft with visible markers is useful. Under `--strict` it refu
 
 **4. Content and presentation stay separate.** Everything visual comes from the style template,
 including numbering schemes, locale, and the labels used in the template view. The same source
-must render correctly with any compatible template (§13.7). Locale is a render-time setting and
-is never read from the document; `language` is only a hint (§10.1).
+must render correctly with any compatible template (§13.7). Locale is a render-time setting
+of the style: the document's `language` is only the hint used when the style sets none (§10.1).
 
 **5. Output is deterministic.** Identical inputs produce byte-identical output: no timestamps,
 no random ids, stable anchor names, stable ordering. This makes golden-file tests possible and
 lets rendered output be diffed in Git just like the source.
 
 **6. It is safe with documents you did not write.** Raw HTML in the source is never emitted
-(§8.7). All text is escaped for the target format. Link URLs are checked against an allow-list of
-schemes. At Rendering level the renderer reads no files other than the document, the chosen
+(§8.7). All text is escaped for the target format. A link is made only for a relative URL or
+one of a short list of schemes (`http`, `https`, `mailto`, `tel`, `ftp`, ...); any other
+(`javascript:`, `file:`, `data:`, protocol handlers such as `ms-msdt:`) is shown as its text and
+reported, and an image whose path is not relative is shown as
+its alt text and reported (§2.3). At Rendering level the renderer reads no files other than the document, the chosen
 style template, and the answers file the CLI is given with `--answers`.
 
 ## Vocabulary

@@ -1,5 +1,10 @@
+"""Styles: the built-in ones, layering with ``extends``, dotted overrides merged
+field by field, how every problem is reported with its path, dumping a style to
+YAML, and the typing of command-line values. Validation of templates and the
+loader's edge cases are in test_style_validation.py."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -37,7 +42,7 @@ def test_every_problem_is_reported_with_its_path() -> None:
 
 def test_file_extends_a_builtin(tmp_path: Path) -> None:
     path = tmp_path / "house.yaml"
-    path.write_text("version: 1\nextends: continental\nlocale: cs-CZ\ndefinitions: {style: small-caps}\n")
+    path.write_text("version: 1\nextends: continental\nlocale: cs-CZ\ndefinitions: {style: small-caps}\n", encoding="utf-8")
     style = load_style(path)
     assert style.name == "house"
     assert style.paragraphs.numbered is True  # from continental
@@ -46,11 +51,11 @@ def test_file_extends_a_builtin(tmp_path: Path) -> None:
 
 
 def test_relative_extends_and_cycles(tmp_path: Path) -> None:
-    (tmp_path / "base.yaml").write_text("version: 1\nnumbering: {scheme: none}\n")
-    (tmp_path / "child.yaml").write_text("version: 1\nextends: base.yaml\n")
+    (tmp_path / "base.yaml").write_text("version: 1\nnumbering: {scheme: none}\n", encoding="utf-8")
+    (tmp_path / "child.yaml").write_text("version: 1\nextends: base.yaml\n", encoding="utf-8")
     assert load_style(tmp_path / "child.yaml").numbering.scheme == "none"
-    (tmp_path / "a.yaml").write_text("version: 1\nextends: b.yaml\n")
-    (tmp_path / "b.yaml").write_text("version: 1\nextends: a.yaml\n")
+    (tmp_path / "a.yaml").write_text("version: 1\nextends: b.yaml\n", encoding="utf-8")
+    (tmp_path / "b.yaml").write_text("version: 1\nextends: a.yaml\n", encoding="utf-8")
     with pytest.raises(StyleError, match="circular"):
         load_style(tmp_path / "a.yaml")
 
@@ -59,7 +64,7 @@ def test_unknown_builtin_and_bad_version(tmp_path: Path) -> None:
     with pytest.raises(StyleError, match="no built-in style named 'fancy'"):
         load_style("fancy")
     path = tmp_path / "future.yaml"
-    path.write_text("version: 2\n")
+    path.write_text("version: 2\n", encoding="utf-8")
     with pytest.raises(StyleError, match="style format 1"):
         load_style(path)
 
@@ -67,8 +72,9 @@ def test_unknown_builtin_and_bad_version(tmp_path: Path) -> None:
 def test_dump_round_trips(tmp_path: Path) -> None:
     style = load_style("continental", overrides={"locale": "de-DE"})
     path = tmp_path / "dumped.yaml"
-    path.write_text(dump_style(style))
-    assert load_style(path) == style
+    path.write_text(dump_style(style), encoding="utf-8")
+    # The dump is flattened: the same style, without the record of what it extended.
+    assert load_style(path) == replace(style, extends=None)
 
 
 def test_command_line_values_are_typed_by_their_setting() -> None:

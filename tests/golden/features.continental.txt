@@ -6,7 +6,7 @@ Effective date: June 1, 2026
 
 Provider
     Acme Corporation
-    Registration No.: DE-12345678
+    Identification No.: DE-12345678
     Address: 123 Main Street, Dover, DE 19901
     Represented by: John Smith, Chief Executive Officer
 
@@ -47,7 +47,7 @@ This Services Agreement (this Agreement) is made between Acme and Beta Industrie
 (1) The Client shall pay $10,000.00 per month, and €1,234.50 for setup, within 30 days of July 1, 2026. The Provider's VAT number is DE123456789.
 
 | Service | Fee | Notes |
-|---|---|---|
+|:---|---:|:---:|
 | Hosting | $500.00 | per month |
 | Support | $250.75 | see 3 |
 
@@ -63,7 +63,7 @@ This Services Agreement (this Agreement) is made between Acme and Beta Industrie
 
 (1) These are deliberately wrong: [BROKEN REF: nowhere], [UNDEFINED: nothing], [INVALID DATE: 2026-13-45], [INVALID AMOUNT], [UNKNOWN CURRENCY: XYZ], [UNKNOWN PARTY: nobody], [INVALID PARTY: Bad_Name], [UNKNOWN SIDE: nobody], [INVALID DURATION: -1], [INVALID DURATION UNIT: M], [INVALID FIELD: value], [UNKNOWN DIRECTIVE: trem], [UNKNOWN ATTACHMENT: schedule-z], [INVALID PLACEHOLDER: fee], and [NOT PROCESSED: include includes/extra.lgd].
 
-(2) Raw HTML is dropped. A safe link <https://example.com> stays; [an unsafe one](javascript:alert(1)) does not.
+(2) Raw HTML is dropped. A safe link <https://example.com> stays; an unsafe one does not.
 
 ---
 
@@ -71,6 +71,8 @@ Attachments
 
 Schedule A: Service Description
 File: attachments/service-description.lgd
+
+---
 
 Exhibit 1: Price List
 File: attachments/price-list.pdf

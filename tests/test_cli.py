@@ -1,19 +1,23 @@
+"""The command line: the format from ``-o``, ``--style``, ``--set``,
+``--locale``, ``--strict``, ``--final``, ``--answers``, ``--print-style`` and
+``--list-styles``, their exit codes, and the diagnostics on standard error. How
+output is encoded and written is in test_cli_io.py."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from conftest import DOCUMENTS
+from conftest import DOCUMENTS, FEATURES
 
+import legaldown_render.cli as cli
+from legaldown_render import StyleError
 from legaldown_render.cli import main
-
-FEATURES = str(DOCUMENTS / "features.lgd")
 
 
 def test_render_to_file_infers_the_format(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     out = tmp_path / "out.txt"
     assert main([FEATURES, "-o", str(out)]) == 0
-    assert out.read_text().startswith("Services Agreement")
+    assert out.read_text(encoding="utf-8").startswith("Services Agreement")
     err = capsys.readouterr().err
     assert "[ref-broken]" in err
     # A validator finding names its line, as the validator's CLI prints it.
@@ -90,3 +94,17 @@ def test_set_keeps_text_values_as_written(capsys: pytest.CaptureFixture[str]) ->
 def test_quote_bounded_literal_setting_is_kept(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([FEATURES, "-f", "text", "-q", "--set", 'references.format="§" {designation} "x"']) == 0
     assert 'under Section "§" 2.1 "x".' in capsys.readouterr().out
+
+
+def test_set_style_error_is_shown_by_argparse(monkeypatch: pytest.MonkeyPatch,
+                                              capsys: pytest.CaptureFixture[str]) -> None:
+    def refuse(key: str, text: str) -> object:
+        raise StyleError("overrides", [f"{key}: the value is no good"])
+
+    monkeypatch.setattr(cli, "parse_override", refuse)
+    with pytest.raises(SystemExit) as exit_info:
+        main([FEATURES, "--set", "numbering.scheme=oops"])
+    assert exit_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "numbering.scheme: the value is no good" in err
+    assert "--set" in err

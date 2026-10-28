@@ -4,37 +4,51 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Called by publish.yml, so a release is only built once these jobs pass.
+  workflow_call:
 
 permissions:
   contents: read
 
+env:
+  # The LegalDown specification release the conformance job renders; the one
+  # place to change it when the renderer moves to a later specification.
+  LEGALDOWN_SPEC_REF: v0.2
+
+# In a called workflow, github.workflow is the *caller's* name ("Publish"), not
+# "CI". That keeps this group apart from the push/pull-request CI runs on the
+# same ref, so a dispatched or release publish neither cancels nor is cancelled
+# by them, and it never collides with publish.yml's own group (two workflows in
+# one group would wait for each other forever).
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - run: pip install ruff
       - run: ruff check .
 
   test:
-    name: Tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        # Windows: path handling, console encodings and line endings differ.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -45,16 +59,16 @@ jobs:
     name: Specification examples and fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out the LegalDown specification
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ForLegalAI/LegalDown
-          ref: v0.2
+          ref: ${{ env.LEGALDOWN_SPEC_REF }}
           path: .legaldown-spec
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - run: pip install -e ".[dev]"
       - run: pytest -q -m conformance
@@ -68,10 +82,10 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - run: pip install -e ".[dev]"
       # Force-reinstalled last, with --no-deps, so main is tested even when its

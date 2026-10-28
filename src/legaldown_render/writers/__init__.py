@@ -12,10 +12,22 @@ FORMATS: dict[str, tuple[str, ...]] = {
 }
 
 
+def file_extension(name: str) -> str:
+    """The lower-cased extension of a file name, without the dot, or ``""``.
+
+    It is the text after the last dot, also in a name that starts with one
+    (``.pdf`` is a PDF name here, not a name without extension), and trailing
+    dots and spaces are not part of the name (Windows drops them, so
+    ``x.pdf.`` and ``x.docx `` name the same files as ``x.pdf`` and ``x.docx``).
+    """
+    name = name.rstrip(". ")
+    return name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+
 def format_for_path(path: str) -> str | None:
     """The output format a file name implies, or None."""
-    extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    extension = file_extension(path)
     return next((name for name, extensions in FORMATS.items() if extension in extensions), None)
 
 
-__all__ = ["FORMATS", "HtmlWriter", "TextWriter", "format_for_path", "stylesheet"]
+__all__ = ["FORMATS", "HtmlWriter", "TextWriter", "file_extension", "format_for_path", "stylesheet"]

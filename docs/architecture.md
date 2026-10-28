@@ -83,6 +83,7 @@ never decides a structural or LegalDown question itself:
 | Whether a quote is a drafting note, and its content | The validator's `is_drafting_note()` and `drafting_note_blocks()` |
 | Which list item a marker belongs to | `PlacedMarker.item`: the item's number among the list's items, in pre-order |
 | A lifted definition, `{{ref:}}` or `{{term:}}` block's source | The validator's `render_block()` |
+| The line of a heading, a top-level block or a list item (§16.9) | `Document.line_of()` |
 
 These are all the validator's public API: the model and the result from `legaldown`, and, for
 assembly, `parse_template` (`Template.form().assemble()`), `AssemblyError`, and the answers
@@ -96,13 +97,20 @@ Markdown cannot reinterpret directive syntax, such as an underscore in an identi
 random for each build, so no text in a document, whether written literally, as an entity, or
 percent-encoded, can pass for a sentinel. Emphasis that wraps only a defined term is dropped with
 it, because the style decides how defined terms look (§7.2). A `{{def:}}` becomes a sentinel
-that renders nothing, led by a punctuation character so that an emphasis closer just before it
-still closes. A defined term in a link title or alt text shows its term but is not the
+that renders nothing. Every sentinel is wrapped in a punctuation character (U+2E31, Unicode
+category Po, which markdown-it's `isPunctChar` accepts) on both sides, as the `{{` and `}}` it
+replaces are punctuation, so that CommonMark's emphasis flanking rules see the same neighbours as
+in the source: `_text_{{ref: a}}` closes its emphasis. A defined term in a link title or alt text shows its term but is not the
 definition's anchor.
 
-An HTML block in the model (`kind="html"`), a comment block included, renders nothing (§8.6).
+An HTML block in the model (`kind="html"`), a comment block included, renders nothing (§8.6). A
+comment that starts a line is such a block, and it ends at the line holding `-->`, so text after
+the `-->` on that line is dropped with it (CONFORMANCE.md, "Text after a comment").
 Within a block's text, inline comments and tags are dropped; where one stood between two spaces,
-one space stays. The validator reports raw HTML other than comments (`raw-html`, §8.7). A heading
+one space stays, and before a line break none does. A list item whose blocks are all comments,
+and a quote that holds only comments, are dropped (with a list left empty), after the whole list
+is traversed so that the validator's item numbers stay aligned with the markers it placed. The
+validator reports raw HTML other than comments (`raw-html`, §8.7). A heading
 in a list item or a quote (`kind="heading"`) is not a section (§4.1) and shows as a bold line.
 
 The builder never works around the validator's model. Where the model loses or misreads
@@ -129,15 +137,15 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
    validator's `exclusive()`). It then labels
    list items by depth and top-level paragraphs, and allocates output anchors. Every anchor
    target is registered with its **designation**: "4.2", "4.2(b)(ii)", or "Termination (a)"
-   under the `none` scheme.
+   under the `none` scheme, where it is worked out from the headings (see below).
 3. **Inlines.** It replaces every source inline with a resolved one:
 
 | Directive | Resolves to | Failure markers |
 |---|---|---|
 | `{{ref:}}` | `CrossRef(designation, anchor)` (§13.3). A ref to an unnumbered item or paragraph falls back to its section's designation, with `ref-not-enumerated` | `[BROKEN REF: id]` |
-| `{{term:}}` | `TermRef(label or term, def anchor)` (§7.3, §13.4) | `[UNDEFINED: id]` |
+| `{{term:}}` | `TermRef(label or the definition's rendered term text, def anchor)` (§7.3, §13.4); the text is the first definition's term resolved as at the definition, worked out on first use by `Resolver._term_text` (`_survey` only records which definition is first) | `[UNDEFINED: id]` |
 | `"Term" {{def:}}` | `DefinedTerm` without quotation marks, anchored at `def:<id>` (§7.2) | n/a |
-| `{{date:}}` `{{money:}}` `{{duration:}}` | `Value`, formatted for the locale by Babel (ADR 0005) | `[INVALID DATE: …]`, `[INVALID AMOUNT: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION: …]`, `[INVALID DURATION UNIT: …]` |
+| `{{date:}}` `{{money:}}` `{{duration:}}` | `Value`, formatted for the locale by Babel (ADR 0005): amounts and durations keep every written digit (a fraction beyond Python's 4300-digit limit takes its plural form from its first 30 digits), and a duration without a pattern in the locale falls back to another length, the language alone, then English with `render-locale-fallback` | `[INVALID DATE: …]`, `[INVALID AMOUNT: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION: …]`, `[INVALID DURATION UNIT: …]` |
 | `{{party:}}` `{{side:}}` | `Value(label or display name)` (§3.6) | `[INVALID PARTY: …]`, `[UNKNOWN PARTY: …]`, and the side forms |
 | `{{field:}}` | `Value(raw value)` | `[INVALID FIELD: …]` |
 | `{{placeholder:}}` | `Blank`, with the question's prompt if the style asks for it | `[INVALID PLACEHOLDER: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION UNIT: …]` |
@@ -149,7 +157,9 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 A `label` never hides a failure marker (§11.5). Frontmatter strings go through the same resolver,
 so placeholders in frontmatter render as blanks (§3.10).
 
-The resolver also builds the **title block** (effective date, sides and parties), **attachment
+The resolver also builds the **title block** (effective date, sides and parties; a party is named
+there by `legal_name`, as an identification block, where `{{party:}}` in the text shows its
+`label`, §3.6), **attachment
 placeholders** (§13.8; files are not read at this level), and **signature blocks** (§2.2, always
 with `legal_name`, per §3.6).
 
@@ -160,9 +170,49 @@ so ids stay unique. A definition's anchor is given out in one place, when its de
 resolved. Terms in titles or alt text get none. After everything is resolved, one pass drops the
 link of any `{{term:}}` whose definition got no anchor, so term links always have a target.
 
-Under the `none` scheme, a section's designation is its heading text, computed by a text-only
-pass that gives out no anchors and leaves references out. Headings are numbered with their level
-clamped to 1–5, as the validator numbers them.
+Headings are numbered with their level clamped to 1–5, as the validator numbers them.
+
+**Designations under the `none` scheme (§13.3).** A section's designation is its heading as
+rendered, as plain text with white space collapsed: the `{{ref:}}`s and `{{term:}}`s in it are
+resolved (a reference shows `references.format` applied to its target's designation, so
+`# About {{ref: ov}}` is "About Overview"), a broken reference shows its marker. An item's or
+paragraph's designation is its section's with the item pieces after it ("Termination (a)"). A
+heading can refer to a heading, item or paragraph anywhere, so designations are worked out in
+four steps. They run only when the scheme is `none` and a section heading, or the text of a term a
+heading uses (directly or through other terms), holds a `{{ref:}}`; for a term whose definition is
+not in the body, the validator's own text of it is searched for `{{`. Otherwise the first step's text
+is final and nothing more is done. (A value of the frontmatter that a heading shows, with
+`{{party:}}` or `{{attach:}}`, is not searched: a `{{ref:}}` in it is not designated through.)
+
+1. Every section, item and paragraph is numbered on a **provisional** designation: the heading's
+   text-only reading (`Resolver._title_text`, which leaves references out). Each target records
+   its section and the pieces after it (`_Target.section_index`, `parts`).
+2. `Resolver._designate` works out every section's designation once, by a depth-first walk in
+   document order that memoises: a reference reads the designation of its target (an item's or
+   paragraph's is its pieces put together again on its section's, `_compose`), which is worked out
+   on the spot if it is not known yet. The walk reads headings with `_title_text`, so it gives out
+   no anchor, and reports nothing itself (what it resolves is read again in its place, where a
+   diagnostic about a heading is made once); its term texts have a cache of their own, apart from the
+   later pass's.
+3. Where any designation differs from the provisional one, the numbering of step 1 is done again on the
+   final designations (labels, designations, `render-ref-ambiguous` slots). Anchors are given out
+   in the same order and so come out the same.
+4. The inlines are resolved as for every scheme, now with every designation known.
+
+A heading that reads itself again (directly, through other headings or terms, or through its own
+item) reads as its provisional text where the circle closes, with the Warning
+`render-designation-cycle`. A heading read from the text of a term it uses is such a circle, and what
+it reads there is not kept (it is worked out again where the term is not open). A walk through more
+than 32 headings, a designation longer than 1,000 characters once its references are resolved (a
+chain of headings that each cite the next twice would ask for 2^n), or inline levels nested past 60
+(counted from where the outermost open term began, or from the heading where the walk started: so a
+heading with 59 or more nested emphasis levels that holds a reference can reach it after one hop)
+also give the heading's provisional text, with `render-designation-limit` (so does a term the walk
+cut by the term limits). A ring of more than 32 headings is therefore reported as a limit, not as a
+cycle. A `{{ref:}}` shows at most the first 1,000 characters of a heading (the item or paragraph
+piece after it is kept), and `render-designation-limit` says so for that heading. So a heading in a
+cycle or past a cap, or one whose terms reach into one, may read differently from the designation
+references show; the Warning says so. Every other heading reads exactly as its designation.
 
 ### 5. Write (`writers/`)
 
@@ -171,7 +221,7 @@ clamped to 1–5, as the validator numbers them.
 
 | Writer | Notes |
 |---|---|
-| `TextWriter` | Plain text (§13.6). A soft line break inside a paragraph is a space, a hard break a new line, and lists are indented with their labels. It is the **test oracle** for resolution |
+| `TextWriter` | Plain text (§13.6). A soft line break inside a paragraph is a space, a hard break a new line, and lists are indented with their labels, one quote stays one quote, and tables keep escaped cells and alignment. It takes the style's `attachments.separator` (default `page-break`; `rule` and `page-break` both print `---` before the attachments heading and between attachments). It is the **test oracle** for resolution |
 | `HtmlWriter` | A self-contained HTML5 page, or with `standalone=False` just the `<article>`. Semantic markup, with labels as real text rather than CSS counters, and a stylesheet generated from the style's presentation settings, including print rules |
 | DOCX, PDF | Planned ([ADR 0004](decisions/0004-html-first.md)) |
 
@@ -181,8 +231,9 @@ clamped to 1–5, as the validator numbers them.
 src/legaldown_render/
 ├── __init__.py        public API, __version__, SPEC_VERSION, CONFORMANCE_LEVEL
 ├── api.py             render(), render_file(), RenderOptions, RenderResult
+├── diagnostics.py     frontmatter key lines for diagnostics, and when a diagnostic repeats another
 ├── cli.py             the legaldown-render command
-├── errors.py          RenderError, DocumentError, RenderRefused, InternalError
+├── errors.py          RenderError, StyleError, OptionsError, DocumentError, RenderRefused, InternalError
 ├── tree.py            render tree nodes (source and resolved inlines, blocks, document)
 ├── build.py           stage 3
 ├── resolve/
@@ -220,35 +271,180 @@ turns into an error.
 
 - **Document problems** render as failure markers and are listed in `diagnostics`. `strict=True`
   raises `RenderRefused` instead, carrying the diagnostics.
-- **Configuration problems** (an invalid style, setting, locale, or format) raise before
-  rendering, with every problem named.
+- **Configuration problems** raise before rendering, with every problem named: an invalid style,
+  setting, or locale raises `StyleError` (this includes a `{field}` that a text template does not
+  accept or lacks, a `--set` value that is not valid YAML, and an `extends` cycle); an unknown output format, or a document that is not inside the configured document root, raises `OptionsError`. Both are
+  `RenderError`s (and `ValueError`s, as they always were). Every renderer error pickles, so it
+  survives `multiprocessing`.
 - **Internal inconsistencies** raise `InternalError`, and the CLI exits with 70.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
-`ref-not-enumerated`, a specification rule id, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-locale-fallback`, and `render-ref-ambiguous`. The validator's
-diagnostics carry their line (§16.9), and the CLI prints it as `file:line:`. The renderer's own
-have none yet: they are about a directive within a block, and the validator makes only a block's
-line public (`Document.line_of`, U2).
+`ref-not-enumerated`, `path-not-relative` and `path-outside-root` (Errors for a file reference that is
+not relative, or that leaves the document root, §2.3; reported here because validator 0.4 checks
+neither), specification rule ids, plus renderer-specific ids prefixed `render-`:
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
+diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
+`file:line:`.
+
+**Lines.** The builder asks `Document.line_of` for the line of every section heading, top-level
+block and list item (an item's pre-order number, which the builder already tracks for markers) and
+stores it as `line` on `Section`, `Paragraph`, `ListItem`, `Table`, `Quote`, `DraftingNote` and
+`CodeBlock` (not part of equality, so trees compare as before). A block inside a quote has the
+quote's line; one inside a list item, the item's. The resolver tracks the line of what it is
+resolving (`Resolver.line`, set with `_at`) and every renderer diagnostic carries it, so the
+granularity is the block's (or the item's, or the heading's): a `{{ref:}}` or `{{term:}}` paragraph
+is lifted by the validator and written back, so the renderer cannot place a directive within a
+block without the validator's internal `Locator`, which would be a second bridge to its internals
+(ADR 0007); it waits for
+[validator#93](https://github.com/ForLegalAI/legaldown-validator/issues/93). A finding about
+frontmatter is at its key (`diagnostics.key_line`, which wraps the public `source_map.key` and
+returns None without a source map; one helper for every frontmatter reference). A term's text is
+worked out at the term's definition (`Resolver.term_lines`, recorded by `_survey`) whichever
+reference asks first. `Diagnostic.file` is `RenderOptions.filename`, which `render_file` and the CLI
+set to the file name as the validator does (`Document.filename`, without the directory; `render` drops one given, `/` or `\`).
+
+**Repeats.** `Resolver._warn` and `Resolver._reference` add a diagnostic through `diagnostics.record`,
+which keeps one finding (rule, level, message) once, at the lowest line it was seen at: the
+resolver works out the body before the title block, so a later sighting at a lower line moves the
+reported one. `api.render` lists the renderer's diagnostics in the order of their lines (`diagnostics.by_line`,
+none last) after the validator's, and leaves out those the validator's or the assembly's name already
+(`diagnostics.repeats`). The renderer's `path-not-relative` and `path-outside-root` are left
+out when the validator reported the same path at the same line, or at none (`diagnostics.covered_by`).
 
 ## Security
 
 - Raw HTML in the source is never emitted (§8.7).
 - Every text node and attribute is escaped.
-- Links and images whose URL has a scheme other than `http`, `https`, `mailto`, or `tel` render
-  as text. markdown-it-py also refuses `javascript:`-style URLs when parsing.
+- A link is a hyperlink (§8.7) only if its URL is relative (no scheme, a fragment) or its scheme
+  is one of `urls.LINK_SCHEMES`: `http`, `https`, `mailto`, `tel`, `ftp`, `ftps`, `sftp`, `sip`,
+  `sips`, `sms`, `urn`, `geo`, `news`. It is an allow-list, because a renderer reads documents it
+  did not write (principle 6 in concepts.md): protocol handlers (`ms-msdt:`, `ms-word:`,
+  `search-ms:`, `vscode:`, `intent:`, `blob:`, `jar:`, ...) and pseudo-schemes (`C:\x`,
+  `localhost:8080`) are not links, nor are `javascript:`, `file:`, `data:`. The scheme is read as
+  a browser reads the URL (tabs, newlines, controls, and case are ignored). One predicate,
+  `urls.is_link_target`, serves both writers and the resolver. A link that is not made renders as
+  its text alone, in HTML and in text alike, and the resolver reports a non-empty one as the
+  Warning `render-link-refused` (the writers emit no diagnostics, ADR 0003); an empty URL is
+  text with no diagnostic. The builder turns off markdown-it-py's own `validateLink` (which would
+  leave such links as literal Markdown) and keeps them as nodes, so that the resolver can report
+  §2.3 paths and the allow-list is the one gate for every `href` and `src` the HTML writer emits
+  (links, images, value links). A link with no text shows its URL as written (percent-encoding
+  undone; the `href` stays encoded); the text writer leaves out ` <url>` when the URL, less a
+  `mailto:` or `tel:` prefix, is the text.
+- What the CLI prints on stderr never carries a raw control character from the document or the command
+  line: every error line and every argparse error goes through `cli._safe` (`urls.printable` per line), so
+  an input, answers, output or style name, a locale or a `--set` key echoed in one is escaped, and `cli._report`
+  passes the file name and every diagnostic message (the renderer's and the validator's, which quote
+  ids, paths and terms as written) through `urls.printable`, which writes every C0/C1 control, DEL,
+  Unicode format character (bidi controls, zero-width), and U+2028/9 as `\xNN` or `\uNNNN`, so a
+  crafted document cannot move the cursor, set a terminal title, or forge a line. The messages the
+  API returns are not all escaped: only a path or URL quoted by the renderer's own rules
+  (`path-not-relative`, `render-link-refused`) is, at its source; a caller that shows other
+  messages must do the same.
+- Every file reference (§2.3) must be relative with no URI scheme, and within the document root
+  when one is configured, so a remote resource is never fetched or embedded and no path leads
+  outside the tree the document belongs to. The references are `{{include:}}` paths,
+  `attachments[].file`, `amends.file`, `supersedes.file` (the object form; a plain string
+  describes the document and is no path), `translations` values, and image paths. Resolution, not a
+  writer, enforces it (`Resolver._reference`, one place for every kind, over
+  `urls.file_reference_problem`): an image whose path has a scheme (`https:`, `file:`, `data:`, a
+  Windows drive such as `C:\x`) or starts with `/` or `\` (`//host`), or leaves the root, is replaced by
+  its alt text; an `{{attach:}}` whose file fails is its text with no link; an include marker and
+  an attachment placeholder's path stay as text. Each is reported as the Core Error
+  `path-not-relative` or `path-outside-root`, which `--strict` refuses. An image with an empty path
+  shows its alt text too, with no diagnostic (§2.3 has no rule for it). The checks are lexical,
+  as §2.3 says: no `resolve()`, no symbolic link followed, no file read or tested for existence.
+  The root is `RenderOptions.document_root` (`--root DIR`); with none, `../` is allowed, §2.3
+  defining no default root (a service rendering documents it does not control SHOULD set one). A
+  path's base is the document's directory relative to the root (`api._document_base`: the lexical
+  `relpath` of the directory of `document_path` to the root, `/`-separated; the document at the
+  root when it has no path, as text given to `render()` and standard input are); a document
+  outside the root, or on another Windows drive, is an `OptionsError`, since the boundary would
+  mean nothing. A backslash is read as a separator (the renderer's reading, so a path that goes up
+  on Windows is not missed), `..` with trailing dots and spaces is `..` and `.` with trailing spaces is `.`, a control character (NUL included) makes the path `not-relative`, and percent-encoding is
+  decoded once, only for what is used as a URL (an image's `src`, the link an `{{attach:}}`
+  makes): `%2e%2e` is `..` there, and a directory name in a frontmatter or include path. The
+  writers' image check is a second line. Markdown links are not file references (§8.7): they stay
+  governed by the allow-list above, since the renderer reads nothing at their targets.
 - At Rendering level, the only files read are the document, the style template, and the answers
   file the CLI reads with `--answers` (the Python API takes answers as a mapping). Attachment
   files and includes are never opened.
-- Style values that are placed into CSS are stripped of `;{}<>`. `html.extra_css` is trusted
-  configuration, so a hosted service must not accept styles from untrusted users.
+- **A style template is trusted input, unless it is loaded untrusted.** By default a template, a
+  `--set` value and an `extends` path are the operator's, and the loader still keeps a value from
+  breaking out of the stylesheet:
+  - A value placed into the stylesheet (fonts, sizes, colours, margins, `page.size`,
+    `html.max_width`) is refused with a `StyleError` naming the setting when it contains `/*`, `*/`,
+    `</`, a backslash, a control character or a line break (`style/model.py:css_problem`, called
+    from `style/loader.py:_convert` for every field declared with `css_field`). It is rejected,
+    never stripped: removing one token can form another (`/` + `/**/` + `*` is `/*`). Anything else
+    is the operator's, so `calc()` and `var()` load. A value is not validated as CSS, though, so
+    `12pt (` is emitted as written and leaves the rest of the stylesheet unparsable.
+  - `html.extra_css` is raw CSS, appended as written, but it may not contain `</style` in any case;
+    `stylesheet()` also writes any `</` in it as `<\/` (the same inside a CSS string), for a `Style`
+    built by hand.
+  - `values.date` is a CLDR pattern handed to Babel, which raises on one it does not know, at every
+    date in a document. The loader formats fixed dates with it (`_value_problems`), so a bad pattern is
+    a `StyleError` naming the setting.
+  - NUL and lone surrogates are refused in every value written into the stylesheet (`html.extra_css`
+    too): no output encoding can write them.
+  - `writers/html.py:_css` is the last line, for `writers.html.stylesheet()` given a `Style` built
+    by hand, which the loader never saw: it strips `;{}<>\@`, control characters and line breaks,
+    and removes comment delimiters until none is left. A lone `/` stays, since `calc(100% / 3)`
+    needs it.
+  - `extends` names any path the process can read, absolute or with `../`; only cycles are
+    rejected. A style file is read with `yaml.safe_load`, as UTF-8.
+- **Untrusted mode** (`load_style(..., trusted=False)`, `RenderOptions.untrusted`, `--untrusted`)
+  is for a service that renders what its users send. The style is a built-in name, a `Style`, a
+  mapping, or YAML text (a string with a line break), never a file path: nothing is read from disk
+  but the package's own styles. `extends` may name only a built-in style. Each setting that reaches
+  the stylesheet must match a strict grammar declared next to the field (`style/model.py:CSS_KINDS`:
+  length, line-height, colour, font-weight, font-family, page size, margin, max-width), enforced in
+  `_convert` for a mapping and, through `style_to_dict`, for a `Style` object and for settings
+  objects given as overrides. The grammars allow no function, no variable and no `!important`, so
+  `calc(1em + 2px)` and `var(--x)` are refused. `html.extra_css` must be empty. YAML text is at most
+  64 KiB (UTF-8 bytes), may not use aliases (the "billion laughs" shape), and a number in it is at most
+  32 characters (`_StyleLoader` reads `!!int`, `!!float`, `!!bool` and timestamps through guarded
+  constructors, so a text PyYAML cannot convert is a `StyleError`, not its `ValueError`). Every
+  free-text setting is at most 200 characters (a label or format is repeated wherever the output shows
+  it, so an unbounded one multiplies the document's size) and `values.date` is one of the four names.
+  A message lists 20 problems at most and "and N more"; an exception the loader did not foresee is
+  reported as "the style could not be read", never with its own message. Every style, trusted or
+  not, may nest 32 levels at most, in YAML text (refused by the scanner, `style/loader.py:_StyleLoader`,
+  before anything is built, as PyYAML's cost is quadratic in the depth) and in a mapping. A message
+  names the setting and the problem, and never quotes the style, a key, a template field or a path (a
+  YAML error gives the line and column only), so it can be shown to the user who sent it.
+  `--untrusted --print-style` loads the style this way and needs no root. `RenderOptions.untrusted`
+  also requires a `document_root` (§2.3: a renderer for documents it does not control SHOULD set one): without it `render` raises an
+  `OptionsError`, and the command exits 2. The option and the flag are one switch for both checks.
+  Defaults are unchanged: trusted, no root required. A service should still choose the style
+  itself. Document source has no power over the stylesheet either way: it is never emitted as HTML
+  or CSS (§8.7).
 
 ## Testing
+
+Each module is named for its topic. Shared helpers (the minimal document header, the `text` and
+`html` renderers, and running the command as a program) are in `tests/conftest.py`.
 
 | Suite | What it checks |
 |---|---|
 | `tests/test_golden.py` | The test documents under each built-in style, compared byte for byte with `tests/golden/`. Regenerate with `pytest --update-golden` and review the diff |
-| `tests/test_render.py` | Numbering schemes, designations, fallbacks, every failure marker, template view, labels by language, HTML safety, unique anchors, determinism, strict mode, locales |
-| `tests/test_style.py`, `tests/test_values.py` | Style layering and validation; counters and locale formatting |
-| `tests/test_cli.py` | The command |
+| `tests/test_render.py` | Numbering schemes, designations, fallbacks, every failure marker, template view, labels by language, HTML safety, unique anchors, determinism, strict mode, locales; the renderer's reading of the validator's structure (lists, quotes, comments, markers) |
+| `tests/test_values.py` | Money, dates and durations in a locale: exact digits, plural of the value shown, currency display, CLDR fallback to English |
+| `tests/test_numbering.py` | Counter formats, label templates and the preamble's `{section}` |
+| `tests/test_build.py` | Building the tree: comment-only items and quotes, emphasis next to a directive, spacing where an inline comment was dropped |
+| `tests/test_terms.py` | What `{{term:}}` shows, references inside terms, terms that name themselves or each other, the cap on a term text |
+| `tests/test_none_designations.py` | Designations under the `none` scheme: references and terms in headings, items and paragraphs under them, ambiguity on the final designations, cycles, the depth, length and nesting limits, the lines of the Warnings, work bounds, invariants on random documents |
+| `tests/test_terms_budget.py` | Reuse of worked-out term texts, the work budget and depth limit for terms that name each other. Bounds the work by counting resolved directives, never by timing |
+| `tests/test_diagnostic_lines.py` | The line and file of every renderer diagnostic: in each kind of block (paragraph, list item, nested item, table, quote, heading, preamble) and at frontmatter keys, the repeats left out, the tree nodes' lines, and `file:line:` on the command line |
+| `tests/test_links.py` | Which images are shown and which links are links: non-relative image paths, the link scheme allow-list, empty URLs and empty link text, and how a refusal is reported |
+| `tests/test_file_references.py` | File references (§2.3): the lexical check (relative, `../`, scheme, drive, backslash, encoding), each kind of reference with and without a root and from a subdirectory, what is shown instead, the options and `--root`, strict, and the lines |
+| `tests/test_text_writer.py` | The plain-text layout: attachment separators, tables, quotes, list items and indent, blanked labels |
+| `tests/test_html.py` | The HTML writer's print stylesheet for attachments |
+| `tests/test_labels.py` | The built-in labels of parties, per language |
+| `tests/test_style.py` | Built-in styles, `extends`, dotted overrides, problem reporting, dumping a style, typing of command-line values |
+| `tests/test_style_validation.py` | Template field validation, `extends` cycles, self-contained dumps, `version` and `extends` not overridable, YAML errors in `--set`, the empty-blank fallback |
+| `tests/test_cli.py` | The command's options, exit codes and diagnostics |
+| `tests/test_cli_io.py` | Encodings of the streams, input that is not UTF-8, unwritable output, LF line endings, the extension rule of `-o` |
+| `tests/test_errors.py` | The exception hierarchy and pickling of errors |
+| `tests/test_escaping.py` | Control characters from a document or the command line never reach a diagnostic or standard error unescaped |
 | `tests/conformance/` | Every example and fixture in the specification repository renders, every internal link has a target, and each invalid fixture renders its rule's failure marker. Needs `$LEGALDOWN_SPEC_DIR` or a sibling `../LegalDown` checkout |

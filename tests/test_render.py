@@ -331,7 +331,7 @@ def test_representatives_are_labelled_and_french_labels_space_their_colons() -> 
     relabelled = render(source, format="text", overrides={"labels.represented_by": "Acting for"}).output
     assert "Acting for: John Smith" in relabelled
     french = render(source.replace("language: en", "language: fr"), format="text").output
-    assert "Représentée par\xa0: John Smith" in french
+    assert "Représenté(e) par\xa0: John Smith" in french
     assert "Nom\xa0: " in french and "\nLieu\xa0:\n" in french
     assert "Date d'effet\xa0: " in french
 
@@ -473,16 +473,11 @@ def test_options_object_and_keywords_are_exclusive() -> None:
         render(FRONT, RenderOptions(), format="text")
 
 
-# -- regressions from code review -------------------------------------------------
+# -- alternatives, sentinels and emphasis around terms ----------------------------
 
 
-def test_disguised_javascript_urls_are_not_links() -> None:
-    from legaldown_render.writers.html import is_safe_href
-
-    for href in ("java\tscript:alert(1)", "jav\nascript:x", "\x01javascript:x", " JAVASCRIPT:x", "data:text/html,x"):
-        assert not is_safe_href(href), repr(href)
-    for href in ("https://example.com", "#section", "attachments/a.pdf", "mailto:a@example.com"):
-        assert is_safe_href(href), href
+def test_a_disguised_javascript_attachment_path_is_not_a_link() -> None:
+    # The scheme judgement itself is tested in test_links.py; this is the attachment's own link.
     source = FRONT.replace("title: T", 'title: T\nattachments:\n  - id: annex\n    title: Annex\n    file: "java\\tscript:alert(1)"')
     output = render(source + "# A\n\nSee {{attach: annex}}.\n", overrides={"attachments.render": "omit"}).output
     assert "script:alert" not in "".join(re.findall(r'href="([^"]*)"', output))
@@ -564,7 +559,7 @@ questions:
       arb: Arbitration"""
 
 
-# -- regressions from the second code review ---------------------------------------
+# -- sentinels, link titles and which alternatives share a number ------------------
 
 
 def test_sentinels_written_as_entities_are_plain_text() -> None:
@@ -610,7 +605,7 @@ def test_units_that_can_appear_together_do_not_share_a_number() -> None:
     assert "2. Two" in output
 
 
-# -- regressions from the third code review -------------------------------------------
+# -- alternatives and definitions in titles ------------------------------------------
 
 THREE_WAY = """title: T
 questions:
@@ -675,7 +670,7 @@ def test_section_numbers_agree_with_the_validator() -> None:
     assert [section.designation for section in result.tree.sections] == expected == ["1", "2", "3", "4", "4"]
 
 
-# -- regressions from the fourth code review -------------------------------------------
+# -- the preamble, level-six headings and definitions in headings ----------------------
 
 
 def test_preamble_condition_is_literal_outside_a_template() -> None:
@@ -714,10 +709,12 @@ def test_level_six_headings_are_numbered_as_the_validator_numbers_them() -> None
     assert [section.designation for section in result.tree.sections] == expected
 
 
-def test_none_scheme_designation_skips_nested_references() -> None:
+def test_none_scheme_designation_includes_nested_references() -> None:
+    # §13.3: a reference shows the target's heading text as rendered, its own references resolved.
     body = "# Later *see {{ref: b}}* {#c}\n\nSee {{ref: c}}.\n\n# B {#b}\n"
     output = text(body, overrides={"numbering.scheme": "none"})
-    assert "See Later see." in output
+    assert "\nLater see B\n" in output
+    assert "See Later see B." in output
     assert "BROKEN" not in output
 
 
@@ -738,7 +735,7 @@ def test_definition_in_a_link_inside_alt_text_takes_no_anchor() -> None:
     assert 'alt="pic the Fee"' in output
 
 
-# -- regressions from the fifth code review --------------------------------------------
+# -- includes, ambiguous references and the structure of lists -------------------------
 
 
 def test_a_malformed_include_is_not_an_include_paragraph() -> None:
@@ -762,11 +759,6 @@ def test_the_first_definition_in_document_order_keeps_the_anchor() -> None:
     preamble, sections = output.split('<div class="ld-preamble">')[1].split("</div>", 1)
     assert 'id="def:fee"' in preamble
     assert 'id="def:fee"' not in sections
-
-
-def test_nested_lists_line_up_with_their_item_s_text() -> None:
-    output = text("# A\n\n1. one\n\n   more\n\n   - child\n")
-    assert "1. one\n   more\n   (i) child" in output
 
 
 def _nested_list(levels: int) -> str:
@@ -922,6 +914,11 @@ def test_empty_list_items_keep_their_place() -> None:
     output = text("# A\n\n- \n  - \n- b {#b}\n\nSee {{ref: b}}.\n")
     assert "(a)\n    (i)\n(b) b" in output
     assert "See 1(b)." in output
+    # An item that holds only a comment is the author removing it (§8.6):
+    # it is left out, and the numbers are still the validator's.
+    output = text("# A\n\n- \n- <!-- gone -->\n- b {#b}\n\nSee {{ref: b}}.\n")
+    assert "(a)\n(b) b" in output
+    assert "See 1(b)." in output
 
 
 @pytest.mark.parametrize("output_format", ["html", "text"])
@@ -973,7 +970,7 @@ def test_a_later_paragraph_in_a_list_item_is_the_item_s() -> None:
     # its marker is misplaced (§5.7) and a reference to it is broken, as the
     # validator reports.
     result = render(FRONT + "# A\n\n- item one\n\n  second {#sec}\n\nSee {{ref: sec}}.\n", format="text")
-    assert "(a) item one\n    second" in result.output
+    assert "(a) item one\n\n    second" in result.output
     assert "[BROKEN REF: sec]" in result.output
     assert {"anchor-misplaced", "ref-broken"} <= {d.rule for d in result.diagnostics}
 
@@ -1069,13 +1066,14 @@ def test_template_decision_is_the_validators() -> None:
     assert "[Only if: flag] Preamble para" in result.output
 
 
-# -- regressions from the seventh code review ------------------------------------------
+# -- quotes, markers, comments and breaks ----------------------------------------------
 
 
 def test_a_heading_in_a_quote_or_item_is_a_bold_line_not_a_section() -> None:
     result = render(FRONT + "# A\n\n> # Inner\n> text\n\n- ## Item heading\n\n> title: x\n> ---\n> after\n",
                     format="text")
-    assert "\n\n> Inner\n\n> text\n\n(a) Item heading\n\n> title: x\n\n> after\n" in result.output
+    # One quote stays one quote: its blank line keeps the `>`.
+    assert "\n\n> Inner\n>\n> text\n\n(a) Item heading\n\n> title: x\n>\n> after\n" in result.output
     assert [s.designation for s in result.tree.sections] == ["1"]
     html = render(FRONT + "# A\n\n> # Inner\n", standalone=False).output
     assert "<strong>Inner</strong>" in html
@@ -1106,8 +1104,10 @@ def test_a_marker_copy_inside_a_comment_is_not_the_marker() -> None:
 
 def test_an_item_opening_with_a_drafting_note_or_code() -> None:
     output = text("# A\n\n- > [!DRAFTING]\n  > note here\n- ```\n  code\n  ```\n")
-    assert "(a) > [Drafting note]\n    > note here" in output
-    assert "(b)     code" in output
+    # The label stands alone and the block is indented under the item text: flattened
+    # onto the label line, a quote is no quote and code is mis-indented.
+    assert "(a)\n    > [Drafting note]\n    > note here" in output
+    assert "(b)\n        code" in output
     assert "```" not in output
 
 

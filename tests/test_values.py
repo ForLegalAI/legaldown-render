@@ -1,9 +1,20 @@
+"""Value formatting (§10, §13.5): money, dates and durations in a locale.
+
+Money keeps every digit it was written with and is padded to the currency's
+minor units, never rounded. A duration keeps its digits and takes the plural
+of the value shown, and no raw CLDR unit id is ever printed: a locale without
+a pattern falls back within the locale first and to English last, and says so.
+"""
 from __future__ import annotations
 
-import pytest
+import re
 
-from legaldown_render.resolve import Formatter, parse_locale
-from legaldown_render.resolve.numbering import extend, fill, format_counter
+import pytest
+from conftest import FRONT
+
+from legaldown_render import render
+from legaldown_render.resolve import DURATION_UNITS, Formatter, parse_locale
+from legaldown_render.resolve.values import DurationText
 from legaldown_render.style.model import Values
 
 
@@ -13,20 +24,7 @@ def formatter(tag: str, **values: str) -> Formatter:
     return Formatter(locale, Values(**values))
 
 
-@pytest.mark.parametrize(("value", "counter", "expected"), [
-    (1, "lower-alpha", "a"), (26, "lower-alpha", "z"), (27, "lower-alpha", "aa"), (3, "upper-alpha", "C"),
-    (4, "lower-roman", "iv"), (14, "upper-roman", "XIV"), (7, "decimal", "7"),
-])
-def test_counters(value: int, counter: str, expected: str) -> None:
-    assert format_counter(value, counter) == expected
-
-
-def test_fill_and_extend() -> None:
-    assert fill("{section}.{n} {other}", n="2", section="5") == "5.2 {other}"
-    assert extend("", ".1", textual=False) == "1"
-    assert extend("2.1", "(b)", textual=False) == "2.1(b)"
-    assert extend("Termination", "(a)", textual=True) == "Termination (a)"
-
+# -- Money: exact amounts (§10.3) ------------------------------------------------
 
 def test_money_is_padded_never_rounded() -> None:
     en = formatter("en-US")
@@ -36,10 +34,255 @@ def test_money_is_padded_never_rounded() -> None:
     assert en.money("1234.50", None) == "1,234.50"
 
 
+@pytest.mark.parametrize("digits", [29, 40, 60])
+def test_long_integers_format_exactly(digits: int) -> None:
+    value = "1234567890" * 6
+    value = value[:digits]
+    grouped = f"{int(value):,}"
+    en = formatter("en-US")
+    assert en.number(value) == grouped
+    assert en.money(value, "USD") == f"${grouped}.00"
+    assert formatter("en-US", money="code").money(value, "USD") == f"USD\xa0{grouped}.00"
+    assert formatter("en-US", money="name").money(value, "USD") == f"{grouped}.00 US dollars"
+
+
+def test_long_fraction_keeps_every_digit() -> None:
+    fraction = "1234567891" * 4
+    en = formatter("en-US")
+    assert en.number("0." + fraction) == "0." + fraction
+    assert en.money("1." + fraction, "EUR") == "€1." + fraction
+    assert en.number("1" * 29 + ".5") == f"{int('1' * 29):,}.5"
+
+
+def test_long_amount_renders_end_to_end() -> None:
+    source = "---\ntitle: T\n---\nPay {{money: " + "9" * 29 + "}} {{money: 12345678901234567890123456789.1234567890123456789}}.\n"
+    output = render(source, format="text", locale="en-US").output
+    assert f"{int('9' * 29):,}" in output
+    assert "12,345,678,901,234,567,890,123,456,789.1234567890123456789" in output
+
+
+@pytest.mark.parametrize(("amount", "currency", "expected"), [
+    ("1.1230", "EUR", "€1.1230"),
+    ("1.500", "EUR", "€1.500"),
+    ("1.50", "EUR", "€1.50"),
+    ("5", "EUR", "€5.00"),
+    ("5.5", "EUR", "€5.50"),
+    ("5", "JPY", "¥5"),
+    ("0.125", "JPY", "¥0.125"),
+    ("5.0", "JPY", "¥5.0"),
+    ("1234.5670", "USD", "$1,234.5670"),
+])
+def test_money_fraction_digits_symbol(amount: str, currency: str, expected: str) -> None:
+    assert formatter("en-US").money(amount, currency) == expected
+
+
+def test_money_fraction_digits_code_and_name() -> None:
+    code = formatter("en-US", money="code")
+    name = formatter("en-US", money="name")
+    assert code.money("1.500", "EUR") == "EUR\xa01.500"
+    assert code.money("5", "EUR") == "EUR\xa05.00"
+    assert code.money("0.125", "JPY") == "JPY\xa00.125"
+    assert code.money("5", "JPY") == "JPY\xa05"
+    assert name.money("1.500", "EUR") == "1.500 euros"
+    assert name.money("5", "EUR") == "5.00 euros"
+    assert name.money("0.125", "JPY") == "0.125 Japanese yen"
+    assert name.money("5", "JPY") == "5 Japanese yen"
+
+
+def test_money_trailing_zeros_in_other_locales_and_long_amounts() -> None:
+    assert formatter("cs-CZ").money("1.500", "CZK") == "1,500\xa0Kč"
+    assert formatter("de", money="code").money("1.1230", "EUR") == "1,1230\xa0EUR"
+    assert formatter("en-US").money("1" * 40 + ".1230", "EUR") == f"€{int('1' * 40):,}.1230"
+
+
+# -- Money: how the currency is shown --------------------------------------------
+
 def test_money_display_styles() -> None:
     assert formatter("en-US", money="code").money("10", "USD") == "USD\xa010.00"
     assert formatter("en-US", money="name").money("10", "USD") == "10.00 US dollars"
 
+
+@pytest.mark.parametrize(("tag", "currency", "expected"), [
+    ("en", "CZK", "CZK\xa05.00"),
+    ("en", "CHF", "CHF\xa05.00"),
+    ("en", "USD", "$5.00"),
+    ("en", "EUR", "€5.00"),
+    ("pt-BR", "BRL", "R$\xa05,00"),
+    ("en", "CAD", "CA$5.00"),
+    ("cs", "CZK", "5,00\xa0Kč"),
+])
+def test_symbol_mode_spacing(tag: str, currency: str, expected: str) -> None:
+    assert formatter(tag).money("5", currency) == expected
+
+
+def test_symbol_after_the_digits_is_spaced_too() -> None:
+    # Whatever the locale puts after the amount, a letter never touches a digit.
+    for tag in ("en", "de", "fr", "cs", "pl", "sv", "ja", "ru", "pt-PT", "es", "nl", "it"):
+        for currency in ("CZK", "CHF", "USD", "EUR", "SEK", "PLN", "XAF"):
+            text = formatter(tag).money("5", currency)
+            assert not re.search(r"[^\W\d_]\d|\d[^\W\d_]", text), (tag, currency, text)
+
+
+def test_code_mode_still_spaced() -> None:
+    assert formatter("en", money="code").money("5", "CZK") == "CZK\xa05.00"
+    assert formatter("de", money="code").money("5", "CZK") == "5,00\xa0CZK"
+
+
+# -- Durations: digits and plural ------------------------------------------------
+
+def test_long_duration_keeps_every_digit() -> None:
+    assert formatter("en-US").duration("1" * 40, "D") == f"{int('1' * 40):,} days"
+    assert formatter("en-US").duration("0." + "1" * 40, "D") == "0." + "1" * 40 + " days"
+
+
+@pytest.mark.parametrize(("tag", "value", "unit", "expected"), [
+    ("en", "0.0001", "D", "0.0001 days"),
+    ("en", "1.23456", "Y", "1.23456 years"),
+    ("en", "1", "D", "1 day"),
+    ("en", "1.0", "D", "1.0 days"),
+    ("en", "12", "MO", "12 months"),
+    ("cs", "1", "Y", "1 rok"),
+    ("cs", "2", "Y", "2 roky"),
+    ("cs", "5", "Y", "5 let"),
+    ("cs", "2.5", "Y", "2,5 roku"),
+    ("de", "1.50", "W", "1,50 Wochen"),
+])
+def test_duration_digits_and_plural(tag: str, value: str, unit: str, expected: str) -> None:
+    assert formatter(tag).duration(value, unit) == expected
+
+
+# -- Fractions beyond Python's int/str digit limit: the plural follows the first digits ----
+
+LONG = "2" * 4400
+
+
+def test_a_duration_with_a_4400_digit_fraction_renders() -> None:
+    output = render(FRONT + f"# A\n\n{{{{duration: 1.{LONG}, unit=D}}}}", format="text").output
+    assert f"1.{LONG} days" in output
+
+
+def test_a_money_amount_in_name_mode_with_a_4400_digit_fraction_renders() -> None:
+    output = render(FRONT + f"# A\n\n{{{{money: 1.{LONG}, currency=EUR}}}}", format="text",
+                    overrides={"values.money": "name"}).output
+    assert f"1.{LONG} euros" in output
+
+
+def test_a_4400_digit_fraction_uses_the_many_category_in_czech() -> None:
+    # The category comes from the first 30 fraction digits, so it is the
+    # "many" of "2,5 roku", not "other" (" let").
+    output = render(FRONT + f"# A\n\n{{{{duration: 1.{LONG}, unit=Y}}}}", format="text", locale="cs-CZ").output
+    assert output.rstrip().endswith(" roku")
+
+
+@pytest.mark.parametrize("unit", ["D", "Y", "W"])
+@pytest.mark.parametrize("locale", ["cs", "sk", "lt", "pl", "ru", "en"])
+def test_a_huge_fraction_has_the_unit_form_of_its_first_digits(locale: str, unit: str) -> None:
+    fmt = formatter(locale)
+    huge = fmt.format_duration("1." + "3" * 4400, unit).text
+    short = fmt.format_duration("1." + "3" * 40, unit).text
+    assert huge.replace("3" * 4400, "") == short.replace("3" * 40, "")
+
+
+def test_a_huge_fraction_is_many_in_czech() -> None:
+    fmt = formatter("cs")
+    assert fmt.format_duration("1." + "3" * 4400, "D").text.endswith(" dne")
+    assert fmt.format_duration("1." + "3" * 40, "D").text.endswith(" dne")
+
+
+def test_a_huge_fraction_of_zeros_ending_in_a_digit_keeps_its_fraction() -> None:
+    # Cut to 30 digits it is "1.000...0": still a fraction (v != 0), so "many" in Czech.
+    value = "1." + "0" * 4399 + "1"
+    assert formatter("cs").format_duration(value, "D").text.rsplit(" ", 1)[-1] == "dne"
+
+
+def test_a_name_mode_money_amount_with_a_huge_fraction_uses_the_form_of_its_first_digits() -> None:
+    fmt = formatter("cs", money="name")
+    huge = fmt.money("1." + "3" * 4400, "EUR")
+    short = fmt.money("1." + "3" * 40, "EUR")
+    assert huge.replace("3" * 4400, "") == short.replace("3" * 40, "")
+    assert huge.endswith("eura")  # "many", not the "other" form "eur"
+
+
+def test_an_integer_part_beyond_the_limit_falls_back_to_other() -> None:
+    # No category can be computed (not even from the first digits): "other" ("dnů" in Czech).
+    other = formatter("cs").format_duration("1.5", "D").text.rsplit(" ", 1)[-1]
+    assert other == "dne"
+    assert formatter("cs").format_duration("1" * 4400, "D").text.endswith(" dnů")
+
+
+# -- CLDR duration patterns and the English fallback -----------------------------
+
+@pytest.mark.parametrize("tag", ["pt-BR", "ja", "zh", "ko", "it", "tr", "nl", "cs", "de", "sk", "pl", "en"])
+@pytest.mark.parametrize("length", ["long", "short", "narrow"])
+@pytest.mark.parametrize("value", ["1", "2", "5", "1.5"])
+def test_no_cldr_unit_id_is_ever_printed(tag: str, length: str, value: str) -> None:
+    f = formatter(tag, duration=length)
+    for unit in DURATION_UNITS:
+        text = f.duration(value, unit)
+        assert "duration-" not in text
+        assert value.replace(".", f.locale.number_symbols["latn"]["decimal"]) in text
+
+
+def test_pt_br_long_falls_back_to_the_short_pattern() -> None:
+    pt = formatter("pt-BR")
+    assert pt.duration("30", "D") == "30 dias"
+    assert pt.duration("12", "MO") == "12 meses"
+    assert pt.duration("1", "Y") == "1 ano"
+
+
+def test_fallback_goes_to_the_other_length_first() -> None:
+    # cs has a long and a narrow pattern: narrow is asked, narrow is used.
+    assert formatter("cs", duration="narrow").duration("30", "D") == "30 d."
+    # zh has only "short": long and narrow fall back to it, still Chinese.
+    assert formatter("zh", duration="long").duration("30", "D") == "30天"
+    assert formatter("zh", duration="narrow").duration("30", "D") == "30天"
+
+
+def test_a_fallback_inside_the_locale_is_not_signalled() -> None:
+    # pt-BR long has no pattern but short has: Portuguese, no English.
+    assert formatter("pt-BR").format_duration("30", "D") == DurationText("30 dias", False)
+    assert formatter("en").format_duration("1", "D") == DurationText("1 day", False)
+
+
+def test_english_is_the_last_resort_and_is_signalled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from legaldown_render.resolve import values
+
+    real = values._unit_patterns
+    # A Czech locale without any duration pattern (Babel's data has none such).
+    monkeypatch.setattr(values, "_unit_patterns",
+                        lambda locale, unit, length: {} if locale.language == "cs" else real(locale, unit, length))
+    f = formatter("cs")
+    assert f.format_duration("5", "D") == DurationText("5 days", True)
+    assert f.duration("1", "D") == "1 day"
+    assert f.duration("1.5", "Y") == "1,5 years"  # the number keeps the locale's separator
+
+
+def test_fallback_warning_is_emitted_once_by_the_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    from legaldown_render.resolve import values
+
+    real = values._unit_patterns
+    monkeypatch.setattr(values, "_unit_patterns",
+                        lambda locale, unit, length: {} if locale.language == "cs" else real(locale, unit, length))
+    source = ("---\ntitle: T\nlanguage: cs\n---\n"
+              "Lhůta {{duration: 5, unit=D}} a {{duration: 6, unit=D}} a {{duration: 2, unit=MO}}.\n")
+    result = render(source, format="text")
+    fallbacks = [d for d in result.diagnostics if d.rule == "render-locale-fallback"]
+    assert [d.message for d in fallbacks] == [
+        "No CLDR pattern for 'duration-day' in 'cs'; English used.",
+        "No CLDR pattern for 'duration-month' in 'cs'; English used.",
+    ]
+    assert all(d.level == "warning" for d in fallbacks)
+    assert "5 days" in result.output
+
+
+def test_normal_locales_emit_no_fallback_warning() -> None:
+    for language in ("cs", "pt-BR", "ja", "en"):
+        source = f"---\ntitle: T\nlanguage: {language}\n---\nX {{{{duration: 5, unit=D}}}}.\n"
+        result = render(source, format="text")
+        assert not [d for d in result.diagnostics if d.rule == "render-locale-fallback"], language
+
+
+# -- Locales ---------------------------------------------------------------------
 
 def test_locales() -> None:
     cs = formatter("cs-CZ")

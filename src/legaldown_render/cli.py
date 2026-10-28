@@ -2,35 +2,73 @@
 
 Exit codes: 0 — rendered (document errors, if any, are shown as markers and
 listed on stderr); 1 — not rendered: refused under ``--strict``, or the
-document cannot be read; 2 — a usage or style problem; 70 — an internal
-error (a bug to report).
+document cannot be read (including input that is not UTF-8) or the output cannot
+be written; 2 — a usage, style or document-root problem; 70 — an internal error (a bug to
+report).
+
+Documents and output are always UTF-8 (the HTML says ``<meta charset="utf-8">``),
+never the console's or the locale's encoding, and output has LF line endings on
+every platform.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from legaldown import AnswersError, load_answers
 
 from . import __version__
 from .api import RenderOptions, render
-from .errors import DocumentError, InternalError, RenderRefused
-from .style import StyleError, builtin_styles, dump_style, load_style, parse_override
-from .writers import FORMATS, format_for_path
+from .errors import DocumentError, InternalError, OptionsError, RenderRefused, StyleError
+from .style import builtin_styles, dump_style, load_style, parse_override
+from .urls import printable
+from .writers import FORMATS, file_extension, format_for_path
+
+#: Extensions (:func:`file_extension`, so no dot) of document formats this
+#: renderer does not write. An output file named so (``x.docx``, ``.pdf``,
+#: ``x.pdf.``) and no ``--format`` is a mistake to refuse: HTML under that name
+#: would mislead. Any other extension (``contract.v2``, ``report.2025-10-27``),
+#: or none, is just a name and keeps the HTML default.
+_UNWRITTEN_EXTENSIONS = frozenset({"docx", "doc", "odt", "rtf", "pdf", "md", "markdown", "epub", "tex"})
+
+
+def _safe(text: str) -> str:
+    """*text* for stderr, with every control character written out (see
+    :func:`~legaldown_render.urls.printable`) except the line breaks that
+    structure a multi-line message. Command-line values (file names, a style
+    name, a locale, a setting key) and the library's messages that quote them
+    reach a terminal only through this."""
+    return "\n".join(printable(line) for line in text.split("\n"))
+
+
+def _complain(message: str) -> None:
+    print(_safe(message), file=sys.stderr)
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        # argparse echoes the offending value (an invalid choice, an
+        # unrecognized argument): written out, not obeyed by the terminal.
+        super().error(_safe(message))
 
 
 def _setting(text: str) -> tuple[str, Any]:
     key, separator, value = text.partition("=")
     if not separator or not key.strip():
-        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got '{text}'")
+        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got '{printable(text)}'")
     # Typed by the setting: text stays as written, anything else is YAML.
-    return key.strip(), parse_override(key.strip(), value)
+    try:
+        return key.strip(), parse_override(key.strip(), value)
+    except StyleError as error:
+        # argparse shows only ArgumentTypeError (and TypeError/ValueError, with a generic message).
+        raise argparse.ArgumentTypeError(_safe(str(error))) from None
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="legaldown-render",
         description="Render a LegalDown document to HTML or plain text.",
         epilog="Style settings: --style picks a template (built-in: "
@@ -39,14 +77,29 @@ def _parser() -> argparse.ArgumentParser:
                "See every setting with --print-style.",
     )
     parser.add_argument("input", nargs="?", help="the .lgd file to render, or - for standard input")
-    parser.add_argument("-o", "--output", help="output file (default: standard output); its extension sets the format")
-    parser.add_argument("-f", "--format", choices=sorted(FORMATS), help="output format (default: from --output, else html)")
+    parser.add_argument("-o", "--output", help="output file (default: standard output). Without --format, "
+                        ".html/.htm write HTML and .txt/.text plain text; any other name, with or without an "
+                        "extension, writes HTML, except the extension of a format not written (.docx, .doc, "
+                        ".odt, .rtf, .pdf, .md, .markdown, .epub, .tex), which needs --format")
+    parser.add_argument("-f", "--format", choices=sorted(FORMATS),
+                        help="output format (default: html, or text for --output *.txt/*.text)")
     parser.add_argument("-s", "--style", help="style template: a built-in name or a path to a .yaml file")
     parser.add_argument("--set", dest="overrides", action="append", default=[], type=_setting, metavar="KEY=VALUE",
                         help="override one style setting; repeatable. Text settings take the value as "
                              "written; one pair of matching outer quotes is removed (wrap the value in the "
                              "other kind of quote to keep quotation marks). Others read it as YAML, e.g. true or 2")
     parser.add_argument("--locale", help="formatting locale, e.g. en-US or cs-CZ (default: the style's, else the document language)")
+    parser.add_argument("--root", metavar="DIR",
+                        help="the document root (§2.3): a file reference (an include, an attachment, amends, "
+                             "supersedes, a translation, an image) that leaves DIR is an error "
+                             "(path-outside-root), and the file is not used. The document must be inside DIR "
+                             "(standard input counts as at DIR itself). Without it, ../ is allowed")
+    parser.add_argument("--untrusted", action="store_true",
+                        help="the document and the style are somebody else's (for a service rendering what its "
+                             "users send): requires --root (exit 2 without), and the style must be a built-in "
+                             "name or YAML text (--style takes no file path), with no raw CSS (html.extra_css), "
+                             "plain CSS values and short labels. With --print-style it checks the style the "
+                             "same way and needs no --root")
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
     parser.add_argument("--answers", metavar="FILE",
@@ -63,7 +116,42 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_streams() -> None:
+    """Make the standard streams safe for any content, whatever the console's
+    encoding: the document and the style are UTF-8, so what is written to
+    standard output is UTF-8 as well, with LF line endings (no translation to
+    CRLF on Windows), and a diagnostic that quotes characters
+    the console cannot show escapes them (``\\u2192``) instead of failing with a
+    UnicodeEncodeError. Replaced streams without ``reconfigure`` (a test
+    capture, a StringIO) are left alone. :func:`main` calls this only when it
+    runs as the program (see there)."""
+    if hasattr(sys.stdout, "reconfigure"):
+        with contextlib.suppress(ValueError, OSError):
+            sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+    if hasattr(sys.stderr, "reconfigure"):
+        with contextlib.suppress(ValueError, OSError):
+            sys.stderr.reconfigure(errors="backslashreplace")
+
+
+def _read_source(path: str) -> str:
+    """The document at *path*, or standard input for ``-``, decoded as UTF-8
+    from its bytes (never in the locale's encoding). Raises OSError, or
+    UnicodeDecodeError for input that is not UTF-8."""
+    if path == "-":
+        buffer = getattr(sys.stdin, "buffer", None)
+        # A replaced stdin without bytes (StringIO) already holds text.
+        return buffer.read().decode("utf-8") if buffer is not None else sys.stdin.read()
+    return Path(path).read_bytes().decode("utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Run the command: *argv* is the argument list, or None for the process's
+    own (``sys.argv``). Only then is ``main`` the program, as the console script
+    and ``python -m legaldown_render.cli`` call it, and only then are the
+    standard streams reconfigured: a caller that passes *argv* is in-process
+    code whose ``sys.stdout`` and ``sys.stderr`` are not ours to change."""
+    if argv is None:
+        _configure_streams()
     parser = _parser()
     args = parser.parse_args(argv)
     overrides = dict(args.overrides)
@@ -75,20 +163,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.print_style:
         try:
-            print(dump_style(load_style(args.style, overrides=overrides)), end="")
+            print(dump_style(load_style(args.style, overrides=overrides, trusted=not args.untrusted)), end="")
         except StyleError as error:
-            print(f"legaldown-render: {error}", file=sys.stderr)
+            _complain(f"legaldown-render: {error}")
             return 2
         return 0
     if not args.input:
         parser.error("an input file is required")
 
-    output_format = args.format or (format_for_path(args.output) if args.output else None) or "html"
+    output_format = args.format
+    if not output_format and args.output:
+        file_name = Path(args.output).name
+        output_format = format_for_path(file_name)
+        if not output_format and file_extension(file_name) in _UNWRITTEN_EXTENSIONS:
+            parser.error(f"cannot tell the output format from '{printable(args.output)}'; use --format html or text")
+    output_format = output_format or "html"
     name = "<stdin>" if args.input == "-" else args.input
     try:
-        source = sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
+        source = _read_source(args.input)
     except OSError as error:
-        print(f"legaldown-render: cannot read {name}: {error.strerror or error}", file=sys.stderr)
+        _complain(f"legaldown-render: cannot read {name}: {error.strerror or error}")
+        return 1
+    except UnicodeDecodeError as error:
+        _complain(f"legaldown-render: cannot read {name}: not valid UTF-8 "
+                  f"(byte 0x{error.object[error.start]:02x} at offset {error.start})")
         return 1
 
     answers = None
@@ -98,33 +196,40 @@ def main(argv: list[str] | None = None) -> int:
         try:
             answers = load_answers(args.answers)
         except OSError as error:
-            print(f"legaldown-render: cannot read {Path(args.answers)}: {error}", file=sys.stderr)
+            _complain(f"legaldown-render: cannot read {Path(args.answers)}: {error}")
             return 1
         except AnswersError as error:
-            print(f"legaldown-render: {error}", file=sys.stderr)
+            _complain(f"legaldown-render: {error}")
             return 1
 
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,
-                            strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment)
+                            strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment,
+                            filename="" if args.input == "-" else Path(args.input).name,
+                            document_root=args.root, document_path=None if args.input == "-" else args.input,
+                            untrusted=args.untrusted)
     try:
         result = render(source, options)
-    except StyleError as error:
-        print(f"legaldown-render: {error}", file=sys.stderr)
+    except (StyleError, OptionsError) as error:
+        _complain(f"legaldown-render: {error}")
         return 2
     except RenderRefused as error:
         _report(name, error.diagnostics, quiet=args.quiet)
-        print(f"legaldown-render: {error}", file=sys.stderr)
+        _complain(f"legaldown-render: {printable(str(error))}")
         return 1
     except DocumentError as error:
-        print(f"{name}: error: {error}", file=sys.stderr)
+        print(f"{printable(name)}: error: {printable(str(error))}", file=sys.stderr)
         return 1
     except InternalError as error:
-        print(f"legaldown-render: internal error: {error}", file=sys.stderr)
+        _complain(f"legaldown-render: internal error: {error}")
         return 70
 
     _report(name, result.diagnostics, quiet=args.quiet)
     if args.output:
-        Path(args.output).write_text(result.output, encoding="utf-8")
+        try:
+            Path(args.output).write_text(result.output, encoding="utf-8", newline="\n")
+        except OSError as error:
+            _complain(f"legaldown-render: cannot write {args.output}: {error.strerror or error}")
+            return 1
     else:
         sys.stdout.write(result.output)
     return 0
@@ -135,8 +240,10 @@ def _report(name: str, diagnostics: list, *, quiet: bool) -> None:
         return
     for diagnostic in diagnostics:
         # As the validator's CLI prints them: the line when the finding has one.
-        where = f"{name}:{diagnostic.line}" if diagnostic.line else name
-        print(f"{where}: {diagnostic.level}: [{diagnostic.rule}] {diagnostic.message}", file=sys.stderr)
+        # The message quotes the document (an id, a path, a term), and a terminal
+        # obeys the control characters in it, so both parts are made printable.
+        where = f"{printable(name)}:{diagnostic.line}" if diagnostic.line else printable(name)
+        print(f"{where}: {diagnostic.level}: [{diagnostic.rule}] {printable(diagnostic.message)}", file=sys.stderr)
 
 
 if __name__ == "__main__":

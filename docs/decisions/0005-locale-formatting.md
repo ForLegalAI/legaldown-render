@@ -19,8 +19,17 @@ Use [Babel](https://babel.pocoo.org/). It is pure Python and ships CLDR data.
 
 - `format_date` for dates
 - `format_currency` for money, padded to the currency's minor units and never rounded (§10.3).
-  Values are handled as `Decimal` from the source string.
-- `format_unit` for durations, with CLDR plural rules
+  Values are handled as `Decimal` from the source string, in a decimal context with the precision
+  of the source (at least 28 digits, plus a margin), so that no amount of 28 digits or more is
+  rounded or raises. An alphabetic symbol or code is separated from the digits by U+00A0, as CLDR's
+  currency spacing says ("CZK 5.00"); Babel does not do that itself.
+- CLDR unit patterns for durations, with CLDR plural rules. Babel's `format_unit` is not used: it
+  rounds the number to 3 decimals, chooses the plural from the unrounded value, and prints the raw
+  unit id ("30 duration-day") where a length has no pattern. The renderer formats the number as it
+  does any amount, chooses the plural category from the digits it shows ("1.0" is plural in English,
+  "2,5" is `many` in Czech), and looks the pattern up through one helper in `resolve/values.py`:
+  requested length, then the other lengths, then the language alone, then English, with a
+  `render-locale-fallback` Warning when English stands in.
 - CLDR's ISO 4217 data to check currency codes
 
 All formatting goes through the `locale/` module, so the dependency sits behind one interface.

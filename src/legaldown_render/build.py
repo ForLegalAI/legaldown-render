@@ -14,7 +14,10 @@ are protected first by **sentinels**: every directive (and every
 ``\\ue000<nonce>:<n>\\ue001``, so Markdown can never reinterpret directive
 syntax, and put back as tree nodes afterwards. The nonce is random for every
 build, so no text in a document — written out, as an entity, or
-percent-encoded — can pass for a sentinel.
+percent-encoded — can pass for a sentinel. Each sentinel is wrapped in
+Unicode punctuation on both sides, as the ``{{`` and ``}}`` it replaces are
+punctuation, so that Markdown's emphasis rules (CommonMark's left- and
+right-flanking delimiter runs) see the same neighbours as in the source.
 
 Lists and quotes are built as the validator's model holds them: list items
 hold blocks, nested lists included, and a quote's content is the blocks the
@@ -25,10 +28,11 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from functools import cache
 from itertools import count
+from typing import Any
 from urllib.parse import unquote
 
 from legaldown import Block as ModelBlock
@@ -74,10 +78,17 @@ from .tree import (
 )
 
 _OPEN, _CLOSE = "\ue000", "\ue001"
-# Leads the sentinel of source that renders nothing (a {{def:}}). It is
-# Unicode punctuation, so an emphasis closer just before it still counts as
-# right-flanking and closes (CommonMark); a bare sentinel reads like a letter.
-_HIDDEN_LEAD = "\u2e31"
+# Wraps every sentinel, before and after. A directive's braces are Unicode
+# punctuation, and CommonMark decides whether an emphasis delimiter run opens
+# or closes from the punctuation and whitespace next to it; a bare sentinel
+# (private use, category Co) reads like a letter and would change that:
+# ``_text_{{ref: a}}`` would not close its emphasis. U+2E31 is category Po —
+# markdown-it-py's ``isPunctChar`` accepts only categories P* — and too rare
+# in a document to matter, and the pairs the builder adds are the only ones
+# the sentinel patterns consume.
+_WRAP = "\u2e31"
+_WRAPPERS = (_WRAP,)
+_ENCODED_WRAP = "".join(f"%{byte:02X}" for byte in _WRAP.encode())
 # Stand where inline HTML or a comment was dropped, until _merge_text joins
 # the text around them. A dropped line break (<br>) still parts two words.
 _DROPPED = Text("")
@@ -170,6 +181,13 @@ class _Builder:
         self.language = document.metadata.language or "en"
         # Inline parsing only: block structure is the validator's.
         self.md = MarkdownIt("commonmark", {"html": True})
+        # markdown-it would leave ``[x](javascript:...)`` as literal text and
+        # ``![x](file:///...)`` unparsed, so neither could be told apart from
+        # prose. The builder keeps the node instead: the resolver reports an
+        # image path that is not relative (§2.3) and replaces the image with
+        # its alt text, and the writers show a refused link as its text
+        # (`urls.LINK_SCHEMES`), which is the safety markdown-it was for.
+        self.md.validateLink = lambda url: True
         self.env: dict = {}
         self.payloads: list[_Payload] = []
         # The markers the validator placed, by (section index or None for
@@ -180,13 +198,29 @@ class _Builder:
         # Each text is lexed once in a render.
         self.lex = cache(lex)
         self.depth = 0  # quotes and list items the builder is inside
+        # Where the builder is, for the lines of the nodes it builds (§16.9):
+        # the top-level block (section index or None for the preamble, block
+        # index) when it is at one that a list's items can be addressed in
+        # (``Document.line_of``), and the line of the innermost unit it is in.
+        # A block in a quote, or past the first in an item, is not addressable;
+        # it takes the line of the quote or the item.
+        self.at: tuple[int | None, int] | None = None
+        self.line: int | None = None
+        # The lines of the parts of the document, read once: ``Document.line_of``
+        # checks the whole document against its source on every call. None
+        # without a source, or when the document no longer fits it.
+        self.layout = document.layout()
+        # The lines of the items of the top-level list being built, in the
+        # pre-order the validator numbers them (see list()); None for a list
+        # whose items are not addressable.
+        self.item_lines: list[int] | None = None
         nonce = secrets.token_hex(8)
-        # A hidden sentinel has its own form ("h"), so the lead character is
-        # taken only with one, never from the source before another sentinel.
-        self.sentinel_re = re.compile(f"(?:{_HIDDEN_LEAD}{_OPEN}{nonce}h|{_OPEN}{nonce}):(\\d+){_CLOSE}")
+        # A sentinel with its wrappers; only a complete one matches, so a
+        # wrapper character in the source is never taken.
+        self.sentinel_re = re.compile(f"{_WRAP}{_OPEN}{nonce}:(\\d+){_CLOSE}{_WRAP}")
         # How markdown-it percent-encodes a sentinel inside a URL.
         self.encoded_sentinel_re = re.compile(
-            f"(?:%E2%B8%B1%EE%80%80{nonce}h|%EE%80%80{nonce}):(\\d+)%EE%80%81", re.IGNORECASE)
+            f"{_ENCODED_WRAP}%EE%80%80{nonce}:(\\d+)%EE%80%81{_ENCODED_WRAP}", re.IGNORECASE)
         self.nonce = nonce
 
     # -- sentinels ------------------------------------------------------------
@@ -194,9 +228,7 @@ class _Builder:
     def _sentinel(self, payload: _Payload) -> str:
         self.payloads.append(payload)
         index = len(self.payloads) - 1
-        if isinstance(payload, _Hidden):
-            return f"{_HIDDEN_LEAD}{_OPEN}{self.nonce}h:{index}{_CLOSE}"
-        return f"{_OPEN}{self.nonce}:{index}{_CLOSE}"
+        return f"{_WRAP}{_OPEN}{self.nonce}:{index}{_CLOSE}{_WRAP}"
 
     def _protect(self, body: str) -> str:
         """*body* — one block's text — with every directive replaced by a
@@ -353,6 +385,9 @@ class _Builder:
             if block.kind == "html":
                 continue  # never emitted: a comment (§8.6) or raw HTML (§8.7)
             placed = self.placed.get((section, index), []) if markers else []
+            if markers:
+                self.at = (section, index)
+                self.line = self._block_line(section, index)
             built = self.block(block, placed, top_level=top_level)
             if built is not None:
                 out.append(built)
@@ -365,14 +400,14 @@ class _Builder:
                 inlines = self.text(_paragraph_source(block))
                 if not inlines and not identifier:
                     return None  # only a comment
-                return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level)
+                return Paragraph(inlines, anchor_id=identifier, condition=condition, top_level=top_level, line=self.line)
             case "unordered_list" | "ordered_list":
                 return self.list(block, placed)
             case "quote":
                 return self.quote(block)
             case "code":
                 code = code_content(block)
-                return CodeBlock(code.text, code.info)
+                return CodeBlock(code.text, code.info, line=self.line)
             case "table":
                 width = len(block.headers)
                 # Every row as wide as the header: short rows padded, extra
@@ -382,6 +417,7 @@ class _Builder:
                     header=tuple(self.text(cell) for cell in block.headers),
                     rows=tuple(tuple(self.text(cell) for cell in row) for row in rows),
                     align=tuple(block.align),
+                    line=self.line,
                 )
             case "rule":
                 return Rule()
@@ -389,42 +425,95 @@ class _Builder:
                 # A heading in a list item or a quote: not a section (§4.1),
                 # so it has no number and no anchor. It shows as a bold line.
                 inlines = self.text(block.text)
-                return Paragraph((Strong(inlines),)) if inlines else None
+                return Paragraph((Strong(inlines),), line=self.line) if inlines else None
         raise InternalError(f"unexpected block kind '{block.kind}' in the validator's model")
 
-    def list(self, block: ModelBlock, placed: list[PlacedMarker]) -> List:
+    def list(self, block: ModelBlock, placed: list[PlacedMarker]) -> List | None:
         """A list, nested as the validator's model holds it: items that hold
         blocks. A placed marker names the item it marks by its pre-order
-        number among all the list's items, as the validator numbers them."""
+        number among all the list's items, as the validator numbers them.
+        None for a list whose every item is only a comment."""
         markers = {marker.item: marker for marker in placed}
-        return self._list(block, markers, count())
+        outer = self.item_lines
+        self.item_lines = self._item_lines(*self.at) if self.at else None
+        try:
+            return self._list(block, markers, count())
+        finally:
+            self.item_lines = outer
 
-    def _list(self, block: ModelBlock, markers: dict[int | None, PlacedMarker], numbers: Iterator[int]) -> List:
+    # -- lines (§16.9) --------------------------------------------------------
+
+    def _block_line(self, section: int | None, index: int) -> int | None:
+        """The first line of top-level block *index* of the preamble (*section*
+        None) or of a section: what ``Document.line_of`` gives."""
+        if self.layout is None:
+            return None
+        spans = self.layout.preamble if section is None else self.layout.sections[section].blocks
+        return spans[index].start
+
+    def _item_lines(self, section: int | None, index: int) -> list[int] | None:
+        """The marker lines of the items of top-level list *index*, nested items
+        included, in pre-order as ``Document.line_of`` numbers them."""
+        if self.layout is None:
+            return None
+        spans = self.layout.preamble if section is None else self.layout.sections[section].blocks
+
+        def walk(items: Iterable[Any]) -> Iterator[int]:
+            for item in items:
+                yield item.start
+                for inner in item.blocks:
+                    yield from walk(inner.items)
+
+        return list(walk(spans[index].items))
+
+    def _list(self, block: ModelBlock, markers: dict[int | None, PlacedMarker], numbers: Iterator[int]) -> List | None:
         """*block*'s items, numbered from *numbers* in pre-order, to find the
-        items *markers* belong to."""
+        items *markers* belong to.
+
+        An item whose blocks are all comments or raw HTML is the author
+        removing it (§8.6), and is left out — after the whole list is
+        traversed, so the numbers (and with them the markers) stay those of
+        the validator's list. An item with no blocks at all is an empty item
+        (CommonMark) and keeps its place, so later items keep their numbers.
+        A list left with no items is left out."""
         self._check_depth(1)
         self.depth += 1
         try:
             items: list[ListItem] = []
             for item in list_items(block):
-                marker = markers.get(next(numbers))
+                number = next(numbers)
+                marker = markers.get(number)
                 children = list(item.blocks)
                 identifier = condition = ""
                 if marker is not None:
                     identifier, condition = marker.identifier, marker.condition
                     children[0] = replace(children[0], text=_cut_marker(children[0].text, marker))
                 blocks: list[Block] = []
-                for child in children:
-                    if child.kind in ("ordered_list", "unordered_list"):
-                        blocks.append(self._list(child, markers, numbers))
-                    elif child.kind == "html":
-                        continue  # never emitted (§8.6, §8.7)
-                    elif (built := self.block(child, [], top_level=False)) is not None:
-                        blocks.append(built)
-                items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition))
+                outer = self.line
+                # The item's marker line; in a quote an item is not addressable.
+                item_line = self.item_lines[number] if self.item_lines is not None else outer
+                self.line = item_line
+                try:
+                    for child in children:
+                        if child.kind in ("ordered_list", "unordered_list"):
+                            nested = self._list(child, markers, numbers)
+                            if nested is not None:
+                                blocks.append(nested)
+                        elif child.kind == "html":
+                            continue  # never emitted (§8.6, §8.7)
+                        elif (built := self.block(child, [], top_level=False)) is not None:
+                            blocks.append(built)
+                finally:
+                    self.line = outer
+                # Only a comment: the item is removed. Defensive: an item a
+                # marker belongs to (an anchor or a condition) never vanishes.
+                if item.blocks and all(child.kind == "html" for child in item.blocks) \
+                        and not identifier and not condition:
+                    continue
+                items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition, line=item_line))
         finally:
             self.depth -= 1
-        return List(ordered=block.kind == "ordered_list", items=tuple(items))
+        return List(ordered=block.kind == "ordered_list", items=tuple(items)) if items else None
 
     def _check_depth(self, more: int) -> None:
         """Refuse a document that nests lists, quotes, and inline formatting
@@ -433,24 +522,31 @@ class _Builder:
             raise DocumentError(f"The document nests lists, quotes, and inline formatting more than "
                                 f"{MAX_NESTING} levels deep, which is not rendered.")
 
-    def quote(self, block: ModelBlock) -> Block:
+    def quote(self, block: ModelBlock) -> Block | None:
         """A block quote, its content the blocks the validator reads in it
         (``quote_blocks``). Past the validator's quote depth, it reads the
         quote's text as one paragraph, and so does the builder. A drafting
         note is decided by the validator's own test (§15.6), and its content
         is the validator's reading without the ``[!DRAFTING]`` marker
-        (``drafting_note_blocks``)."""
+        (``drafting_note_blocks``). A quote that holds nothing but comments
+        is left out (None); an empty drafting note stays, since its label is
+        the template construct the reader sees (§15.6)."""
         drafting = is_drafting_note(block)
         self._check_depth(1)
         # The quotes and list items the quote is in, before entering it.
         read = drafting_note_blocks if drafting else quote_blocks
         children = read(block, depth=self.depth)
+        line, at = self.line, self.at
         self.depth += 1
+        self.at = None  # what is in a quote has the quote's line
         try:
             blocks = self.blocks(children, None, markers=False)
         finally:
             self.depth -= 1
-        return DraftingNote(blocks) if drafting else Quote(blocks)
+            self.at = at
+        if drafting:
+            return DraftingNote(blocks, line=line)
+        return Quote(blocks, line=line) if blocks else None
 
     # -- document -------------------------------------------------------------
 
@@ -463,6 +559,7 @@ class _Builder:
                 identifier=self.result.index.sections[index].identifier,
                 condition=section.condition,
                 blocks=self.blocks(section.blocks, index),
+                line=None if self.layout is None else self.layout.sections[index].heading.start,
             )
             for index, section in enumerate(document.sections)
         )
@@ -520,7 +617,8 @@ def _trim(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
 def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
     """*inlines* with adjacent text joined. Where HTML or a comment was
     dropped between two spaces, one of them goes: ``a <!-- x --> b`` reads
-    "a b". A dropped ``<br>`` between two words leaves one space."""
+    "a b". A dropped ``<br>`` between two words leaves one space. Before a
+    line break, the spaces before a dropped inline all go."""
     merged: list[Inline] = []
     dropped = parted = False
     for inline in inlines:
@@ -529,7 +627,15 @@ def _merge_text(inlines: list[Inline]) -> tuple[Inline, ...]:
             parted = parted or inline is _DROPPED_BREAK
             continue
         before = merged[-1] if merged else None
-        if dropped and isinstance(inline, Text) and isinstance(before, Text) and before.text.endswith(" "):
+        if dropped and isinstance(inline, SoftBreak | HardBreak) and isinstance(before, Text):
+            # The comment ended its line: the space before it goes, or the
+            # line would end in one (and "a <!-- x -->\nb" read "a  b").
+            stripped = before.text.rstrip(" ")
+            merged.pop()
+            if stripped:
+                merged.append(Text(stripped))
+            before = merged[-1] if merged else None
+        elif dropped and isinstance(inline, Text) and isinstance(before, Text) and before.text.endswith(" "):
             inline = Text(inline.text.lstrip(" "))
         elif parted and before is not None and not isinstance(inline, SoftBreak | HardBreak):
             if isinstance(before, Text):

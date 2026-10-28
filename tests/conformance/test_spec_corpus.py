@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from conftest import spec_root
 
-from legaldown_render import DocumentError, render
+from legaldown_render import DocumentError, render, render_file
 
 pytestmark = pytest.mark.conformance
 
@@ -80,6 +80,38 @@ def test_invalid_fixtures_render_their_markers(rule: str) -> None:
     for case in cases:
         output = render(case.read_text(encoding="utf-8"), format="text").output
         assert MARKERS[rule] in output, f"{case.name} does not render {MARKERS[rule]!r}"
+
+
+#: The file-reference rules (§2.3, §16.2): the renderer reports them itself, since the validator does not.
+FILE_REFERENCE_RULES = ("path-not-relative", "path-outside-root")
+
+
+@pytest.mark.parametrize("rule", FILE_REFERENCE_RULES)
+def test_file_reference_fixtures_report_their_rule_at_its_line(rule: str) -> None:
+    """A case may ask for a configuration (``requires_config``). The document
+    root is the one setting this renderer can make; a case that needs more is
+    skipped."""
+    cases = _entries(SPEC / "fixtures" / "invalid" / rule)
+    assert cases, f"no fixture for {rule}"
+    for case in cases:
+        expected = json.loads(case.with_suffix(".expected.json").read_text(encoding="utf-8"))
+        config = expected.get("requires_config", {})
+        if set(config) - {"document_root"}:
+            pytest.skip(f"{case.name} needs {sorted(config)}")
+        settings = {"document_root": case.parent / config["document_root"]} if "document_root" in config else {}
+        result = render_file(case, **settings)
+        found = {(d.rule, d.line) for d in result.diagnostics}
+        for diagnostic in expected["diagnostics"]:
+            assert (diagnostic["rule"], diagnostic["line"]) in found, f"{case.name}: {sorted(found)}"
+        assert not result.ok
+
+
+def test_the_outside_root_fixture_is_valid_without_a_root() -> None:
+    """§2.3: no default root, so the containment check does not run."""
+    for case in _entries(SPEC / "fixtures" / "invalid" / "path-outside-root"):
+        result = render_file(case)
+        assert "path-outside-root" not in {d.rule for d in result.diagnostics}
+        assert not [d for d in result.diagnostics if d.rule.startswith("path-")], case.name
 
 
 def test_raw_html_fixture_emits_no_html() -> None:
