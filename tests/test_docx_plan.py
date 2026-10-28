@@ -1677,15 +1677,90 @@ def test_documents_of_one_size_refer_to_different_units_so_that_more_of_them_are
         assert len(set().union(*members)) > max(len(refs) for refs in members)
 
 
-@pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "mixed", "article"])
-def test_a_reference_is_fixed_text_only_where_a_heading_level_is_skipped_or_the_depth_is_past_word_s(variant: str) -> None:
-    """The cover of every reference exists for a document without errors and a list within Word's nine levels: what
-    cannot be covered are the references below a skipped heading level (a Core Error: the number of the level the
-    heading skips has no unit to be a field of) and below a list nested past nine levels."""
-    for source, result, plan, _ in (*random_runs(variant), *alternative_runs(variant)):
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_a_reference_is_fixed_text_only_in_a_document_that_skips_a_heading_level(variant: str) -> None:
+    """Every reference of a document without errors is made of fields and the delimiters between them, whatever the
+    numbering style and the depth of its lists: the nesting past Word's nine levels has levels of its own, a path label
+    is live, and the words of a label that the format repeats are one field. What cannot be a field is the number of a
+    heading level the document skips (a Core error: no unit holds it): it is text, reported, and in such a document
+    the counters of the units Word draws differently are text too."""
+    for source, _, plan, _ in (*random_runs(variant), *alternative_runs(variant)):
         skipped = any("skipped-level" in unit.cause for unit in plan.units.values())
-        if not skipped and max((lst.depth for lst in lists(result.tree)), default=0) <= 8:
-            assert not [t for t, r in plan.refs.items() if r.fixed], source
+        if not skipped:
+            assert not [t for t, r in plan.refs.items() if r.fixed or r.ghost], source
+
+
+#: Label forms a style can write that the built-in ones do not (and the reason a reference to them may stay fixed text:
+#: ``delimiters`` around the counter that Word's ``\\t`` switch is not documented to leave out, ``counters`` of other
+#: units that the label shows and the reference writes itself, ``period`` a prefix like ``Čl. `` that only the switch's
+#: ``guess`` setting leaves out; None: all live).
+EXTRA_VARIANTS: dict[str, tuple[dict, str | None]] = {
+    "section-path-word": ({"overrides": {"numbering.levels": [
+        {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"},
+        {"counter": "decimal", "label": "Section {path}", "ref": ".{n}"},
+        {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"}], "references.format": "Section {designation}"}}, None),
+    "path-all": ({"overrides": {"enumeration.levels": [
+        {"counter": "decimal", "label": "{path}", "ref": ".{n}"}, {"counter": "lower-alpha", "label": "{path}", "ref": "({n})"},
+        {"counter": "lower-roman", "label": "{path}", "ref": "({n})"}]}}, None),
+    "items-path-continental-sec": ({"style": "continental", "overrides": {"enumeration.levels": [
+        {"counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"},
+        {"counter": "lower-alpha", "label": "{path}", "ref": "({n})"},
+        {"counter": "lower-roman", "label": "{path}", "ref": "({n})"}]}}, None),
+    "outline-items-with-section": ({"style": "outline", "overrides": {"enumeration.levels": [
+        {"counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"},
+        {"counter": "lower-alpha", "label": "{n})", "ref": "({n})"}]}}, None),
+    "heading-path-slash": ({"overrides": {"numbering.levels": [
+        {"counter": "decimal", "label": "{n}.", "ref": "{n}"}, {"counter": "decimal", "label": "{path}", "ref": "/{n}"}]}}, None),
+    "outline-paragraph-path": ({"style": "outline", "overrides": {"paragraphs.numbered": True, "paragraphs.format": {
+        "counter": "decimal", "label": "{path}", "ref": ".{n}"}}}, None),
+    "continental-paragraph-dash": ({"style": "continental", "overrides": {"paragraphs.numbered": True, "paragraphs.format": {
+        "counter": "decimal", "label": "{section}-{n}", "ref": "-{n}"}}}, None),
+    "parenthesis-label-bare-ref": ({"overrides": {"enumeration.levels": [
+        {"counter": "lower-alpha", "label": "({n})", "ref": "{n}"}, {"counter": "lower-roman", "label": "({n})", "ref": "{n}"},
+        {"counter": "upper-alpha", "label": "({n})", "ref": "{n}"}]}}, "delimiters"),
+    "colon-label": ({"overrides": {"enumeration.levels": [
+        {"counter": "decimal", "label": "{n}:", "ref": "{n}"}, {"counter": "lower-alpha", "label": "{n}:", "ref": "{n}"}]}},
+                    "delimiters"),
+    "section-in-label-not-in-ref": ({"overrides": {"enumeration.levels": [
+        {"counter": "decimal", "label": "{section}.{n}", "ref": "{n}"}, {"counter": "lower-alpha", "label": "({n})",
+                                                                         "ref": "({n})"}]}}, "counters"),
+    "abbreviation-with-a-period": ({"overrides": {"numbering.levels": [
+        {"counter": "decimal", "label": "Čl. {n}", "ref": "{n}"}, {"counter": "decimal", "label": "{path}", "ref": ".{n}"}],
+        "references.format": "čl. {designation}"}}, "period"),
+}
+
+
+@functools.cache
+def extra_runs(name: str, switch: str) -> tuple:
+    """(source, plan, diagnostics) of a sample of the random documents without a skipped heading level, under the label
+    forms of :data:`EXTRA_VARIANTS` and a setting of the switch."""
+    runs = []
+    for source in (*sample(name, 4, _random_sources()), *sample(name, 2, _alternative_sources())):
+        prefix = "" if source.startswith("---") else FRONT
+        result = render(prefix + source, format="text", **EXTRA_VARIANTS[name][0])
+        plan, diagnostics = plan_docx(result.tree, text_switch=switch)  # type: ignore[arg-type]
+        if not any("skipped-level" in unit.cause for unit in plan.units.values()):
+            runs.append((source, plan, diagnostics))
+    return tuple(runs)
+
+
+@pytest.mark.parametrize("name", EXTRA_VARIANTS)
+def test_every_label_form_is_live_except_where_the_reason_a_reference_stays_fixed_says_so(name: str) -> None:
+    reason = EXTRA_VARIANTS[name][1]
+    runs = extra_runs(name, "documented")
+    assert runs
+    fixed = sum(r.fixed for _, plan, _ in runs for r in plan.refs.values())
+    if reason is None:
+        assert fixed == 0
+        return
+    assert fixed > 0
+    findings = [d.message for _, _, ds in runs for d in ds if d.rule == "render-docx-reference" and "not a field" in d.message]
+    phrase = {"delimiters": "text or punctuation around the counter", "counters": "holds the counters",
+              "period": "a period after letters"}[reason]
+    assert findings and all(phrase in m for m in findings)
+    # the setting that guesses is the one that lets a prefix with a period be left out, and no other reason is its business
+    guessed = sum(r.fixed for _, plan, _ in extra_runs(name, "guess") for r in plan.refs.values())
+    assert (guessed == 0) == (reason == "period")
 
 
 def test_each_variant_plans_its_own_sample_of_the_random_documents() -> None:
@@ -2229,6 +2304,56 @@ def test_references_that_fail_in_the_same_way_are_one_finding_naming_the_first_a
     assert found[0].line == tree.sections[-1].blocks[-1].line  # the lowest line of the three: all in one paragraph
 
 
+def test_references_that_are_fixed_for_the_same_reason_are_one_finding() -> None:
+    levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "{n}"}]
+    tree, plan, diagnostics = planned("# A\n\n- x {#x}\n- y {#y}\n- z {#z}\n\n{{ref: x}} {{ref: y}} {{ref: z}}\n",
+                                      overrides={"enumeration.levels": levels})
+    [only] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert only.message.endswith(" 2 more cross-references fail in the same way.")
+    assert all(r.fixed for r in plan.refs.values()) and not any(r.ghost for r in plan.refs.values())
+    tree, plan, diagnostics = planned("# A\n\n- x {#x}\n- y {#y}\n\n{{ref: x}} {{ref: y}}\n",
+                                      overrides={"enumeration.levels": levels})
+    [only] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert only.message.endswith(" 1 more cross-reference fails in the same way.")
+
+
+@pytest.mark.parametrize(("levels", "switch", "phrases"), [
+    # delimiters in the label that the reference leaves out
+    ([{"counter": "lower-alpha", "label": "({n})", "ref": "{n}"}], "documented",
+     ["Word draws its number as '(a)'", "text or punctuation around the counter that the reference does not have",
+      "Word is not documented to leave such punctuation out with its \\t switch"]),
+    ([{"counter": "decimal", "label": "{n}:", "ref": "{n}"}], "guess",
+     ["Word draws its number as '1:'", "not documented to leave such punctuation out"]),
+    # an abbreviation with a period: the setting that guesses leaves it out
+    ([{"counter": "decimal", "label": "No. {n}", "ref": "{n}"}], "documented",
+     ["Word draws its number as 'No. 1'", "not documented to leave a period after letters out",
+      "docx.reference_text_switch: guess expects it to"]),
+    ([{"counter": "decimal", "label": "No. {n}", "ref": "{n}"}], "off",
+     ["Word draws its number as 'No. 1'", "Word's \\t switch, which could leave it out, is off (docx.reference_text_switch)"]),
+    # a label that carries the counter of the section, which the reference writes itself
+    ([{"counter": "decimal", "label": "{section}.{n}", "ref": "{n}"}], "documented",
+     ["Word draws its number as '1.1'", "holds the counters of other units that the reference writes itself before it",
+      "a field returns the whole number or none of it"]),
+])
+def test_the_reason_a_reference_is_fixed_names_what_the_style_could_change(
+        levels: list, switch: str, phrases: list[str]) -> None:
+    result = render(FRONT + "# A\n\n- x {#x}\n\nSee {{ref: x}}.\n", format="text", overrides={"enumeration.levels": levels})
+    plan, diagnostics = plan_docx(result.tree, text_switch=switch)  # type: ignore[arg-type]
+    [found] = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert all(phrase in found.message for phrase in phrases), found.message
+    assert "written as the text" in found.message and "not a field" in found.message
+    assert all(r.fixed for r in plan.refs.values())
+
+
+def test_every_reference_that_carries_the_counters_of_other_units_is_one_finding_whatever_its_shape() -> None:
+    levels = [{"counter": "decimal", "label": "{section}.{n}", "ref": "{n}"}]
+    body = "# A\n\n- x {#x}\n\n## B\n\n- y {#y}\n\nSee {{ref: x}} {{ref: y}}.\n"
+    _, plan, diagnostics = planned(body, overrides={"enumeration.levels": levels})
+    found = [d for d in diagnostics if d.rule == "render-docx-reference"]
+    assert len(found) == 1 and found[0].message.endswith(" 1 more cross-reference fails in the same way.")
+    assert all(r.fixed for r in plan.refs.values())
+
+
 # -- The cover on its own ----------------------------------------------------------------------------------
 
 
@@ -2542,7 +2667,8 @@ def assert_references_as_resolved(result, plan, diagnostics) -> None:  # noqa: A
     # Every fixed text and every other difference is in a finding, named or counted among "N more".
     counted = 0
     for finding in reported:
-        more = re.search(r" (\d+) more cross-references (?:fail in|are written) the same way\.$", finding.message)
+        more = re.search(r" (\d+) more cross-references? (?:fails? in|are written|is written) the same way\.$",
+                         finding.message)
         counted += 1 + (int(more.group(1)) if more else 0)
     assert needing_a_finding + fixed + ghosts <= counted <= len(texts)
     if fixed:

@@ -66,7 +66,7 @@ from ..tree import (
 )
 from ..urls import displayed_url, printable
 from .docx_bookmarks import ATTACHMENTS_HEADING, BookmarkNames
-from .docx_cover import Field, Shown, TextSwitch, Title, atoms, cover, suppressed, text_of, uncovered
+from .docx_cover import DELIMITERS, Field, Shown, TextSwitch, Title, atoms, cover, suppressed, text_of, uncovered
 from .docx_numbering import (
     NUM_FMT,
     SAMPLE_COUNTER,
@@ -589,12 +589,14 @@ class _Built(NamedTuple):
 
 class _Finding(NamedTuple):
     """A reference that is fixed text (*kind* ``fixed``, *reason* why), has the number of a skipped heading level as
-    fixed text (``ghost``) or reads differently in Word (``differs``)."""
+    fixed text (``ghost``) or reads differently in Word (``differs``). References with the same *kind* and *group*
+    are one finding."""
 
     kind: str
     reason: str
     found: _Reference
     shown: str
+    group: str = ""
 
 
 class _Drift:
@@ -730,16 +732,40 @@ class _Planner:
                     fields.append(Field(owner, True, True, bare))
         return fields
 
-    def why_uncovered(self, designation: Sequence[Shown], fields: Sequence[Field]) -> str:
-        """Why no combination of *fields* and delimiters reads like *designation* (§13.1)."""
+    def why_uncovered(self, designation: Sequence[Shown], fields: Sequence[Field]) -> tuple[str, str]:
+        """Why no combination of *fields* and delimiters reads like *designation* (§13.1), and which references fail for
+        the same reason (so that they are one finding): every reference whose number carries the counters of other
+        units, and those whose number is drawn with the same shape (its counters as ``#``) around the counter. Two
+        reasons are told apart, since the style can answer each:
+
+        * the number carries **delimiters** the reference leaves out (a label ``({n})`` under a ref ``{n}``, a prefix
+          ``No. ``): Word's ``\\t`` switch could drop them, but the style's ``docx.reference_text_switch`` does not take it
+          to (it is ``off``, or what Word does with them is not documented);
+        * the number carries the **counters of other units** that the reference writes itself before it (a label
+          ``{section}.{n}`` under a ref ``{n}``): Word returns the whole number or none of it."""
         wanted = atoms(designation)
         _, owner = wanted[uncovered(designation, fields) or 0]
         for candidate in fields:
-            if candidate.number and any(isinstance(t, Count) and t.owner == owner for t in candidate.tokens):
-                return (f"Word draws its number as '{printable(text_of(candidate.tokens))}', with text or punctuation "
-                        f"around the counter that the designation does not have and that Word's \\t switch cannot "
-                        f"leave out")
-        return "no combination of Word's fields reads like it"
+            plain = candidate.number and not candidate.suppress_text
+            if not (plain and any(isinstance(t, Count) and t.owner == owner for t in candidate.tokens)):
+                continue
+            drawn = printable(text_of(candidate.tokens))
+            shape = "".join("#" if isinstance(t, Count) else t.text for t in candidate.tokens)
+            if any(isinstance(t, Count) and t.owner != owner for t in candidate.tokens):
+                return (f"Word draws its number as '{drawn}', which holds the counters of other units that the reference "
+                        f"writes itself before it (the section's, the enclosing items'), and a field returns the whole "
+                        f"number or none of it", "counters")
+            around = "".join(t.text for t in candidate.tokens if isinstance(t, Lit))
+            if self.text_switch == "off":
+                how = "Word's \\t switch, which could leave it out, is off (docx.reference_text_switch)"
+            elif {c for c in around if c in DELIMITERS} == {"."}:
+                how = ("Word is not documented to leave a period after letters out with its \\t switch "
+                       "(docx.reference_text_switch: guess expects it to)")
+            else:
+                how = "Word is not documented to leave such punctuation out with its \\t switch"
+            return (f"Word draws its number as '{drawn}', with text or punctuation around the counter that the "
+                    f"reference does not have, and {how}", f"delimiters {shape}")
+        return "no combination of Word's fields reads like it", "other"
 
     def reference(self, found: _Reference) -> _Built | None:
         """The fields of the reference *found*: the whole text it shows (the designation inside the text of
@@ -763,7 +789,8 @@ class _Planner:
                 whole.extend(designation)
         pieces = cover(whole, fields)
         if pieces is None:
-            self.unreferable.append(_Finding("fixed", self.why_uncovered(designation, fields), found, found.text))
+            reason, group = self.why_uncovered(designation, fields)
+            self.unreferable.append(_Finding("fixed", reason, found, found.text, group))
             return _Built([found.text] if found.text else [], True, None, True)
         ghost = self.skipped_part(whole, pieces)
         if ghost:
@@ -800,14 +827,17 @@ class _Planner:
         for a run of units counted off by the same amount."""
         groups: dict[tuple[str, str], list[_Finding]] = {}
         for finding in self.unreferable:
-            groups.setdefault((finding.kind, finding.reason), []).append(finding)
-        for (kind, reason), members in groups.items():
+            groups.setdefault((finding.kind, finding.group or finding.reason), []).append(finding)
+        for (kind, _), members in groups.items():
             members.sort(key=lambda m: (m.found.line is None, m.found.line or 0))
             first = members[0]
+            reason = first.reason
             text, shown = printable(first.found.text), printable(first.shown)
-            more = f" {len(members) - 1} more cross-references fail in the same way." if len(members) > 1 else ""
+            count = len(members) - 1
+            many = f"{count} more cross-references" if count > 1 else "1 more cross-reference"
+            more = f" {many} {'fail' if count > 1 else 'fails'} in the same way." if count else ""
             if kind == "ghost":
-                more = f" {len(members) - 1} more cross-references are written the same way." if len(members) > 1 else ""
+                more = f" {many} {'are' if count > 1 else 'is'} written the same way." if count else ""
                 message = (f"The cross-reference '{text}' holds the number of a heading level that the document skips "
                            f"(a heading level must follow the one above, §4.1), which no Word number returns: "
                            f"'{shown}' is written as text there and will not follow edits made in Word; the rest is "
