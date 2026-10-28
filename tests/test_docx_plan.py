@@ -3,6 +3,7 @@ which (numId, ilvl) each section, list item and numbered paragraph takes, and th
 as the resolver did, or a diagnostic says why not. Everything is checked on the plan's data; no file is written."""
 from __future__ import annotations
 
+import functools
 import random
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,14 +13,11 @@ from conftest import DOCUMENTS, FRONT, spec_root
 
 from legaldown_render import DocumentError, render
 from legaldown_render.errors import StyleError
-from legaldown_render.resolve.docx_numbering import NUM_FMT
-from legaldown_render.resolve.docx_plan import (
-    DocxPlan,
-    _formats_of,
-    docx_style_errors,
-    plan_docx,
-)
+from legaldown_render.resolve.docx_numbering import NUM_FMT, word_counter
+from legaldown_render.resolve.docx_plan import DocxPlan, docx_style_errors, plan_docx
+from legaldown_render.resolve.numbering import format_counter, formats_of
 from legaldown_render.style import load_style
+from legaldown_render.style.docx import docx_settings
 from legaldown_render.tree import DraftingNote, List, ListItem, Paragraph, Quote, RenderTree, Section
 
 NONE = {"numbering.scheme": "none"}
@@ -39,12 +37,31 @@ VARIANTS: dict[str, dict] = {
     "continental-none": {"style": "continental", "overrides": NONE},
     "enumerate-ordered": {"overrides": {"enumeration.ordered": "enumerate"}},
     "bullets": {"overrides": {"enumeration.enabled": False}},
+    # labels with words and symbols, a label that shows the path of an item, and a paragraph number with a symbol
+    "article": {"overrides": {"numbering.levels": [
+        {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"},
+        {"counter": "decimal", "label": "{path}", "ref": ".{n}"},
+        {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"}]}},
+    "section-sign": {"overrides": {"enumeration.levels": [
+        {"counter": "decimal", "label": "\u00a7 {n}", "ref": "{n}"},
+        {"counter": "lower-alpha", "label": "{n})", "ref": "({n})"},
+        {"counter": "lower-roman", "label": "({n})", "ref": "({n})"}]}},
+    "path-items": {"overrides": {"enumeration.levels": [
+        {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+        {"counter": "decimal", "label": "{path}", "ref": "({n})"},
+        {"counter": "lower-roman", "label": "{n}.", "ref": "({n})"}]}},
+    "path-items-continental": {"style": "continental", "overrides": {"enumeration.levels": [
+        {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+        {"counter": "decimal", "label": "{path}", "ref": "({n})"},
+        {"counter": "lower-roman", "label": "{n}.", "ref": "({n})"}]}},
+    "paragraph-sign": {"overrides": {"paragraphs.numbered": True, "paragraphs.format": {
+        "counter": "decimal", "label": "\u00b6 {n}", "ref": "{n}"}}},
 }
 
 
 def planned(body: str, front: str = FRONT, **settings: object):  # noqa: ANN201
     result = render(front + body, format="text", **settings)
-    plan, diagnostics = plan_docx(result.tree, result.style)
+    plan, diagnostics = plan_docx(result.tree)
     return result.tree, plan, diagnostics
 
 
@@ -173,15 +190,6 @@ def test_the_none_scheme_has_no_heading_abstract_num_and_sections_are_unnumbered
     assert plan.nums[0].abstract_id == 0
 
 
-def test_a_counter_without_a_word_format_is_written_as_decimal(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delitem(NUM_FMT, "lower-alpha")
-    tree, plan, diagnostics = planned("# A\n\n- x\n- y\n")
-    assert plan.abstract_nums[1].levels[0].num_fmt == "decimal"
-    assert [plan.units[i.unit].label for i in items(tree)] == ["(1)", "(2)"]
-    assert [(d.rule, d.level) for d in diagnostics if d.rule == "render-docx-counter"] == [
-        ("render-docx-counter", "warning")]
-
-
 # -- Headings ------------------------------------------------------------------------
 
 
@@ -192,13 +200,12 @@ def test_headings_take_the_style_num_at_their_level() -> None:
         (1, 0, False, "2.", "2", 2)]
 
 
-def test_a_skipped_heading_level_is_numbered_as_the_resolver_does_and_reported() -> None:
+def test_a_skipped_heading_level_is_numbered_as_the_resolver_does() -> None:
+    # heading-skip is a Core Error of the document: the plan says nothing more, and notes the cause on the unit.
     tree, plan, diagnostics = planned("# A\n\n### B\n\n## C\n")
     assert [plan.units[s].label for s in ("s1", "s2", "s3")] == ["1.", "1.1.1", "1.2"]
     assert plan.units["s2"].cause == ("skipped-level",) and plan.units["s3"].cause == ()
-    [found] = [d for d in diagnostics if d.rule == "render-docx-heading-skip"]
-    assert found.level == "warning" and found.line == tree.sections[1].line and "'B'" in found.message
-    assert rules(diagnostics) == {"render-docx-heading-skip"}
+    assert diagnostics == []
 
 
 def test_a_document_that_starts_below_level_one_skips_nothing() -> None:
@@ -228,7 +235,7 @@ def test_every_top_level_list_has_a_num_that_starts_it_at_one() -> None:
     first_list, ordered = plan.units[items[0].unit], plan.units[items[-2].unit]
     assert (first_list.num_id, first_list.ilvl, first_list.explicit, first_list.label) == (2, 0, True, "(a)")
     assert (ordered.num_id, ordered.ilvl, ordered.label) == (3, 0, "1.")
-    assert plan.nums[1].start_overrides == tuple((i, 1) for i in range(9))
+    assert plan.nums[1].start_overrides == ((0, 1),)
     assert plan.nums[2].abstract_id == 2
 
 
@@ -268,11 +275,13 @@ def test_a_sibling_list_of_another_kind_that_continues_gets_a_num_starting_at_it
     assert [item.number for item in ordered] == [1, 2, 3]
     assert [plan.units[item.unit].label for item in ordered] == ["1.", "2.", "3."]
     # Another kind of list in between: the second ordered list cannot go on from the first by structure, so its num
-    # starts at its number, 3. Static, and reported as information only.
+    # starts at its number, 3: a fixed start that will not follow items added before it, which is a warning (the
+    # first ordered list restarts at 1, which is information only).
     last = plan.units[ordered[-1].unit]
-    assert last.num_id != plan.units[ordered[0].unit].num_id and last.cause == ("restart-family",)
-    assert plan.nums[last.num_id - 1].start_overrides[0] == (1, 3)
-    assert {d.level for d in diagnostics} == {"info"}
+    assert last.num_id != plan.units[ordered[0].unit].num_id and last.cause == ("resync",)
+    assert plan.nums[last.num_id - 1].start_overrides == ((1, 3),)
+    assert [(d.rule, d.level) for d in diagnostics] == [
+        ("render-docx-static-restart", "info"), ("render-docx-shared-counter", "warning")]
 
 
 def test_a_nested_list_of_another_kind_has_a_num_of_its_own_and_is_reported_as_information() -> None:
@@ -280,7 +289,7 @@ def test_a_nested_list_of_another_kind_has_a_num_of_its_own_and_is_reported_as_i
     _, x, y, _, z = items(tree)
     assert shown(plan, x, y, z) == [(3, 1, "1."), (3, 1, "2."), (4, 1, "1.")]
     assert plan.units[x.unit].cause == ("restart-family",)
-    assert plan.nums[2].start_overrides[0] == (1, 1) and plan.nums[2].abstract_id == 2
+    assert plan.nums[2].start_overrides == ((1, 1),) and plan.nums[2].abstract_id == 2
     assert [(d.rule, d.level) for d in diagnostics] == [("render-docx-static-restart", "info")]
     assert diagnostics[0].line == tree.sections[0].blocks[0].items[0].blocks[1].items[0].line
 
@@ -296,17 +305,22 @@ def test_a_list_in_a_quote_inside_an_item_is_numbered_from_the_section_with_a_nu
     # Word's counter of that level was used by the quote's list: it starts again where the resolver is, by a
     # fixed setting.
     assert shown(plan, x, y) == [(2, 1, "(i)"), (4, 1, "(ii)")]
-    assert plan.nums[3].start_overrides[0] == (1, 2) and plan.units[y.unit].cause == ("resync",)
-    assert [(d.rule, d.level) for d in diagnostics] == [("render-docx-static-restart", "info")]
+    assert plan.nums[3].start_overrides == ((1, 2),) and plan.units[y.unit].cause == ("resync",)
+    assert [(d.rule, d.level) for d in diagnostics] == [("render-docx-shared-counter", "warning")]
 
 
-def test_bullets_are_numbered_paragraphs_with_a_bullet_of_their_own() -> None:
-    tree, plan, diagnostics = planned("# A\n\n- a\n  - b\n", overrides={"enumeration.enabled": False})
-    assert [a.kind for a in plan.abstract_nums] == ["headings", "bullet"]
-    first, second = items(tree)
-    assert shown(plan, first, second) == [(2, 0, ""), (2, 1, "")] and plan.units[first.unit].count is None
-    assert [level.lvl_text for level in plan.abstract_nums[1].levels[:4]] == ["•", "–", "◦", "•"]
-    assert diagnostics == []
+def test_bullets_count_nothing_so_one_num_serves_every_bullet_list() -> None:
+    body = "# A\n\n- a\n  - b\n\n1. o\n   - c\n\n# B\n\n- d\n"
+    tree, plan, diagnostics = planned(body, overrides={"enumeration.enabled": False})
+    first, second, _, third, fourth = items(tree)
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "bullet", "renumber"]
+    bullet = plan.abstract_nums[1]
+    assert shown(plan, first, second, third, fourth)[:2] == [(2, 0, ""), (2, 1, "")]
+    assert {plan.units[n.unit].num_id for n in (first, second, third, fourth)} == {2}
+    assert all(num.start_overrides == () for num in plan.nums if num.abstract_id == bullet.id)
+    assert plan.units[first.unit].count is None
+    assert [level.lvl_text for level in bullet.levels[:4]] == ["\u2022", "\u2013", "\u25e6", "\u2022"]
+    assert diagnostics == []  # bullets under an ordered list need no restart and no report
 
 
 def test_ordered_lists_that_are_enumerated_take_the_enumeration_levels() -> None:
@@ -337,6 +351,36 @@ def test_a_list_deeper_than_word_has_levels_is_clamped_and_reported_once() -> No
     [found] = [d for d in diagnostics if d.rule == "render-docx-list-depth"]
     assert found.level == "warning" and found.line == deep[9].line and "9" in found.message
     assert rules(diagnostics) == {"render-docx-list-depth"}
+
+
+def test_items_of_lists_past_level_nine_keep_their_numbers_and_a_sibling_at_level_nine_is_restarted() -> None:
+    body = "# A\n\n" + "".join("  " * i + f"- level {i}\n" for i in range(9))
+    body += "".join("  " * 9 + f"- nine {k}\n" for k in "abc")
+    body += "".join("  " * 10 + f"- ten {k}\n" for k in "ab")
+    body += "  " * 8 + "- level 8 again\n"
+    tree, plan, diagnostics = planned(body)
+    found = items(tree)
+    nine, ten, again = found[9:12], found[12:14], found[14]
+    # every item of a clamped list is Word's level 9 in the format of level 9, with the resolver's count
+    assert [plan.units[i.unit].cause for i in (*nine, *ten)] == [("clamped",)] * 5
+    assert [(plan.units[i.unit].ilvl, plan.units[i.unit].count) for i in (*nine, *ten)] == [
+        (8, 1), (8, 2), (8, 3), (8, 1), (8, 2)]
+    assert [plan.units[i.unit].label for i in (*nine, *ten)] == ["(A)", "(B)", "(C)", "(A)", "(B)"]
+    assert [i.label for i in (*nine, *ten)] == ["(a)", "(b)", "(c)", "(i)", "(ii)"]  # the resolver's cycle
+    assert len({plan.units[i.unit].num_id for i in (nine[0], ten[0])}) == 2
+    # Word's counter of level 9 was used by the clamped lists: the item after them is restarted where it is
+    again_plan = plan.units[again.unit]
+    assert (again.number, again_plan.count, again_plan.cause) == (2, 2, ("resync",))
+    assert plan.nums[again_plan.num_id - 1].start_overrides == ((8, 2),)
+    assert rules(diagnostics) == {"render-docx-list-depth", "render-docx-shared-counter"}
+    assert all(d.level == "warning" for d in diagnostics)
+
+
+def test_a_list_that_goes_on_from_a_sibling_with_a_fixed_start_is_a_warning_not_a_restart() -> None:
+    _, _, diagnostics = planned("# A\n\n- a\n  1. x\n\n  Between.\n\n  - w\n\n  1. z\n")
+    assert [(d.rule, d.level) for d in diagnostics] == [
+        ("render-docx-static-restart", "info"), ("render-docx-shared-counter", "warning")]
+    assert "Restart at 1" not in diagnostics[1].message
 
 
 # -- Paragraphs ----------------------------------------------------------------------
@@ -430,22 +474,23 @@ def test_an_alternative_that_shares_a_number_is_reported_while_it_is_numbered_in
     tree, plan, diagnostics = planned(body, ALTERNATIVES)
     assert tree.sections[1].shares_number_with == "s1"
     assert [plan.units[s].label for s in ("s1", "s2", "s3")] == ["1.", "2.", "3."]
-    assert [(d.rule, d.line) for d in diagnostics] == [
-        ("render-docx-number-mismatch", tree.sections[1].line), ("render-docx-number-mismatch", tree.sections[2].line)]
-    assert "'1.'" in diagnostics[0].message and "'2.'" in diagnostics[0].message
+    # the second section and the one after it are off by the same amount: one finding
+    [found] = diagnostics
+    assert (found.rule, found.line) == ("render-docx-number-mismatch", tree.sections[1].line)
+    assert "'1.'" in found.message and "'2.'" in found.message and "the following 1" in found.message
 
 
 # -- Diagnostics: lines, files, order, repeats --------------------------------------------
 
 
 def test_diagnostics_name_the_file_and_the_line_and_come_in_line_order() -> None:
-    result = render(FRONT + "# A\n\n### B\n\n- x\n  1. y\n", format="text")
-    plan, diagnostics = plan_docx(result.tree, result.style, file="deal.lgd")
+    result = render(FRONT + "# A\n\n- x\n  1. y\n\n- p\n- q\n" + "- r\n" * 30, format="text")
+    plan, diagnostics = plan_docx(result.tree, file="deal.lgd")
     assert [(d.rule, d.file) for d in diagnostics] == [
-        ("render-docx-heading-skip", "deal.lgd"), ("render-docx-static-restart", "deal.lgd")]
+        ("render-docx-static-restart", "deal.lgd"), ("render-docx-letter-overflow", "deal.lgd")]
     lines = [d.line for d in diagnostics]
     assert lines == sorted(lines) and None not in lines
-    _, anonymous = plan_docx(result.tree, result.style)
+    _, anonymous = plan_docx(result.tree)
     assert {d.file for d in anonymous} == {""}
 
 
@@ -455,9 +500,10 @@ def test_the_same_finding_is_reported_once() -> None:
 
 
 def test_untrusted_text_in_a_message_is_escaped() -> None:
-    _, _, diagnostics = planned("# A\n\n### B\u0007x\n")
+    overrides = {"enumeration.levels": [{"counter": "lower-alpha", "label": "{section}\u0007{n}", "ref": "({n})"}]}
+    _, _, diagnostics = planned("# A\n\n- x\n", overrides=overrides)
     [found] = diagnostics
-    assert "\u0007" not in found.message
+    assert found.rule == "render-docx-section-label" and "\u0007" not in found.message
 
 
 # -- Determinism and the plan's data -------------------------------------------------------
@@ -465,8 +511,8 @@ def test_untrusted_text_in_a_message_is_escaped() -> None:
 
 def test_the_same_tree_gives_an_equal_plan_and_the_plan_is_frozen() -> None:
     result = render(FRONT + NESTED, format="text", style="continental")
-    first = plan_docx(result.tree, result.style)
-    again = plan_docx(result.tree, result.style)
+    first = plan_docx(result.tree)
+    again = plan_docx(result.tree)
     assert first[0] == again[0] and first[1] == again[1]
     with pytest.raises(AttributeError):
         first[0].heading_num_id = 5  # type: ignore[misc]
@@ -481,20 +527,13 @@ def test_unit_plans_carry_the_whole_plan_for_a_unit() -> None:
     assert plan.units["s1"].kind == "section"
 
 
-def test_a_tree_and_a_style_that_do_not_belong_together_are_refused() -> None:
-    from legaldown_render.errors import InternalError
-    result = render(FRONT + "# A\n", format="text")
-    with pytest.raises(InternalError):
-        plan_docx(result.tree, load_style("continental"))
-
-
 # -- Style checks (ADR 0006) ----------------------------------------------------------------
 
 
 def test_formats_of_a_style_are_the_formats_in_the_tree() -> None:
     for settings in VARIANTS.values():
         result = render(FRONT + "# A\n", format="text", **settings)
-        assert _formats_of(result.style) == result.tree.formats
+        assert formats_of(result.style) == result.tree.formats
 
 
 def test_the_built_in_styles_are_fine_for_docx() -> None:
@@ -514,8 +553,25 @@ def test_a_percent_that_lvl_text_cannot_write_is_a_style_error(key: str, value: 
     style = load_style(overrides=overrides)
     problems = docx_style_errors(style)
     assert len(problems) == 1 and key.split(".")[0] in problems[0] and "'%'" in problems[0]
+    with pytest.raises(StyleError) as caught:  # the DOCX settings step refuses it before anything is rendered
+        docx_settings(style)
+    assert caught.value.problems == problems
+
+
+@pytest.mark.parametrize(("levels", "setting"), [
+    # a ref ending in '%' meets the counter that starts the next level's ref once the label is put together
+    ([{"counter": "decimal", "label": "{path}", "ref": "{n}%"}, {"counter": "decimal", "label": "{path}", "ref": "{n}"}],
+     "numbering.levels"),
+    ([{"counter": "decimal", "label": "{path}", "ref": "{n}%"}, {"counter": "decimal", "label": "{path}", "ref": "5{n}"}],
+     "numbering.levels"),
+])
+def test_a_percent_that_meets_a_counter_where_the_label_is_put_together_is_a_style_error(
+        levels: list[dict], setting: str) -> None:
+    style = load_style(overrides={"numbering.levels": levels})
+    [problem] = docx_style_errors(style)
+    assert problem.startswith(setting) and "put together" in problem
     with pytest.raises(StyleError):
-        plan_docx(render(FRONT + "# A\n", format="text", overrides=overrides).tree, style)
+        docx_settings(style)
 
 
 def test_a_percent_that_cannot_be_mistaken_is_fine() -> None:
@@ -529,63 +585,164 @@ def test_settings_that_are_off_are_not_checked() -> None:
     overrides = {"enumeration.enabled": False, "enumeration.levels": [
         {"counter": "decimal", "label": "%1{n}", "ref": "{n}"}]}
     assert docx_style_errors(load_style(overrides=overrides)) == []
-    heads = {"numbering.scheme": "none"}
-    assert docx_style_errors(load_style(overrides=heads)) == []
+    assert docx_style_errors(load_style(overrides={"numbering.scheme": "none"})) == []
 
 
 def test_a_level_text_longer_than_word_allows_is_a_style_error() -> None:
     long = "x" * 260
     style = load_style(overrides={"numbering.levels": [{"counter": "decimal", "label": long + "{n}", "ref": "{n}"}]})
     [problem] = docx_style_errors(style)
-    assert "headings" in problem and "255" in problem
+    assert problem.startswith("numbering.levels") and "255" in problem
+    with pytest.raises(StyleError):
+        docx_settings(style)
+
+
+# -- Labels that show what Word cannot, and runs of units that Word counts off ------------------------
+
+
+def test_what_a_label_shows_is_judged_on_the_filled_label_not_on_its_spelling() -> None:
+    # `{path}` of an item in a section starts from the section's number: it shows it. In the preamble it does not.
+    levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+              {"counter": "decimal", "label": "{path}", "ref": "({n})"}]
+    tree, plan, diagnostics = planned("# A\n\n- a\n  - x\n  - y\n- b\n", overrides={"enumeration.levels": levels})
+    first, nested, _, _ = items(tree)[:4]
+    assert plan.units[first.unit].cause == () and plan.units[nested.unit].cause == ("label-fallback",)
+    [found] = diagnostics
+    # the reading is the one at the list's own depth: the level-2 text without the section ("(%1)(%2)" has only
+    # the list's own counters), not the level-1 text
+    assert found.rule == "render-docx-section-label" and "'(a)(1)'" in found.message
+    tree, plan, diagnostics = planned("- a\n  - x\n\n# A\n", overrides={"enumeration.levels": levels})
+    assert diagnostics == [] and plan.units[items(tree)[1].unit].cause == ()
+
+
+def test_a_label_that_needs_a_level_nothing_numbers_is_not_left_to_word() -> None:
+    # An ordered list's items are numbered by another abstractNum than the enumerated item nested in one: the level
+    # above the nested item is never used, which Word shows as 0, not 1.
+    levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+              {"counter": "decimal", "label": "{path}", "ref": "({n})"}]
+    tree, plan, diagnostics = planned("1. a\n   - x\n\n# A\n", overrides={"enumeration.levels": levels})
+    _, nested = items(tree)
+    assert plan.units[nested.unit].cause == ("restart-family", "label-fallback")
+    assert plan.units[nested.unit].label == "()(1)"  # the level above reads as nothing, not as "(a)"
+    assert {d.rule for d in diagnostics} == {"render-docx-static-restart", "render-docx-section-label"}
+
+
+def test_a_run_of_units_counted_off_by_the_same_amount_is_one_finding() -> None:
+    body = "".join(f"# S{i}\n\n- a\n- b\n\n" for i in range(4))
+    body += "# D {#d when=forum:courts}\n\n- x\n\n# D {#d when=forum:arb}\n\n- y\n\n"
+    body += "".join(f"# T{i}\n\n- a\n\n## sub\n\n- q\n\n" for i in range(10))
+    tree, plan, diagnostics = planned(body, ALTERNATIVES)
+    [found] = diagnostics
+    assert found.rule == "render-docx-number-mismatch" and found.line == tree.sections[5].line
+    assert "1 later than the renderer" in found.message and "the following 10" in found.message
+
+
+def test_a_different_difference_is_a_finding_of_its_own() -> None:
+    body = ("# D {#d when=forum:courts}\n\n# D {#d when=forum:arb}\n\n# Mid\n\n"
+            "# E {#e when=forum:courts}\n\n# E {#e when=forum:arb}\n\n# End\n")
+    tree, _, diagnostics = planned(body, ALTERNATIVES)
+    assert [(d.rule, d.line) for d in diagnostics] == [
+        ("render-docx-number-mismatch", tree.sections[1].line), ("render-docx-number-mismatch", tree.sections[4].line)]
+    assert "1 later" in diagnostics[0].message and "2 later" in diagnostics[1].message
+
+
+# -- Word's counters against LibreOffice's, observed -----------------------------------------------------
+
+#: What LibreOffice 24.2 writes for these values, from a document with one list per value (it follows the OOXML
+#: definition, which Word documents too): letters repeat after 26, Roman numerals go on with `m` from 4000.
+LIBREOFFICE_COUNTERS = {
+    "lowerLetter": {1: "a", 2: "b", 25: "y", 26: "z", 27: "aa", 28: "bb", 29: "cc", 52: "zz", 53: "aaa", 54: "bbb",
+                    55: "ccc", 78: "zzz", 79: "aaaa", 100: "vvvv"},
+    "upperLetter": {27: "AA", 28: "BB", 52: "ZZ", 53: "AAA", 100: "VVVV"},
+    "lowerRoman": {1: "i", 28: "xxviii", 79: "lxxix", 100: "c", 3999: "mmmcmxcix", 4000: "mmmm"},
+    "upperRoman": {29: "XXIX", 78: "LXXVIII", 3999: "MMMCMXCIX", 4000: "MMMM"},
+    "decimal": {1: "1", 26: "26", 4000: "4000"},
+}
+
+
+@pytest.mark.parametrize("num_fmt", LIBREOFFICE_COUNTERS)
+def test_word_counters_are_the_ones_libreoffice_wrote(num_fmt: str) -> None:
+    for value, written in LIBREOFFICE_COUNTERS[num_fmt].items():
+        assert word_counter(value, num_fmt) == written
 
 
 # -- Word numbers every unit as the resolver did, or a diagnostic says why not ---------------------
 
-EXPLAINING = {
-    "label-fallback": "render-docx-section-label",
-    "clamped": "render-docx-list-depth",
-    "skipped-level": "render-docx-heading-skip",
-}
-MISMATCH = {"render-docx-number-mismatch", "render-docx-letter-overflow", "render-docx-roman-overflow"}
+def numbered(tree: RenderTree) -> Iterator[tuple[Section | ListItem | Paragraph, str]]:
+    """Every numbered unit with the counter the resolver wrote its number in."""
+    formats = tree.formats
+
+    def blocks(found: tuple) -> Iterator[tuple[Section | ListItem | Paragraph, str]]:
+        for block in found:
+            match block:
+                case Paragraph() if block.number is not None and formats.paragraphs is not None:
+                    yield block, formats.paragraphs.counter
+                case List() if block.format is not None:
+                    for item in block.items:
+                        yield item, block.format.counter
+                        yield from blocks(item.blocks)
+                case List():
+                    for item in block.items:
+                        yield from blocks(item.blocks)
+                case Quote(blocks=inner) | DraftingNote(blocks=inner):
+                    yield from blocks(inner)
+
+    yield from blocks(tree.preamble)
+    for section in tree.sections:
+        if section.number is not None:
+            yield section, formats.headings[section.level - 1].counter
+        yield from blocks(section.blocks)
 
 
 def assert_planned_as_resolved(result) -> None:  # noqa: ANN001
-    """The property: for every numbered unit, Word's label and count are the resolver's, or a diagnostic of the plan
-    explains the exception; and nothing is reported that did not happen."""
-    plan, diagnostics = plan_docx(result.tree, result.style)
+    """The property, unit by unit: Word's count is the resolver's number, and Word's label is the resolver's label,
+    unless that unit's own counter reads differently in Word (a letter past 26, a Roman numeral from 4000: its label
+    and those of its descendants may differ), its label cannot show what the resolver's does (the plan says so on the
+    unit), or its depth is past Word's. A document without alternatives has no other exception; a diagnostic is
+    reported exactly where there is an exception."""
+    tree = result.tree
+    plan, diagnostics = plan_docx(tree)
     found = rules(diagnostics)
-    differs = False
-    for unit in units(result.tree):
-        mine = plan.units[unit.unit]
-        if unit.number is None:
-            assert mine.count is None and mine.label == "" or isinstance(unit, Section)
-            continue
-        for cause, rule in EXPLAINING.items():
+    shares = any(unit.shares_number_with for unit in units(tree))
+    overflows: dict[str, str] = {}  # unit -> the rule its counter reads differently under (itself or an ancestor)
+    parents = {unit.unit: unit.parent_unit for unit in units(tree)}
+    count_differs = False
+    own_rules: set[str] = set()
+    for node, counter in numbered(tree):
+        mine = plan.units[node.unit]
+        clamped = "clamped" in mine.cause
+        if not shares:
+            assert mine.count == node.number, (node.unit, mine.count, node.number)
+        count_differs = count_differs or mine.count != node.number
+        own = ""
+        if not clamped and word_counter(node.number, NUM_FMT[counter]) != format_counter(node.number, counter):
+            own = "render-docx-roman-overflow" if counter.endswith("roman") else "render-docx-letter-overflow"
+        inherited = overflows.get(parents[node.unit] or "", "") or ""
+        overflows[node.unit] = own or inherited
+        if not shares and not (own or inherited or clamped or "label-fallback" in mine.cause):
+            assert mine.label == node.label, (node.unit, mine.label, node.label)
+        for cause, rule in (("label-fallback", "render-docx-section-label"), ("clamped", "render-docx-list-depth")):
             if cause in mine.cause:
-                assert rule in found, (unit.unit, cause)
-        if mine.count != unit.number or (mine.label != unit.label and not {"label-fallback", "clamped"} & set(mine.cause)):
-            differs = True
-        if mine.cause == () and mine.count == unit.number:
-            assert mine.label == unit.label or found & MISMATCH, (unit.unit, mine.label, unit.label)
-    assert (not differs) or found & MISMATCH, "a difference without a diagnostic"
-    for rule in found & MISMATCH:
-        assert differs, f"{rule} without a difference"
+                assert rule in found, (node.unit, cause)
+        own_rules.update([own] if own else [])
+    assert found & {"render-docx-roman-overflow", "render-docx-letter-overflow"} == own_rules
+    if shares:
+        assert count_differs <= ("render-docx-number-mismatch" in found)
+    else:
+        assert "render-docx-number-mismatch" not in found, "a placement is wrong: " + "; ".join(
+            d.message for d in diagnostics if d.rule == "render-docx-number-mismatch")
     assert all(d.rule.startswith("render-docx-") for d in diagnostics)
-    assert {u.unit for u in units(result.tree)} == set(plan.units)
-    uses = {n.id for n in plan.nums}
-    for mine in plan.units.values():
-        assert mine.num_id is None or mine.num_id in uses
-    # Every num with overrides is used, and the first unit on it is on a level its overrides name.
+    assert {u.unit for u in units(tree)} == set(plan.units)
+    # Every num with an override is used, by a unit whose level the override names.
     first: dict[int, str] = {}
-    for unit in units(result.tree):
+    for unit in units(tree):
         mine = plan.units[unit.unit]
         if mine.num_id is not None:
             first.setdefault(mine.num_id, unit.unit)
     for num in plan.nums:
+        assert num.id in first, f"num {num.id} is never used"
         if num.start_overrides:
-            assert num.id in first, f"num {num.id} is never used"
-            assert plan.units[first[num.id]].ilvl in {i for i, _ in num.start_overrides}
+            assert plan.units[first[num.id]].ilvl == num.start_overrides[0][0]
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -622,18 +779,19 @@ def test_the_specifications_documents_are_planned_as_resolved(variant: str) -> N
 # -- Random documents ---------------------------------------------------------------------------
 
 
-def _random_list(rng: random.Random, depth: int, indent: str) -> list[str]:
+def _random_list(rng: random.Random, depth: int, indent: str, limit: int) -> list[str]:
     ordered = rng.random() < 0.3
     marker = "1. " if ordered else "- "
     lines: list[str] = []
     for index in range(rng.choice([1, 2, 2, 3, 5, 30]) if depth == 0 else rng.randint(1, 3)):
         lines.append(f"{indent}{marker}item {depth}.{index}")
         inner = indent + " " * len(marker)
-        if depth < 4 and rng.random() < 0.45:
-            lines.extend(_random_list(rng, depth + 1, inner))
+        chain = limit > 4 and index == 0  # a deep list is a chain: only its first item nests, or it would explode
+        if depth < limit and (chain or (limit <= 4 and rng.random() < 0.45)):
+            lines.extend(_random_list(rng, depth + 1, inner, limit))
             if rng.random() < 0.3:  # a sibling list after text: it goes on from the first
                 lines += ["", f"{inner}Between.", ""]
-                lines.extend(_random_list(rng, depth + 1, inner))
+                lines.extend(_random_list(rng, depth + 1, inner, limit))
         if depth < 3 and rng.random() < 0.12:
             lines += ["", f"{inner}> - quoted", f"{inner}> - quoted too", ""]
     return lines + [""]
@@ -642,6 +800,7 @@ def _random_list(rng: random.Random, depth: int, indent: str) -> list[str]:
 def _random_document(rng: random.Random) -> str:
     out: list[str] = []
     level = 1
+    deep = rng.random() < 0.12  # a list nested past the nine levels Word has
     for _ in range(rng.randint(1, 7)):
         move = rng.random()
         level = max(1, min(5, level + (1 if move < 0.4 else -1 if move < 0.55 else 2 if move < 0.6 else 0)))
@@ -649,37 +808,68 @@ def _random_document(rng: random.Random) -> str:
         for _ in range(rng.randint(0, 3)):
             kind = rng.random()
             if kind < 0.45:
-                out.extend(_random_list(rng, 0, ""))
-            elif kind < 0.8:
+                out.extend(_random_list(rng, 0, "", 11 if deep else 4))
+            elif kind < 0.7:
                 out.append("A paragraph.\n")
-            else:
+            elif kind < 0.85:
                 out.append("> quoted\n")
+            else:
+                out.append("> [!DRAFTING]\n> - a note\n> - and another\n")
     if rng.random() < 0.3:
         out.insert(0, "- preamble item\n  - nested\n")
     return "\n".join(out)
 
 
+def _random_alternatives(rng: random.Random) -> str:
+    """Sections, items and paragraphs that share a number, among others."""
+    out: list[str] = []
+    for index in range(rng.randint(2, 6)):
+        out.append(f"# Section {index}\n")
+        if rng.random() < 0.5:
+            out.append(f"Para. {{#p{index} when=forum:courts}}\n\nPara arb. {{#p{index} when=forum:arb}}\n")
+        if rng.random() < 0.5:
+            out.append(f"- item {{#i{index} when=forum:courts}}\n- item arb {{#i{index} when=forum:arb}}\n  - nested\n"
+                       f"- after\n")
+        if rng.random() < 0.4:
+            out.append(f"# Disputes {{#d{index} when=forum:courts}}\n\n## Sub\n\n"
+                       f"# Disputes {{#d{index} when=forum:arb}}\n\n## Sub alt\n")
+    return "\n".join(out)
+
+
+@functools.cache
+def _random_renders(variant: str) -> tuple:
+    rng = random.Random(20261028)
+    return tuple(render(FRONT + _random_document(rng), format="text", **VARIANTS[variant]) for _ in range(30))
+
+
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_random_documents_are_planned_as_resolved(variant: str) -> None:
-    rng = random.Random(20261028)
-    for _ in range(40):
-        source = FRONT + _random_document(rng)
+    for result in _random_renders(variant):
         try:
-            assert_planned_as_resolved(render(source, format="text", **VARIANTS[variant]))
+            assert_planned_as_resolved(result)
         except AssertionError as error:
-            raise AssertionError(f"{error}\n--- document ---\n{source}") from error
+            raise AssertionError(f"{error}\n--- document ---\n{result.tree.preamble}\n{result.output}") from error
+
+
+@pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "none"])
+def test_random_alternatives_are_planned_and_reported(variant: str) -> None:
+    rng = random.Random(7)
+    for _ in range(20):
+        result = render(ALTERNATIVES + _random_alternatives(rng), format="text", **VARIANTS[variant])
+        assert_planned_as_resolved(result)
 
 
 def test_the_random_documents_reach_every_case_the_property_is_about() -> None:
     seen_rules: set[str] = set()
     seen_causes: set[str] = set()
-    for settings in VARIANTS.values():
-        rng = random.Random(20261028)
-        for _ in range(40):
-            result = render(FRONT + _random_document(rng), format="text", **settings)
-            plan, diagnostics = plan_docx(result.tree, result.style)
+    depth = 0
+    for variant in VARIANTS:
+        for result in _random_renders(variant):
+            plan, diagnostics = plan_docx(result.tree)
             seen_rules |= rules(diagnostics)
             seen_causes |= {cause for unit in plan.units.values() for cause in unit.cause}
-    assert {"render-docx-letter-overflow", "render-docx-section-label", "render-docx-heading-skip",
-            "render-docx-static-restart"} <= seen_rules
-    assert {"restart-family", "resync", "label-fallback", "skipped-level"} <= seen_causes
+            depth = max(depth, max((lst.depth for lst in lists(result.tree)), default=0))
+    assert {"render-docx-letter-overflow", "render-docx-section-label", "render-docx-static-restart",
+            "render-docx-list-depth", "render-docx-shared-counter"} <= seen_rules
+    assert {"restart-family", "resync", "label-fallback", "skipped-level", "clamped"} <= seen_causes
+    assert depth >= 10

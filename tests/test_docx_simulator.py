@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from legaldown_render.errors import InternalError
 from legaldown_render.resolve.docx_numbering import (
     Count,
     Ghost,
@@ -13,7 +14,9 @@ from legaldown_render.resolve.docx_numbering import (
     extend_tokens,
     fill_tokens,
     level_text,
+    level_text_problem,
     lvl_text,
+    shows_section,
     split_level_text,
     text_of,
     word_counter,
@@ -95,11 +98,31 @@ def test_a_label_that_needs_the_section_is_written_as_in_the_preamble() -> None:
 
 def test_literal_percent_before_a_digit_cannot_be_written() -> None:
     assert lvl_text(level_text("100% {n}", ["{n}"], 0, section=None)) == "100% %1"
-    from legaldown_render.errors import InternalError
     with pytest.raises(InternalError):
         lvl_text(level_text("%1 {n}", ["{n}"], 0, section=None))
     with pytest.raises(InternalError):
         lvl_text(level_text("%{n}", ["{n}"], 0, section=None))
+
+
+def test_a_percent_that_meets_a_counter_where_pieces_are_put_together_is_a_problem() -> None:
+    parts = level_text("{path}", ["{n}%", "{n}"], 1, section=None)
+    assert parts == (0, "%", 1) and level_text_problem(parts) is not None
+    assert level_text_problem(level_text("{path}", ["{n}%", " {n}"], 1, section=None)) is None
+    assert level_text_problem(("5%", 0)) is not None
+    with pytest.raises(InternalError):
+        lvl_text(parts)
+
+
+def test_a_label_shows_the_section_when_the_filled_label_has_its_counter() -> None:
+    refs = ["({n})", "({n})"]
+    assert shows_section("{section}.{n}", [".{n}"], 0)
+    assert shows_section("{path}", refs, 1) and shows_section("{path}", refs, 0)
+    assert not shows_section("({n})", refs, 1) and not shows_section("{n})", refs, 0)
+    assert shows_section("({section}) {n}", refs, 0)
+    # a ref that holds the section puts it in every `{path}` below, not in a label that shows only its own counter
+    assert shows_section("{path}", ["{section}{n}", "({n})"], 1)
+    assert not shows_section("({n})", ["{section}{n}", "({n})"], 1)
+    assert shows_section("{section}.{n}", [".{n}"], 0, textual=True)
 
 
 def test_split_level_text() -> None:
@@ -164,6 +187,17 @@ def test_counters_are_shared_by_every_num_of_an_abstract_num() -> None:
     assert sim.step(2, 0, "s6").label == "2."
 
 
+def test_a_paragraph_without_numbering_counts_nothing_and_restarts_nothing() -> None:
+    sim = numbering(Num(1, 0))
+    sim.step(1, 0, "s1")
+    sim.step(1, 1, "s2")
+    sim.step(1, 1, "s3")
+    step = sim.step(0, 0, "alternative")
+    assert (step.count, step.label, step.word_ref, step.tokens) == (0, "", "0", ())
+    assert sim.current(1, 0) == (1, "s1") and sim.current(1, 1) == (2, "s3")
+    assert sim.step(1, 1, "s4").label == "1.3" and sim.step(1, 0, "s5").label == "2."
+
+
 def test_peek_and_current_do_not_count() -> None:
     sim = numbering(Num(1, 1))
     assert (sim.peek(1, 0), sim.current(1, 0)) == (1, (0, None))
@@ -188,8 +222,18 @@ def test_in_the_word_model_a_skipped_level_reads_zero_and_is_not_advanced() -> N
     assert sim.step(1, 1, "s3").label == "1.1"
 
 
+def test_each_abstract_num_has_its_own_model_of_a_level_that_nothing_numbered() -> None:
+    sim = WordNumbering()
+    sim.add_abstract(0, HEADINGS)
+    sim.add_abstract(1, _levels(("lowerLetter", "(%1)"), ("decimal", "%1.%2")), skipped="word")
+    sim.add_num(Num(1, 0))
+    sim.add_num(Num(2, 1))
+    assert sim.step(1, 1, "s1").label == "1.1"  # the renderer's and LibreOffice's rule
+    assert sim.step(2, 1, "u1").label == ".1"  # Word's: a letter counter at 0 is nothing
+
+
 def test_the_first_paragraph_of_a_list_deeper_than_the_level_it_starts_at_fills_the_levels_above() -> None:
-    sim = numbering(Num(1, 1, ((1, 1), (2, 1))))
+    sim = numbering(Num(1, 1, ((1, 1),)))
     assert sim.step(1, 1, "u1").label == "(i)"
 
 
