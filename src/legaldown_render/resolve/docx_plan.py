@@ -116,8 +116,11 @@ class LevelDef:
 class AbstractNum:
     id: int  # 0.., in order of first use (headings first)
     #: ``detached``: the enumerated levels with each level's own counter alone, for a list nested where the enumerated list
-    #: would have to show the counter of a unit that is not on it (§13.2).
-    kind: Literal["headings", "enumerated", "detached", "renumber", "paragraphs", "bullet"]
+    #: would have to show the counter of a unit that is not on it (§13.2). ``enumerated+1`` to ``enumerated+3`` (and
+    #: ``renumber+k``): Word has nine levels, so a list nested deeper takes the next abstractNum of its family, whose level
+    #: *j* is the family's level of depth ``9k + j`` with its own counter alone.
+    kind: Literal["headings", "enumerated", "detached", "renumber", "paragraphs", "bullet",
+                  "enumerated+1", "enumerated+2", "enumerated+3", "renumber+1", "renumber+2", "renumber+3"]
     #: Eight hex digits, deterministic (``0x4C440000 + id``). Equal in every LegalDown document, so Word may
     #: merge lists on paste between two of them (cosmetic).
     nsid: str
@@ -196,10 +199,10 @@ class UnitPlan:
     count: int | None
     #: Why the unit is not on the plain path: ``resync`` (restarted at a fixed value), ``alternative`` (``numId`` 0),
     #: ``reserved-level`` (a list nested in an item on the heading list, on one of its reserved levels),
-    #: ``restart-family`` / ``restart-section`` / ``restart-alternative`` (a nested list in a list of another kind, in
-    #: an item whose number carries the section, in an alternative: a num of its own that restarts by a fixed setting),
-    #: ``label-fallback`` (the label is written without a number Word cannot show there), ``clamped``,
-    #: ``skipped-level``.
+    #: ``restart-family`` / ``restart-section`` / ``restart-alternative`` / ``restart-depth`` (a nested list in a list of
+    #: another kind, in an item whose number carries the section, in an alternative, past Word's nine levels: a num of
+    #: its own that restarts by a fixed setting), ``label-fallback`` (the label is written without a number Word cannot
+    #: show there), ``clamped`` (nested past :data:`MAX_DEPTH`, or a bullet past Word's nine levels), ``skipped-level``.
     cause: tuple[str, ...]
     #: Names to wrap around the paragraph's title/first paragraph content: the bookmark of the unit's anchor when it
     #: has one, else a hidden one when a reference field points at it, else none.
@@ -307,7 +310,7 @@ def docx_style_errors(style: Style) -> list[str]:
     for kind, levels in definitions.items():
         for level in levels:
             if len(level.lvl_text) > MAX_LVL_TEXT:
-                problems.append(f"{_SETTING.get(kind, kind)}: the numbering level {level.ilvl + 1} is longer than "
+                problems.append(f"{_SETTING.get(kind.split('+')[0], kind)}: the numbering level {level.ilvl + 1} is longer than "
                                 f"{MAX_LVL_TEXT} characters in Word (DOCX): shorten its label or the refs it shows")
     return problems
 
@@ -321,23 +324,32 @@ _BULLETS = ("•", "–", "◦")
 _STEP = 567
 #: Twips per character of a heading's widest label.
 _CHARACTER = 113
+#: Word's levels in one list, and how many lists of them a nesting of items can use: a list nested deeper than nine
+#: levels goes on in the next abstractNum of its family (``enumerated+1`` ...), up to this many levels in all; past them
+#: the last level is used again and the lists restart by fixed values.
+_LEVELS = 9
+MAX_DEPTH = 4 * _LEVELS
+#: Twips: the indent items stop stepping at (thirteen centimetres), so that a list nested very deeply stays on the page.
+_MAX_LEFT = 13 * _STEP
 
 
 def _level(ilvl: int, num_fmt: str, parts: LevelParts, *, p_style: str | None = None,
            widths: Mapping[int, str] | None = None, unwritable: list[tuple[str, int]] | None = None,
-           kind: str = "") -> LevelDef:
+           kind: str = "", depth: int | None = None) -> LevelDef:
     """One level. Headings (*widths*: the ``numFmt`` of each level a ``%k`` names) get an indent wide enough for
-    their widest label; items step one centimetre per level. A label with a word in it (``Article {n}``) is
+    their widest label; items step one centimetre per level of nesting (*depth*, the level's own by default: a level of
+    a list that goes on past Word's nine levels is nested deeper). A label with a word in it (``Article {n}``) is
     followed by a space, any other by a tab. With *unwritable*, parts a level text cannot write are noted there
     (and written as nothing) instead of raising."""
     words = any(isinstance(part, str) and any(c.isalpha() for c in part) for part in parts)
+    depth = ilvl if depth is None else depth
     if widths is None:
-        left, hanging = _STEP * (ilvl + 1), _STEP
+        left, hanging = min(_STEP * (depth + 1), _MAX_LEFT), _STEP
     else:
         sample = sum(len(part) if isinstance(part, str) else len(SAMPLE_COUNTER[widths[part]]) for part in parts)
         left = hanging = max(_STEP, _CHARACTER * (sample + 2))
     if unwritable is not None and level_text_problem(parts) is not None:
-        unwritable.append((kind, ilvl))
+        unwritable.append((kind, depth))
         parts = ()
     return LevelDef(ilvl, num_fmt, lvl_text(parts), p_style=p_style, suff="space" if words else "tab",
                     left=left, hanging=hanging)
@@ -346,6 +358,18 @@ def _level(ilvl: int, num_fmt: str, parts: LevelParts, *, p_style: str | None = 
 def _neutral(ilvl: int) -> LevelDef:
     """A level nothing uses: its own counter, decimal."""
     return LevelDef(ilvl, "decimal", f"%{ilvl + 1}", left=_STEP * (ilvl + 1), hanging=_STEP)
+
+
+def _own(formats: NumberingFormats, ilvl: int, depth: int, textual: bool, unwritable: list[tuple[str, int]] | None
+         ) -> LevelDef:
+    """Level *ilvl* of an enumerated list nested *depth* levels deep, with its own counter alone (a ``{path}`` shows
+    its own ``ref`` and nothing of the units it is nested in): the levels of the detached list and of the lists that go
+    on past Word's nine levels, where no unit of the list holds the levels above."""
+    levels = formats.enumerated
+    here = levels[depth % len(levels)]
+    return _level(ilvl, NUM_FMT[here.counter],
+                  level_text(here.label, [""] * ilvl + [here.ref], ilvl, section=(), textual=textual),
+                  unwritable=unwritable, kind="enumerated", depth=depth)
 
 
 def _definitions(formats: NumberingFormats, unwritable: list[tuple[str, int]] | None = None
@@ -372,17 +396,15 @@ def _definitions(formats: NumberingFormats, unwritable: list[tuple[str, int]] | 
             for d in range(9)]
         # The same levels with nothing but their own counter (a ``{path}`` shows its own ``ref`` alone): where a list is
         # nested in a unit that is not on the enumerated list, Word has no counter of the enclosing units to show.
-        out["detached"] = [
-            _level(d, NUM_FMT[formats.enumerated[d % size].counter],
-                   level_text(formats.enumerated[d % size].label, [""] * d + [refs[d]], d, section=(),
-                              textual=textual),
-                   unwritable=unwritable, kind="detached")
-            for d in range(9)]
+        out["detached"] = [_own(formats, d, d, textual, unwritable) for d in range(_LEVELS)]
+        for k in range(1, MAX_DEPTH // _LEVELS):
+            out[f"enumerated+{k}"] = [_own(formats, d, _LEVELS * k + d, textual, unwritable) for d in range(_LEVELS)]
     if formats.renumber is not None:
         f = formats.renumber
-        out["renumber"] = [_level(d, NUM_FMT[f.counter],
-                                  level_text(f.label, [f.ref] * 9, d, section=(), textual=textual),
-                                  unwritable=unwritable, kind="renumber") for d in range(9)]
+        for k in range(MAX_DEPTH // _LEVELS):
+            out["renumber" if k == 0 else f"renumber+{k}"] = [
+                _level(d, NUM_FMT[f.counter], level_text(f.label, [f.ref] * 9, d, section=(), textual=textual),
+                       unwritable=unwritable, kind="renumber", depth=_LEVELS * k + d) for d in range(_LEVELS)]
     if formats.paragraphs is not None:
         f = formats.paragraphs
         out["paragraphs"] = [
@@ -533,6 +555,9 @@ _RESTARTS: dict[str, tuple[tuple[str, ...], str]] = {
                             "restart it."),
     "resync": (("resync",), "A list that Word would continue from another list in the same item restarts by a fixed "
                "setting (Restart at 1), not by structure."),
+    "restart-depth": (("restart-depth",), "A list nested past Word's nine levels goes on in a list of its own, which "
+                      "restarts by a fixed setting (Restart at 1), not by structure: an item added above it in Word will "
+                      "not restart it."),
 }
 
 
@@ -1095,7 +1120,7 @@ class _Planner:
         """The owners of the counters the resolver's label of a unit of *fmt* shows besides its own, in order: what the
         detached abstractNum leaves out."""
         owners = [t.owner for t in self.label_tokens(fmt, section, parent)
-                  if isinstance(t, Count) and t.owner is not _SELF]
+                  if isinstance(t, Count | Title) and t.owner is not _SELF]  # a Title: the heading's text, under ``none``
         return list(dict.fromkeys(owners))
 
     def describe(self, owners: Sequence[object]) -> str:
@@ -1105,7 +1130,8 @@ class _Planner:
         if any(isinstance(owner, Ghost) or owner not in self.units or self.units[owner].kind == "section"  # type: ignore[index]
                for owner in owners):
             names.append("section")
-        kinds = [self.placed[owner].abstract.kind for owner in owners if owner in self.placed]  # type: ignore[index]
+        kinds = [self.placed[owner].abstract.kind.split("+")[0]  # type: ignore[index]
+                 for owner in owners if owner in self.placed]
         if "renumber" in kinds:
             names.append("ordered item")
         if any(kind != "renumber" for kind in kinds):
@@ -1114,12 +1140,15 @@ class _Planner:
             return "an enclosing unit"
         return "the enclosing " + (", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0])
 
-    def detached_label(self, fmt: LevelFormat, ilvl: int, kind: str, lost: Sequence[object],
+    def detached_label(self, fmt: LevelFormat, abstract: _Abstract, ilvl: int, kind: str, lost: Sequence[object],
                        placed: _Placed | None, first: ListItem) -> None:
-        """Report a list that is on the detached abstractNum although the resolver's label shows the number of an
-        enclosing unit: Word shows the unit's own counter alone, and a reference to it is still made of fields."""
-        levels = self.definitions["detached"]
-        if placed is None:
+        """Report a list on an abstractNum that shows each level's own counter alone (the detached one, or the next of
+        its family past Word's nine levels) although the resolver's label shows the number of an enclosing unit: Word
+        draws the unit's own counter, and a reference to it is still made of fields."""
+        levels = abstract.levels
+        if abstract.kind != "detached":
+            why = "the list is nested past Word's nine levels and goes on in a list of its own"
+        elif placed is None:
             why = "the list stands outside the unit it belongs to"
         elif placed.abstract.kind == "headings":
             why = "the levels of the heading list kept for nested lists are used up or read otherwise"
@@ -1269,6 +1298,8 @@ class _Planner:
         level_of = {owner: j for j, (owner, _) in enumerate(self.owners)}
         parts: list[str | int] = []
         for token in self.label_tokens(fmt, section, parent):
+            if isinstance(token, Title):
+                return None
             if isinstance(token, Count):
                 j = ilvl if token.owner is _SELF else level_of.get(token.owner, self.heading_level(token.owner))
                 if j is None:
@@ -1341,7 +1372,7 @@ class _Planner:
         plan sets nothing."""
         level = abstract.levels[ilvl]
         if unit in self.item_units and parent in self.text_left:
-            left, hanging = self.text_left[parent] + _STEP, _STEP
+            left, hanging = min(self.text_left[parent] + _STEP, _MAX_LEFT), _STEP
         elif unit in self.item_units and abstract.kind == "headings":
             left, hanging = level.left, level.hanging
         else:
@@ -1412,12 +1443,14 @@ class _Planner:
         self.check(node, word, step, counter, group, cause, (abstract.id, ilvl))
         return used
 
-    def restart_class(self, parent: str, placed: _Placed, abstract: _Abstract) -> str:
+    def restart_class(self, parent: str, placed: _Placed, abstract: _Abstract, *, deeper: bool = False) -> str:
         """Why a list nested in the item *parent* does not take its num: the item is a later alternative (numbered by
-        no list), it is on the heading list but the list cannot be, it is on another kind of list, or Word would
-        go on counting from another list in the same item."""
+        no list), the list goes on past Word's nine levels (*deeper*), the item is on the heading list but the list
+        cannot be, it is on another kind of list, or Word would go on counting from another list in the same item."""
         if self.units[parent].num_id == 0:
             return "restart-alternative"
+        if deeper:
+            return "restart-depth"
         if placed.abstract is not abstract:
             return "restart-section" if placed.abstract.kind == "headings" else "restart-family"
         return "resync"
@@ -1468,9 +1501,13 @@ class _Planner:
         fmt = lst.format
         assert fmt is not None
         depth = lst.depth
-        # The counter of the level Word uses: past level 9 that is level 9's, not the resolver's cycle.
+        # Word has nine levels in a list: a list nested deeper goes on in the next abstractNum of its family (levels
+        # 10-18 in ``enumerated+1``, and so on up to MAX_DEPTH), so that it keeps restarting by structure inside that
+        # abstractNum; past MAX_DEPTH the last level is used again.
+        reached = min(depth, MAX_DEPTH - 1)
+        chunk, rem = divmod(reached, _LEVELS)
         levels = self.formats.enumerated if lst.family == "enumerated" else (fmt,)
-        counter = levels[min(depth, 8) % len(levels)].counter
+        counter = levels[reached % len(levels)].counter
         parent = first.parent_unit
         placed = self.placed.get(parent) if parent is not None else None
         parent_live = placed is not None and self.units[parent].num_id not in (None, 0)
@@ -1489,28 +1526,29 @@ class _Planner:
             elif placed is not None and placed.abstract.kind == "headings" and 1 <= depth <= 4:
                 assert parent is not None
                 slot = self.reserved(fmt, depth, section, parent)
-        detached = slot is None and lst.family == "enumerated" and depth <= 8 and self.detaches(depth, parent, placed)
+        detached = slot is None and lst.family == "enumerated" and chunk == 0 and self.detaches(depth, parent, placed)
         if slot is not None:
             abstract, ilvl = slot
         elif detached:
             abstract, ilvl = self.abstract("detached"), depth
         else:
-            abstract, ilvl = self.abstract(lst.family), min(depth, 8)
+            abstract, ilvl = self.abstract(lst.family if chunk == 0 else f"{lst.family}+{chunk}"), rem
         cause: tuple[str, ...] = ()
         # Nested in an item: that item's num, if it is live, of the same kind and Word counts the list from where the
         # resolver does (a sibling list continues, a list in a new item restarts); otherwise a num of its own.
-        if (placed is not None and parent_live and placed.abstract is abstract and depth <= 8
+        if (placed is not None and parent_live and placed.abstract is abstract and depth < MAX_DEPTH
                 and self.sim.peek(placed.num.id, ilvl) == first.number):
             num = placed.num
         else:
             num = self.new_num(abstract, ilvl, first.number or 1)
-            if depth > 8:
+            if depth >= MAX_DEPTH:
                 cause = ("clamped",)
                 if not self.depth_reported:
                     self.depth_reported = True
                     self.report("render-docx-list-depth", "warning",
-                                f"A list is nested {depth} levels deep: Word has 9. Items from level 10 on are "
-                                f"numbered in the format of level 9 and restart by fixed values.", first.line)
+                                f"A list is nested {depth} levels deep: the plan has {MAX_DEPTH} levels of Word lists. "
+                                f"Items from level {MAX_DEPTH + 1} on are numbered in the format of level {MAX_DEPTH} "
+                                f"and restart by fixed values.", first.line)
             elif placed is not None and first.number > 1:
                 cause = ("resync",)
                 self.shared_counter(
@@ -1518,14 +1556,15 @@ class _Planner:
                     "starts at a fixed number in Word: it will not follow items added or removed before it.",
                     first.line)
             elif placed is not None:
-                cause, message = _RESTARTS[self.restart_class(parent, placed, abstract)]
+                cause, message = _RESTARTS[self.restart_class(parent, placed, abstract, deeper=chunk > 0 and rem == 0)]
                 self.report("render-docx-static-restart", "info", message, first.line)
         if slot is not None and abstract.kind == "headings" and depth > 0:
             cause += ("reserved-level",)
-        lost = self.lost_counters(fmt, section, parent) if detached else []
-        fallback = bool(lost) if detached else shows and slot is None
-        if detached and lost:
-            self.detached_label(fmt, ilvl, "list item", lost, placed, first)
+        own_only = detached or chunk > 0  # the levels of these abstractNums show each level's own counter alone
+        lost = self.lost_counters(fmt, section, parent) if own_only else []
+        fallback = bool(lost) if own_only else shows and slot is None
+        if own_only and lost:
+            self.detached_label(fmt, abstract, ilvl, "list item", lost, placed, first)
         elif fallback:
             self.fallback_label(fmt, lst.family, min(depth, 8), "list item", first.line)
         parent_des = self.desig.get(parent, []) if parent is not None else []
@@ -1534,7 +1573,7 @@ class _Planner:
             assert item.unit is not None and item.number is not None
             self.parent[item.unit] = item.parent_unit
             item_cause = cause if index == 0 else ()
-            if depth > 8 and "clamped" not in item_cause:
+            if depth >= MAX_DEPTH and "clamped" not in item_cause:
                 item_cause += ("clamped",)
             if slot is not None and depth > 0 and "reserved-level" not in item_cause:
                 item_cause += ("reserved-level",)

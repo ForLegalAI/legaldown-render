@@ -368,21 +368,25 @@ def test_items_in_a_quote_or_a_drafting_note_are_numbered_like_any_item() -> Non
     assert [(n, label) for n, _, label in shown(plan, *items(tree))] == [(2, "(a)"), (3, "(a)")]
 
 
-def test_a_list_deeper_than_word_has_levels_is_clamped_and_reported_once() -> None:
+def test_a_list_deeper_than_word_has_levels_goes_on_in_the_next_abstract_num_and_restarts_by_a_fixed_setting() -> None:
     body = "# A\n\n" + "".join("  " * i + f"- level {i}\n" for i in range(11))
     tree, plan, diagnostics = planned(body)
     deep = items(tree)
-    assert [plan.units[i.unit].ilvl for i in deep] == [0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 8]
-    assert [plan.units[i.unit].cause for i in deep[8:]] == [(), ("clamped",), ("clamped",)]
-    # each clamped list restarts on a num of its own: Word's level 9 would count on otherwise
-    assert len({plan.units[i.unit].num_id for i in deep[8:]}) == 3
-    assert all(plan.units[i.unit].count == 1 for i in deep[8:])
-    [found] = [d for d in diagnostics if d.rule == "render-docx-list-depth"]
-    assert found.level == "warning" and found.line == deep[9].line and "9" in found.message
-    assert rules(diagnostics) == {"render-docx-list-depth"}
+    assert [plan.units[i.unit].ilvl for i in deep] == [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1]
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "enumerated", "enumerated+1"]
+    # the resolver's cycle goes on, and Word draws it: level 10 is the first level of the next list, in its format
+    assert [plan.units[i.unit].label for i in deep] == [i.label for i in deep]
+    assert [plan.units[i.unit].cause for i in deep[8:]] == [(), ("restart-depth",), ()]
+    # the list at level 10 is numbered by a num of its own, and the list in it by structure
+    assert plan.units[deep[9].unit].num_id != plan.units[deep[8].unit].num_id == 2
+    assert plan.units[deep[10].unit].num_id == plan.units[deep[9].unit].num_id
+    assert plan.nums[plan.units[deep[9].unit].num_id - 1].start_overrides == ((0, 1),)
+    [found] = diagnostics
+    assert (found.rule, found.level, found.line) == ("render-docx-static-restart", "info", deep[9].line)
+    assert "past Word's nine levels" in found.message and "Restart at 1" in found.message
 
 
-def test_items_of_lists_past_level_nine_keep_their_numbers_and_a_sibling_at_level_nine_is_restarted() -> None:
+def test_items_of_lists_past_level_nine_keep_their_numbers_and_the_list_at_level_nine_goes_on() -> None:
     body = "# A\n\n" + "".join("  " * i + f"- level {i}\n" for i in range(9))
     body += "".join("  " * 9 + f"- nine {k}\n" for k in "abc")
     body += "".join("  " * 10 + f"- ten {k}\n" for k in "ab")
@@ -390,19 +394,62 @@ def test_items_of_lists_past_level_nine_keep_their_numbers_and_a_sibling_at_leve
     tree, plan, diagnostics = planned(body)
     found = items(tree)
     nine, ten, again = found[9:12], found[12:14], found[14]
-    # every item of a clamped list is Word's level 9 in the format of level 9, with the resolver's count
-    assert [plan.units[i.unit].cause for i in (*nine, *ten)] == [("clamped",)] * 5
+    # each item has Word's counter of its own level and the resolver's label
     assert [(plan.units[i.unit].ilvl, plan.units[i.unit].count) for i in (*nine, *ten)] == [
-        (8, 1), (8, 2), (8, 3), (8, 1), (8, 2)]
-    assert [plan.units[i.unit].label for i in (*nine, *ten)] == ["(A)", "(B)", "(C)", "(A)", "(B)"]
-    assert [i.label for i in (*nine, *ten)] == ["(a)", "(b)", "(c)", "(i)", "(ii)"]  # the resolver's cycle
-    assert len({plan.units[i.unit].num_id for i in (nine[0], ten[0])}) == 2
-    # Word's counter of level 9 was used by the clamped lists: the item after them is restarted where it is
+        (0, 1), (0, 2), (0, 3), (1, 1), (1, 2)]
+    assert [plan.units[i.unit].label for i in (*nine, *ten)] == ["(a)", "(b)", "(c)", "(i)", "(ii)"]
+    assert [i.label for i in (*nine, *ten)] == ["(a)", "(b)", "(c)", "(i)", "(ii)"]
+    # the sibling at level nine is on the list of level nine: the lists past it have their own, so it needs no restart
     again_plan = plan.units[again.unit]
-    assert (again.number, again_plan.count, again_plan.cause) == (2, 2, ("resync",))
-    assert plan.nums[again_plan.num_id - 1].start_overrides == ((8, 2),)
-    assert rules(diagnostics) == {"render-docx-list-depth", "render-docx-shared-counter"}
-    assert all(d.level == "warning" for d in diagnostics)
+    assert (again.number, again_plan.count, again_plan.cause) == (2, 2, ()) and again_plan.ilvl == 8
+    assert plan.units[again.unit].num_id == plan.units[found[8].unit].num_id
+    assert rules(diagnostics) == {"render-docx-static-restart"}
+
+
+def test_the_abstract_nums_past_nine_levels_have_the_families_formats_of_the_depth_they_stand_for() -> None:
+    levels = [{"counter": "decimal", "label": "{n}.", "ref": "{n}"},
+              {"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+              {"counter": "lower-roman", "label": "{n})", "ref": "({n})"},
+              {"counter": "upper-alpha", "label": "[{n}]", "ref": "[{n}]"}]
+    body = "# A\n\n" + "".join("  " * i + f"- level {i}\n" for i in range(20))
+    _, plan, _ = planned(body, overrides={"enumeration.levels": levels})
+    by_kind = {a.kind: a for a in plan.abstract_nums}
+    assert list(by_kind) == ["headings", "enumerated", "enumerated+1", "enumerated+2"]
+    # depth 9 is the second level of the cycle of four, depth 10 the third, ...; each level shows its own counter alone
+    assert [(level.num_fmt, level.lvl_text) for level in by_kind["enumerated+1"].levels[:5]] == [
+        ("lowerLetter", "(%1)"), ("lowerRoman", "%2)"), ("upperLetter", "[%3]"), ("decimal", "%4."),
+        ("lowerLetter", "(%5)")]
+    assert [(level.num_fmt, level.lvl_text) for level in by_kind["enumerated+2"].levels[:3]] == [
+        ("lowerRoman", "%1)"), ("upperLetter", "[%2]"), ("decimal", "%3.")]  # depth 18, 19, 20
+    # the indent goes on stepping a centimetre per level of nesting, up to thirteen centimetres
+    assert [level.left for level in by_kind["enumerated+1"].levels[:5]] == [567 * k for k in (10, 11, 12, 13, 13)]
+    assert all(len(a.levels) == 9 for a in plan.abstract_nums)
+
+
+def test_ordered_lists_go_on_past_nine_levels_too() -> None:
+    body = "# A\n\n" + "".join("   " * i + f"{1}. level {i}\n" for i in range(11))
+    tree, plan, diagnostics = planned(body)
+    deep = items(tree)
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "renumber", "renumber+1"]
+    assert [plan.units[i.unit].ilvl for i in deep[8:]] == [8, 0, 1]
+    assert [plan.units[i.unit].label for i in deep] == [i.label for i in deep]
+    assert [plan.units[i.unit].cause for i in deep[8:]] == [(), ("restart-depth",), ()]
+    assert rules(diagnostics) == {"render-docx-static-restart"}
+
+
+def test_a_list_nested_past_the_levels_the_plan_has_is_clamped_and_reported_once() -> None:
+    body = "# A\n\n" + "".join("  " * i + f"- level {i}\n" for i in range(38))
+    tree, plan, diagnostics = planned(body)
+    deep = items(tree)
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "enumerated", "enumerated+1", "enumerated+2",
+                                                     "enumerated+3"]
+    assert [plan.units[i.unit].ilvl for i in deep[34:]] == [7, 8, 8, 8]
+    assert [plan.units[i.unit].cause for i in deep[35:]] == [(), ("clamped",), ("clamped",)]
+    # each clamped list restarts on a num of its own: Word's level 9 of the last list would count on otherwise
+    assert len({plan.units[i.unit].num_id for i in deep[35:]}) == 3
+    assert all(plan.units[i.unit].count == 1 for i in deep[35:])
+    [found] = [d for d in diagnostics if d.rule == "render-docx-list-depth"]
+    assert found.level == "warning" and found.line == deep[36].line and "36" in found.message
 
 
 def test_a_list_that_goes_on_from_a_sibling_with_a_fixed_start_is_a_warning_not_a_restart() -> None:
@@ -1610,9 +1657,9 @@ def test_the_random_documents_reach_every_case_the_property_is_about() -> None:
             seen_rules |= rules(diagnostics)
             seen_causes |= {cause for unit in plan.units.values() for cause in unit.cause}
     assert {"render-docx-letter-overflow", "render-docx-section-label", "render-docx-static-restart",
-            "render-docx-list-depth", "render-docx-shared-counter"} <= seen_rules
-    assert {"restart-family", "restart-section", "restart-alternative", "resync", "label-fallback", "skipped-level",
-            "clamped", "alternative", "reserved-level"} <= seen_causes
+            "render-docx-shared-counter"} <= seen_rules
+    assert {"restart-family", "restart-section", "restart-alternative", "restart-depth", "resync", "label-fallback",
+            "skipped-level", "alternative", "reserved-level"} <= seen_causes
     assert depth >= 10
 
 

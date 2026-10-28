@@ -369,15 +369,22 @@ STRESS["ordered paths"] = FRONT + """
 Refs: {{ref: i3}} {{ref: i4}} {{ref: i5}} {{ref: i6}} {{ref: i7}} {{ref: i9}} {{ref: y}} {{ref: w}}
 """
 
+#: Lists nested past Word's nine levels: each nine levels are a list of their own, restarted at a fixed value where they
+#: begin, and numbered by structure inside.
+STRESS["deep"] = FRONT + "# A {#a}\n\n" + "".join(
+    "  " * d + f"- level {d} {{#l{d}}}\n" for d in range(12)) + "  " * 8 + "- level 8 again {#l8b}\n" + (
+    "  " * 9 + "- level 9 again {#l9b}\n") + "\nRefs: " + " ".join(
+    f"{{{{ref: {anchor}}}}}" for anchor in ("l0", "l7", "l8", "l9", "l10", "l11", "l8b", "l9b")) + "\n"
+
 #: The stress documents that are shown under some variants only (each costs LibreOffice time): the continental style, where
 #: the items ride the heading list, the default, and the default with numbered paragraphs.
 FEW_VARIANTS: dict[str, tuple[str, ...]] = {
     **{name: ("continental", "default", "paragraphs") for name in ("alternatives in threes", "nested titles", "qualified")},
-    "paths": ("continental", "default"), "ordered paths": ("default",)}
+    "paths": ("continental", "default"), "ordered paths": ("default",), "deep": ("continental", "default", "outline")}
 
 #: The variants that show some stress documents only.
 ONLY_DOCS: dict[str, tuple[str, ...]] = {
-    "five levels": ("qualified",), "shared level": ("qualified", "nested"), "path items": ("paths", "lists"),
+    "five levels": ("qualified",), "shared level": ("qualified", "nested"), "path items": ("paths", "lists", "deep"),
     "ordered parent": ("ordered paths", "lists")}
 
 #: The settings that give the numbering words and symbols: a field that returns the same words as the reference's format
@@ -1102,3 +1109,34 @@ def test_a_new_parent_whose_nested_item_is_copied_from_a_detached_list_goes_on_c
         "(B) four b", "(C) NEW copy", "(A) four c"]
     assert "ii NEW three" in said and "iii three b" in said
     assert "Refs: 1(a)(1)(i)(A) 1(a)(1)(i)(B) 1(a)(1)(iii)(A)" in said[-1]
+
+
+# -- Lists nested past Word's nine levels ---------------------------------------------------------------------------------
+
+DEEP = FRONT + "# A {#a}\n\n" + "".join("  " * d + f"- level {d} {{#l{d}}}\n" for d in range(12)) + (
+    "\nRefs: {{ref: l8}} {{ref: l9}} {{ref: l10}} {{ref: l11}}\n")
+
+#: An item inserted before the first of the list at level 9, before the one at level 10, and before the one at level 8.
+DEEP_EDITS = [
+    ("level 9", "NEW nine", "                  - level 9 {#l9}", "                  - NEW nine"),
+    ("level 10", "NEW ten", "                    - level 10 {#l10}", "                    - NEW ten"),
+    ("level 8", "NEW eight", "                - level 8 {#l8}", "                - NEW eight"),
+]
+
+
+@functools.cache
+def deep_lists() -> str:
+    require_libreoffice()
+    data = render(DEEP, format="docx").binary
+    return libreoffice_edit({"deep": (data, [(match, new) for match, new, _, _ in DEEP_EDITS])})["deep"]  # type: ignore[arg-type]
+
+
+def test_items_nested_past_nine_levels_are_numbered_by_the_list_they_go_on_in_and_follow_edits() -> None:
+    """The lists nested past Word's nine levels keep restarting by structure inside the list they go on in, so an item
+    inserted at level 8, 9 or 10 renumbers what follows and every reference to it, as the renderer does."""
+    source = applied(DEEP, [(before, new) for _, _, before, new in DEEP_EDITS])
+    assert lines_of(deep_lists()) == lines_of(render(source, format="text").output)
+    said = lines_of(deep_lists())
+    assert [line for line in said if line.endswith(("NEW eight", "level 8", "NEW nine", "level 9", "NEW ten",
+                                                    "level 10", "level 11"))] == [
+        "(A) NEW eight", "(B) level 8", "(a) NEW nine", "(b) level 9", "(i) NEW ten", "(ii) level 10", "(A) level 11"]
