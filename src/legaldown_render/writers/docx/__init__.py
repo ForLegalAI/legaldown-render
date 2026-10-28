@@ -11,21 +11,27 @@ Layout of this package:
 * :mod:`.ooxml` -- namespaces, the sanitiser, element, run, field, bookmark and hyperlink builders;
 * :mod:`.package` -- parts, relationships, content types and the deterministic ZIP;
 * :mod:`.styles`, :mod:`.settings`, :mod:`.headers`, :mod:`.properties` -- the parts that come from the style template;
-* :mod:`.body` -- the body of the document (interim, see there).
+* :mod:`.numbering` -- ``numbering.xml``, from the plan's numbering definitions;
+* :mod:`.body` and :mod:`.runs` -- the body of the document and its inlines, laid out as the plan says (interim
+  for the title block, contents, attachments and signatures, see there);
+* :mod:`.interim_plan` -- the plan with no numbering that stands in until the planner is wired.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 
+from ...resolve.docx_plan import DocxPlan
 from ...style import Style
 from ...style.docx import DocxSettings, docx_settings
 from ...tree import RenderTree
 from . import package as pkg
-from .body import document_title, interim_body
+from .body import BodyWriter, document_title
 from .headers import build_footer, build_header
-from .ooxml import el, serialize
+from .interim_plan import _unnumbered_plan
+from .numbering import numbering_part
+from .ooxml import Bookmarks, el, serialize
 from .properties import build_app, build_core
-from .settings import build_numbering, build_settings
+from .settings import build_settings
 from .styles import build_styles, language_tag
 
 __all__ = ["DocxWriter"]
@@ -50,7 +56,12 @@ class DocxWriter:
         self.generator = generator or "legaldown-render"
         self.settings = settings if settings is not None else docx_settings(style)
 
-    def write(self, tree: RenderTree) -> bytes:
+    def write(self, tree: RenderTree, plan: DocxPlan | None = None) -> bytes:
+        """The ``.docx`` file for *tree*, numbered, bookmarked and cross-referenced as *plan* says. Without
+        one the document has no numbering (:func:`~.interim_plan._unnumbered_plan`): temporary, until the
+        planner is wired in."""
+        if plan is None:
+            plan = _unnumbered_plan(tree)
         settings = self.settings
         language = language_tag(tree.language, self.style.locale)
         title = document_title(tree)
@@ -73,12 +84,15 @@ class DocxWriter:
         if page.footer:
             footer_id = rels.add(pkg.REL_FOOTER, "footer1.xml")
 
-        document = el("document", None, interim_body(tree, settings.page, header_id=header_id, footer_id=footer_id))
+        body = BodyWriter(tree, plan, Bookmarks(), rels, text_width).body(settings.page, header_id=header_id,
+                                                                         footer_id=footer_id)
+        document = el("document", None, body)
         package.add("docProps/core.xml", pkg.CT_CORE_PROPERTIES, build_core(title, language))
         package.add("docProps/app.xml", pkg.CT_EXTENDED_PROPERTIES, build_app(self.generator))
         package.add("word/document.xml", pkg.CT_DOCUMENT, serialize(document), rels)
-        package.add("word/styles.xml", pkg.CT_STYLES, build_styles(self.style, settings, language))
-        package.add("word/numbering.xml", pkg.CT_NUMBERING, build_numbering())
+        package.add("word/styles.xml", pkg.CT_STYLES, build_styles(self.style, settings, language,
+                                                                   heading_num_id=plan.heading_num_id))
+        package.add("word/numbering.xml", pkg.CT_NUMBERING, numbering_part(plan))
         package.add("word/settings.xml", pkg.CT_SETTINGS,
                     build_settings(update_fields=settings.update_fields_on_open))
         if header_id:

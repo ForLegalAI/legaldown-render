@@ -88,7 +88,7 @@ def shown() -> dict[str, Exported]:
 def test_the_words_come_back_in_order(shown: dict[str, Exported]) -> None:
     assert shown["round_trip"].lines == [
         "Round Trip", "Sub", "Preamble ž€.", "First", "Body with emphasis, strong and code.", "Second line.",
-        "Second", "item one", "item two", "A quote", "code line 1", "  code line 2", "H1\tH2", "a\tb"]
+        "Second", "item one", "item two", "A quote", "code line 1", "  code line 2", "H1", "H2", "a", "b", ""]
 
 
 @pytest.mark.parametrize("name", ["features", "template"])

@@ -396,10 +396,11 @@ def test_app_properties_name_the_program() -> None:
     assert app[0].text.startswith("legaldown-render ")
 
 
-# -- The interim body ----------------------------------------------------------------------
+# -- The body without a plan ---------------------------------------------------------------
+# (the body writer itself is in test_docx_body.py)
 
 
-def test_the_interim_body_has_the_title_headings_and_text_and_no_numbers() -> None:
+def test_the_body_without_a_plan_has_the_title_headings_and_text_and_no_numbers() -> None:
     contents = docx()
     body = xml(contents["word/document.xml"]).find(f"{W}body")
     styles_used = [(p.find(f"{W}pPr/{W}pStyle").get(f"{W}val") if p.find(f"{W}pPr/{W}pStyle") is not None else None,
@@ -409,7 +410,8 @@ def test_the_interim_body_has_the_title_headings_and_text_and_no_numbers() -> No
     assert ("Heading2", "Nested") in styles_used
     assert (None, "item a") in styles_used and ("Quote", "quoted") in styles_used
     assert [text for style, text in styles_used if style == "Code"] == ["code 1", "code 2"]
-    assert (None, "A\tB") in styles_used and (None, "1\t2") in styles_used
+    # The cells of the table, then the paragraph of the rule that ends the document.
+    assert [text for _, text in styles_used][-5:] == ["A", "B", "1", "2", ""]
     assert all(not text.startswith(("1.", "(a)")) for _, text in styles_used)
 
 
@@ -813,7 +815,7 @@ GOLDEN = {
     '_rels/.rels': 'd6f21829c0081670bdb417d3e3f644b81134a121e074fb153c7686faaa8b167b',
     'docProps/core.xml': '159ed0e537106ab29739fd357a5f6d89a2c0b0154daefd4c13d878bd16dff47e',
     'docProps/app.xml': 'b285204d159fd58da80b6a0242cef523448f9c3a598b357b15faf4627160dcc3',
-    'word/document.xml': 'd84c7bc463bf0a89b6022fb8b39ca15601d8c722f951e8f8fb1c023da173172a',
+    'word/document.xml': '973a83b30f439e08a3238504ff0d6c8df6ea9259244e7ee82e1f81a3d274bb19',
     'word/_rels/document.xml.rels': 'ada136c2e7d05a317579c9503c1f0dd8dfaa8f0cce687df86fe59e36d5fa5d57',
     'word/styles.xml': '83adf799de91eac3e9bf1e658b8c2f53586c700be35df179e1b2f1765f189dfc',
     'word/numbering.xml': '8d1f7769c35af16db98942ba09882646b45ba404e83686d4ce7a376c6a911f0f',
