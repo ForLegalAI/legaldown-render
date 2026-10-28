@@ -34,9 +34,9 @@ def test_unknown_format_raises_options_error() -> None:
     with pytest.raises(OptionsError, match="unknown output format 'pdf'"):
         render("# x\n", RenderOptions(format="pdf"))
     with pytest.raises(OptionsError):
-        render("# x\n", format="docx")
+        render("# x\n", format="odt")
     with pytest.raises(RenderError):
-        render("# x\n", format="docx")
+        render("# x\n", format="pdf")
 
 
 def test_invalid_style_through_the_api_is_a_render_error() -> None:

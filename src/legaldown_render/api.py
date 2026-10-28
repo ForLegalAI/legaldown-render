@@ -20,21 +20,23 @@ from typing import Any
 
 import yaml
 from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, parse, parse_template, validate
+from legaldown.grammar import is_valid_iso_date
 
 from .build import build_tree, normalize_source
 from .diagnostics import by_line, key_line, repeats
 from .errors import DocumentError, OptionsError, RenderRefused, StyleError
 from .resolve import Formatter, parse_locale, resolve_tree
 from .style import Style, load_style
+from .style.docx import DocxSettings, docx_settings
 from .tree import RenderTree, assert_resolved
-from .writers import FORMATS, HtmlWriter, TextWriter
+from .writers import FORMATS, DocxWriter, HtmlWriter, TextWriter
 
 
 @dataclass(frozen=True, slots=True)
 class RenderOptions:
     """Settings for one render job."""
 
-    #: ``html`` or ``text``.
+    #: ``html``, ``text`` or ``docx``.
     format: str = "html"
     #: A built-in style name, a path to a YAML style template, a Style, or (see
     #: :func:`~.style.load_style`) a mapping or YAML text.
@@ -100,6 +102,8 @@ class RenderOptions:
 class RenderResult:
     """What a render produced."""
 
+    #: The rendered text: HTML or plain text. Empty for ``docx``, which is bytes
+    #: (:attr:`binary`), not text.
     output: str
     #: Core (validator) and Rendering diagnostics, each with its stable rule id.
     diagnostics: list[Diagnostic]
@@ -107,6 +111,9 @@ class RenderResult:
     #: The resolved tree, for tools that want more than the output text.
     tree: RenderTree
     style: Style
+    #: The rendered file for a binary format (``docx``): the bytes of the whole
+    #: file. None for ``html`` and ``text``.
+    binary: bytes | None = None
 
     @property
     def ok(self) -> bool:
@@ -148,6 +155,8 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.locale:
         overrides["locale"] = options.locale
     style = load_style(options.style, overrides=overrides, trusted=not options.untrusted)
+    # A setting Word cannot express is a StyleError before any rendering starts (docs/decisions/0006).
+    docx = docx_settings(style, trusted=not options.untrusted) if options.format == "docx" else None
 
     source = normalize_source(source)
     assembled: list[Diagnostic] = []
@@ -168,8 +177,10 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
         raise RenderRefused(diagnostics)
 
     assert_resolved(tree)
-    output = _writer(options, style).write(tree)
-    return RenderResult(output, diagnostics, options.format, tree, style)
+    written = _writer(options, style, docx, document, tree).write(tree)
+    if isinstance(written, bytes):
+        return RenderResult("", diagnostics, options.format, tree, style, binary=written)
+    return RenderResult(written, diagnostics, options.format, tree, style)
 
 
 def render_file(path: str | Path, options: RenderOptions | None = None, /, **settings: Any) -> RenderResult:
@@ -289,9 +300,30 @@ def _resolve(document: Document, result: ValidationResult, style: Style,
     return resolved, diagnostics + found
 
 
-def _writer(options: RenderOptions, style: Style) -> HtmlWriter | TextWriter:
+def _writer(options: RenderOptions, style: Style, docx: DocxSettings | None, document: Document,
+            tree: RenderTree) -> HtmlWriter | TextWriter | DocxWriter:
     if options.format == "text":
         return TextWriter(style.attachments.separator)
     from . import __version__
 
-    return HtmlWriter(style, standalone=options.standalone, generator=f"legaldown-render {__version__}")
+    generator = f"legaldown-render {__version__}"
+    if options.format == "docx":
+        assert docx is not None
+        version, date = _page_fields(document, tree, style)
+        return DocxWriter(style, generator=generator, version=version, date=date, settings=docx)
+    return HtmlWriter(style, standalone=options.standalone, generator=generator)
+
+
+def _page_fields(document: Document, tree: RenderTree, style: Style) -> tuple[str, str]:
+    """The document's ``version`` and ``effective_date`` as a running header or
+    footer shows them (``{version}``, ``{date}``): the date formatted as the style's
+    ``values.date`` says, for the formatting locale the resolver used. A value that
+    holds directives (``{{...}}``) is left out: they are resolved where the document
+    shows them, not here, and a running text is no place for a blank to fill in."""
+    metadata = document.metadata
+    version = metadata.version or ""
+    date = metadata.effective_date or ""
+    locale = parse_locale(tree.locale)
+    if date and locale is not None and is_valid_iso_date(date):
+        date = Formatter(locale, style.values).date(date)
+    return ("" if "{{" in version else version), ("" if "{{" in date else date)

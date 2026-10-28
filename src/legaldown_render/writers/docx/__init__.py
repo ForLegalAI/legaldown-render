@@ -1,0 +1,93 @@
+"""The DOCX writer (§13.6): a resolved tree as a WordprocessingML package.
+
+It writes OOXML directly, with the standard library only (``zipfile`` and
+``xml.etree``): docs/decisions/0008-docx-word-native.md says why. Like every writer it
+contains no LegalDown rules (docs/decisions/0003); it lays out what resolution computed
+and emits no diagnostics. The package has the parts a Word document needs and nothing that
+varies between two renders of one document.
+
+Layout of this package:
+
+* :mod:`.ooxml` -- namespaces, the sanitiser, element, run, field, bookmark and hyperlink builders;
+* :mod:`.package` -- parts, relationships, content types and the deterministic ZIP;
+* :mod:`.styles`, :mod:`.settings`, :mod:`.headers`, :mod:`.properties` -- the parts that come from the style template;
+* :mod:`.body` -- the body of the document (interim, see there).
+"""
+from __future__ import annotations
+
+from collections.abc import Mapping
+
+from ...style import Style
+from ...style.docx import DocxSettings, docx_settings
+from ...tree import RenderTree, plain_text
+from . import package as pkg
+from .body import interim_body
+from .headers import build_footer, build_header
+from .ooxml import el, serialize
+from .properties import build_app, build_core
+from .settings import build_numbering, build_settings
+from .styles import build_styles, language_tag
+
+__all__ = ["DocxWriter"]
+
+
+class DocxWriter:
+    """Writes a resolved tree as a ``.docx`` file.
+
+    *style* is the style template (the DOCX settings are converted from it, see
+    :func:`~legaldown_render.style.docx.docx_settings`, which raises
+    :class:`~legaldown_render.errors.StyleError` for one Word cannot express);
+    *generator* names the program in the document's properties. *version* and *date*
+    are the document's own, as the running header and footer show them
+    (``{version}``, ``{date}``: the frontmatter's ``version``, and its
+    ``effective_date`` as the style formats dates); the title is the tree's. Both are
+    empty for a document without one.
+    """
+
+    extension = "docx"
+    media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    def __init__(self, style: Style, *, generator: str = "", version: str = "", date: str = "",
+                 settings: DocxSettings | None = None) -> None:
+        self.style = style
+        self.generator = generator or "legaldown-render"
+        self.version = version
+        self.date = date
+        self.settings = settings if settings is not None else docx_settings(style)
+
+    def write(self, tree: RenderTree) -> bytes:
+        settings = self.settings
+        language = language_tag(tree.language, self.style.locale)
+        title = plain_text(tree.title)
+        values: Mapping[str, str] = {"title": title, "version": self.version, "date": self.date}
+        text_width = settings.page.text_width
+
+        package = pkg.Package()
+        package.relationships.add(pkg.REL_OFFICE_DOCUMENT, "word/document.xml")
+        package.relationships.add(pkg.REL_CORE_PROPERTIES, "docProps/core.xml")
+        package.relationships.add(pkg.REL_EXTENDED_PROPERTIES, "docProps/app.xml")
+
+        rels = pkg.Relationships()
+        rels.add(pkg.REL_STYLES, "styles.xml")
+        rels.add(pkg.REL_NUMBERING, "numbering.xml")
+        rels.add(pkg.REL_SETTINGS, "settings.xml")
+        header_id = footer_id = None
+        page = self.style.page
+        if page.header:
+            header_id = rels.add(pkg.REL_HEADER, "header1.xml")
+        if page.footer:
+            footer_id = rels.add(pkg.REL_FOOTER, "footer1.xml")
+
+        document = el("document", None, interim_body(tree, settings.page, header_id=header_id, footer_id=footer_id))
+        package.add("docProps/core.xml", pkg.CT_CORE_PROPERTIES, build_core(title, language))
+        package.add("docProps/app.xml", pkg.CT_EXTENDED_PROPERTIES, build_app(self.generator))
+        package.add("word/document.xml", pkg.CT_DOCUMENT, serialize(document), rels)
+        package.add("word/styles.xml", pkg.CT_STYLES, build_styles(self.style, settings, language))
+        package.add("word/numbering.xml", pkg.CT_NUMBERING, build_numbering())
+        package.add("word/settings.xml", pkg.CT_SETTINGS,
+                    build_settings(update_fields=settings.update_fields_on_open))
+        if header_id:
+            package.add("word/header1.xml", pkg.CT_HEADER, build_header(page.header, values, text_width))
+        if footer_id:
+            package.add("word/footer1.xml", pkg.CT_FOOTER, build_footer(page.footer, values, text_width))
+        return package.to_bytes()

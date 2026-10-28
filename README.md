@@ -4,10 +4,10 @@
 
 ### The reference renderer for [LegalDown](https://github.com/ForLegalAI/LegalDown)
 
-**Turn a LegalDown document into HTML or plain text, with section numbers, cross-references,
+**Turn a LegalDown document into HTML, plain text or a Word document, with section numbers, cross-references,
 defined terms, and formatted values all generated at render time.**
 
-Targets specification **v0.2** · Conformance level **Rendering** · DOCX and PDF planned
+Targets specification **v0.2** · Conformance level **Rendering** · DOCX in progress, PDF planned
 
 </div>
 
@@ -57,6 +57,7 @@ Python 3.11 or newer. The dependencies are all pure Python: `legaldown-validator
 ```bash
 legaldown-render contract.lgd -o contract.html                  # HTML page
 legaldown-render contract.lgd -o contract.txt                   # plain text (format from extension)
+legaldown-render contract.lgd -o contract.docx                  # a Word document (in progress, see below)
 legaldown-render contract.lgd --style continental --locale cs-CZ -o smlouva.html   # Czech dates, money, durations
 legaldown-render contract.lgd --set numbering.scheme=legal-outline --set enumeration.enabled=false
 legaldown-render contract.lgd --set contents.enabled=true --set contents.depth=3   # table of contents
@@ -92,11 +93,11 @@ Documents are read as UTF-8, and output is UTF-8 with LF line endings, on standa
 the standard streams only when it runs as the program; calling `legaldown_render.cli.main([...])`
 from Python leaves `sys.stdout` and `sys.stderr` as they are.
 Without `--format`, `-o` takes the format from the file extension: `.html` and `.htm` write HTML,
-`.txt` and `.text` plain text. The extension of a document format this renderer does not write
-(`.docx`, `.doc`, `.odt`, `.rtf`, `.pdf`, `.md`, `.markdown`, `.epub`, `.tex`, in any case) is a usage
+`.txt` and `.text` plain text, `.docx` a Word document. `-o -` writes to standard output. The extension of a document format this renderer does not write
+(`.doc`, `.odt`, `.rtf`, `.pdf`, `.md`, `.markdown`, `.epub`, `.tex`, in any case) is a usage
 error (exit 2) unless `--format` says what to write. The extension is the text after the last dot,
 also in a name that starts with one (`.pdf`), and trailing dots and spaces are ignored (`x.pdf.`,
-`"x.docx "`). Any other name, with any other extension or none (`contract`, `contract.v2`,
+`"x.odt "`). Any other name, with any other extension or none (`contract`, `contract.v2`,
 `report.2025-10-27`, `.out`), is just a name and writes HTML.
 
 ## Python
@@ -126,6 +127,31 @@ cannot be assembled with its answers (`RenderRefused`) do. All of them are `Rend
 `StyleError` and `OptionsError` are also `ValueError`s. They can be pickled, so they cross process
 boundaries (`multiprocessing`, `concurrent.futures`) intact. `overrides=` takes dotted settings and
 may not contain `version` or `extends`, so `overrides=legaldown_render.style.style_to_dict(style)` must drop those two keys.
+
+## DOCX (in progress)
+
+`-o contract.docx` (or `--format docx`, or `render(text, format="docx")`) writes a Word document. The
+file is bytes: the command writes it to a file or, with `-o -`, to standard output, and refuses to write
+it to a terminal; `render()` returns it as `result.binary` (`result.output` is empty). The writer needs no
+dependency beyond the base package.
+
+The design is that **in the Word file every number, cross-reference, the table of contents and the page
+numbers are live Word features**, not text: numbering definitions and fields, with the values the renderer
+computed as their cached results, so a lawyer who inserts a clause gets the numbers, references and contents
+updated by Word
+([ADR 0008](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/decisions/0008-docx-word-native.md)).
+
+**What is there today** is the package, not yet the body of the document: a valid `.docx` (checked against the
+ISO/IEC 29500 schemas, and opened in LibreOffice in CI) with styles generated from the style template
+(`Normal`, `heading 1` to `heading 5`, `Title`, `Quote`, `toc 1` to `toc 5`, `Hyperlink`, ...), the page size
+and margins, a running header and footer from `page.header` and `page.footer` (the default footer is "3 / 12"
+as live page fields), the document's title and language, `w:updateFields` so Word refreshes fields when it
+opens the file (`docx.update_fields_on_open`), and deterministic output. **The body is interim:** the title,
+the headings as Word headings, and every other block as plain text, with **no numbers, references, contents,
+title block, attachments or signature blocks yet**. Do not send such a file as a contract. Settings Word
+cannot express (a `%` length, say) are an error for DOCX only. See
+[Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#docx)
+and the [roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md).
 
 ## Rendering documents you did not write
 
@@ -197,6 +223,8 @@ articles, 2.1-style items, numbered paragraphs), and `outline` (I. / A. / 1. / a
 ```bash
 pip install -e ".[dev]"
 pytest                       # unit, golden, and CLI tests
+python tests/schemas/fetch.py && pytest -m ooxml_schema   # DOCX parts against the OOXML schemas (needs lxml)
+pytest -m libreoffice        # DOCX opened in LibreOffice (needs soffice and python3-uno; skipped without)
 pytest --update-golden       # regenerate tests/golden/ after an intended output change
 LEGALDOWN_SPEC_DIR=../LegalDown pytest -m conformance   # the specification's examples and fixtures
 ruff check .
