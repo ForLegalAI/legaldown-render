@@ -27,6 +27,7 @@ value, so it is safe to show for a style from somebody else.
 from __future__ import annotations
 
 import colorsys
+import math
 import re
 from dataclasses import dataclass
 
@@ -70,6 +71,17 @@ _ORIENTATIONS = ("portrait", "landscape")
 
 #: The largest size Word accepts for a font (``ST_HpsMeasure``), in points.
 _MAX_FONT_POINTS = 1638
+#: The largest body text: the title is 1.6 times it and must stay within :data:`_MAX_FONT_POINTS`.
+_MAX_BODY_POINTS = 1023
+#: Word's limit for a page edge, a margin or a line (22 inches), in twips; and the least page edge.
+_MAX_TWIPS = 31680
+_MIN_PAGE_TWIPS = 144
+#: The least width and height of the text area, so that no tab stop or text width is negative or absurd.
+_MIN_TEXT_TWIPS = 720
+#: A number of more characters than this is no length (and is not converted: ``float`` of a
+#: few hundred digits is infinity); a length over this many twips is refused before it is used.
+_MAX_NUMBER_CHARS = 32
+_MAX_LENGTH_TWIPS = 10_000_000
 
 _BASIC_COLORS = {
     "black": "000000", "silver": "C0C0C0", "gray": "808080", "grey": "808080", "white": "FFFFFF",
@@ -165,7 +177,8 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
     problems = _Problems()
     typography = style.typography
 
-    font_points = _font_points(typography.font_size, "typography.font_size", BASE_FONT_POINTS, problems)
+    font_points = _font_points(typography.font_size, "typography.font_size", BASE_FONT_POINTS, problems,
+                               _MAX_BODY_POINTS)
     font_points = font_points if font_points is not None else 11.0
     half_points = round(font_points * 2)
 
@@ -200,9 +213,12 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
 def _length(value: str, key: str, em_points: float, problems: _Problems) -> int | None:
     """*value*, a CSS length, in twips; None (with a problem) when Word cannot
     have it. ``em`` and ``rem`` are *em_points* points."""
-    match = _LENGTH_RE.match(value.strip())
+    match = _LENGTH_RE.match(value.strip().lower())
     if match is None:
         problems.add(key, "is not a length the DOCX writer can read (a number and a unit such as 25mm, 11pt or 1.2em)")
+        return None
+    if len(match.group(1)) > _MAX_NUMBER_CHARS:
+        problems.add(key, "is a number too large for a Word document")
         return None
     number, unit = float(match.group(1)), match.group(2)
     if unit is None:
@@ -214,18 +230,21 @@ def _length(value: str, key: str, em_points: float, problems: _Problems) -> int 
         problems.add(key, f"uses '{unit}', which a Word document cannot express; use pt, mm, cm, in, px, em or rem "
                           f"(HTML accepts it)")
         return None
-    if unit in _RELATIVE:
-        return round(number * em_points * _TWIPS_PER_POINT)
-    return round(number * _ABSOLUTE[unit])
+    twips = number * (em_points * _TWIPS_PER_POINT if unit in _RELATIVE else _ABSOLUTE[unit])
+    if not math.isfinite(twips) or abs(twips) > _MAX_LENGTH_TWIPS:
+        problems.add(key, "is a length too large for a Word document")
+        return None
+    return round(twips)
 
 
-def _font_points(value: str, key: str, em_points: float, problems: _Problems) -> float | None:
+def _font_points(value: str, key: str, em_points: float, problems: _Problems,
+                 maximum: int = _MAX_FONT_POINTS) -> float | None:
     twips = _length(value, key, em_points, problems)
     if twips is None:
         return None
     points = twips / _TWIPS_PER_POINT
-    if not 1 <= points <= _MAX_FONT_POINTS:
-        problems.add(key, f"must be between 1pt and {_MAX_FONT_POINTS}pt in a Word document")
+    if not 1 <= points <= maximum:
+        problems.add(key, f"must be between 1pt and {maximum}pt in a Word document")
         return None
     return points
 
@@ -239,23 +258,36 @@ def _line_height(value: str, font_points: float, problems: _Problems) -> tuple[i
         return 240, "auto"
     if _NUMBER_RE.match(text):
         factor = float(text)
-        if not 0 < factor <= 100:
+        if not 0 < factor <= 100:  # also false for infinity
             problems.add("typography.line_height", "a number must be greater than 0 and at most 100")
             return 240, "auto"
         return round(factor * 240), "auto"
     twips = _length(text, "typography.line_height", font_points, problems)
-    if twips is None or twips <= 0:
+    if twips is None or not 0 < twips <= _MAX_TWIPS:
         if twips is not None:
-            problems.add("typography.line_height", "must be greater than 0")
+            problems.add("typography.line_height", f"must be greater than 0 and at most {_MAX_TWIPS // 20}pt")
         return 240, "auto"
     return twips, "atLeast"
 
 
 def _page(size: str, margin: str, font_points: float, problems: _Problems) -> PageGeometry:
+    """The page in twips. Word's limits hold: an edge of 144 to 31680, a margin of 0 to
+    31680, and margins that leave a text area of at least 720 in each direction, so a
+    tab stop at the text width can never be negative."""
+    before = len(problems.items)
     width, height = _page_size(size, font_points, problems)
     top, right, bottom, left = _margins(margin, font_points, problems)
+    if len(problems.items) == before:  # a value that is already wrong has said so
+        if not all(_MIN_PAGE_TWIPS <= edge <= _MAX_TWIPS for edge in (width, height)):
+            problems.add("page.size", f"each edge must be between {_MIN_PAGE_TWIPS / 20:g}pt and "
+                                      f"{_MAX_TWIPS // 20}pt in a Word document")
+        elif not all(0 <= edge <= _MAX_TWIPS for edge in (top, right, bottom, left)):
+            problems.add("page.margin", f"each margin must be between 0 and {_MAX_TWIPS // 20}pt in a Word document")
+        elif width - left - right < _MIN_TEXT_TWIPS or height - top - bottom < _MIN_TEXT_TWIPS:
+            problems.add("page.margin", "the margins leave no room for text on the page (page.size)")
     return PageGeometry(width=width, height=height, top=top, right=right, bottom=bottom, left=left,
-                        header=min(720, top // 2), footer=min(720, bottom // 2), landscape=width > height)
+                        header=max(0, min(720, top // 2)), footer=max(0, min(720, bottom // 2)),
+                        landscape=width > height)
 
 
 def _page_size(value: str, font_points: float, problems: _Problems) -> tuple[int, int]:
@@ -347,18 +379,23 @@ def _channel(part: str) -> int | None:
         number = float(part[:-1]) * 2.55 if part.endswith("%") else float(part)
     except ValueError:
         return None
-    return round(min(255.0, max(0.0, number)))
+    return round(min(255.0, max(0.0, number))) if math.isfinite(number) else None
 
 
 def _hsl(parts: list[str]) -> str | None:
     try:
-        hue = float(parts[0].removesuffix("deg")) % 360 / 360
+        hue_degrees = float(parts[0].removesuffix("deg"))
         if not (parts[1].endswith("%") and parts[2].endswith("%")):
             return None
-        saturation = min(100.0, max(0.0, float(parts[1][:-1]))) / 100
-        lightness = min(100.0, max(0.0, float(parts[2][:-1]))) / 100
+        saturation = float(parts[1][:-1])
+        lightness = float(parts[2][:-1])
     except ValueError:
         return None
+    if not all(math.isfinite(number) for number in (hue_degrees, saturation, lightness)):
+        return None
+    hue = hue_degrees % 360 / 360
+    saturation = min(100.0, max(0.0, saturation)) / 100
+    lightness = min(100.0, max(0.0, lightness)) / 100
     red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
     return f"{round(red * 255):02X}{round(green * 255):02X}{round(blue * 255):02X}"
 

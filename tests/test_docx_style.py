@@ -218,8 +218,9 @@ def test_the_render_api_refuses_before_rendering_and_html_still_renders() -> Non
     ("page.size", "A4 A3", "not a length"),
     ("page.size", "210mm landscape", "orientation goes with a paper size"),
     ("page.size", "0 10mm", "greater than 0"),
-    ("typography.font_size", "0", "between 1pt and 1638pt"),
-    ("typography.font_size", "2000pt", "between 1pt and 1638pt"),
+    ("typography.font_size", "0", "between 1pt and 1023pt"),
+    ("typography.font_size", "2000pt", "between 1pt and 1023pt"),
+    ("headings.1.size", "2000pt", "between 1pt and 1638pt"),
     ("typography.line_height", "0", "greater than 0"),
     ("typography.line_height", "calc(1 + 1)", "not a length"),
     ("typography.color", "hsl(", "cannot read"),
@@ -245,3 +246,65 @@ def test_every_problem_is_reported_together_and_an_untrusted_style_is_not_quoted
 def test_the_built_in_styles_convert() -> None:
     for name in ("default", "outline", "continental"):
         docx_settings(load_style(name))
+
+
+# -- Numeric extremes: a StyleError, never a crash and never a value Word or the schema refuses ---------------
+
+DIGITS = ["1" + "0" * 40, "9" * 30, "9" * 33, "9" * 100, "9" * 400, "9" * 5000, "1" + "0" * 40 + "." + "9" * 40]
+LENGTH_KEYS = ["page.size", "page.margin", "typography.font_size", "typography.line_height", "headings.1.size"]
+
+
+@pytest.mark.parametrize("unit", ["mm", "pt", "in", "em", "px"])
+@pytest.mark.parametrize("digits", DIGITS)
+@pytest.mark.parametrize("key", LENGTH_KEYS)
+def test_an_enormous_length_is_a_style_error_that_does_not_quote_it(key: str, digits: str, unit: str) -> None:
+    for trusted in (True, False) if len(digits) < 150 else (True,):  # an untrusted text is at most 200 characters
+        style = load_style("default", overrides={key: digits + unit}, trusted=trusted)
+        with pytest.raises(StyleError) as caught:
+            docx_settings(style, trusted=trusted)
+        assert digits[:12] not in str(caught.value)
+    with pytest.raises(StyleError):
+        render(FRONT + "# A\n", format="docx", overrides={key: digits + unit})
+
+
+@pytest.mark.parametrize("value", ["inf", "nan", "1e999", "9" * 400, "-" + "9" * 400])
+@pytest.mark.parametrize("function", ["rgb({0}, 0, 0)", "rgb(0 {0} 0)", "rgba(0,0,{0},1)", "hsl({0} 50% 50%)",
+                                      "hsl(10 {0}% 50%)", "hsl(10 50% {0}%)"])
+def test_a_colour_component_that_is_not_a_finite_number_is_a_style_error(function: str, value: str) -> None:
+    with pytest.raises(StyleError, match="typography.color: is a colour the DOCX writer cannot read"):
+        docx_settings(load_style("default", overrides={"typography.color": function.format(value)}))
+
+
+@pytest.mark.parametrize(("key", "value", "fragment"), [
+    ("page.size", "7pt", "each edge must be between 7.2pt and 1584pt"),
+    ("page.size", "1600pt 1600pt", "each edge must be between"),
+    ("page.size", "5pt 20in", "each edge must be between"),
+    ("page.margin", "1600pt", "each margin must be between 0 and 1584pt"),
+    ("page.margin", "50mm 100mm", "leave no room for text"),
+    ("page.margin", "150mm 0", "leave no room for text"),
+    ("page.margin", "105mm", "leave no room for text"),
+    ("typography.line_height", "1600pt", "at most 1584pt"),
+    ("typography.font_size", "1024pt", "between 1pt and 1023pt"),
+])
+def test_values_outside_word_s_limits_are_named(key: str, value: str, fragment: str) -> None:
+    with pytest.raises(StyleError) as caught:
+        docx_settings(load_style("default", overrides={key: value}))
+    assert any(problem.startswith(f"{key}: ") and fragment in problem for problem in caught.value.problems), \
+        caught.value.problems
+
+
+def test_the_largest_values_that_fit_are_accepted_and_nothing_is_negative_or_overflows() -> None:
+    word = docx_settings(load_style("default", overrides={
+        "page.size": "22in 22in", "page.margin": "0", "typography.font_size": "1023pt",
+        "typography.line_height": "1584pt", "headings.1.size": "1638pt"}))
+    assert (word.page.width, word.page.height, word.page.text_width) == (31680, 31680, 31680)
+    assert word.half_points == 2046 and round(word.half_points * 1.6) <= 3276
+    narrow = docx_settings(load_style("default", overrides={"page.size": "1.5in 3in", "page.margin": "0.5in"}))
+    assert narrow.page.text_width == 720 and narrow.page.header >= 0
+
+
+@pytest.mark.parametrize("value", ["25MM", "25Mm", "1IN", "72PT", "6PC", "96PX", "1EM", "1.5REM"])
+def test_units_are_not_case_sensitive(value: str) -> None:
+    assert docx_settings(load_style("default", overrides={"page.margin": value})).page.top > 0
+    with pytest.raises(StyleError, match="uses '%'"):
+        docx_settings(load_style("default", overrides={"page.margin": "5%"}))
