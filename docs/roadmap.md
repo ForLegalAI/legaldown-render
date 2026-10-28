@@ -90,17 +90,35 @@ Rendering what other people send, and reporting problems where they are. No new 
   self-contained
 - **Project.** CI also runs on Windows, and publishing to PyPI waits for CI
 
-### v0.5 — DOCX
+### v0.5 — DOCX (in progress)
 
-- `docx` writer behind the `[docx]` extra
-- To decide first: static numbers, or Word-native numbering with `REF` fields
-  ([ADR 0004](decisions/0004-html-first.md))
+A document lawyers can edit: in the .docx every number, cross-reference, the table of contents and
+the page numbers are live Word features (numbering definitions and fields), and the renderer's
+values appear only as the cached results of fields. Decided in
+[ADR 0008](decisions/0008-docx-word-native.md), which also settles the question 0004 left open.
+
+- **Package core (done).** `docx` writer in the base package, with the standard library only (no
+  `[docx]` extra): the OOXML parts, styles generated from the style template, settings (compatibility
+  mode 15, `w:updateFields`), page setup, running headers and footers with `PAGE`/`NUMPAGES` fields,
+  document properties, deterministic output. `RenderResult.binary`, `-o x.docx`, `-o -`. The body is
+  an interim one: the title, `heading N` paragraphs and plain-text paragraphs, with no numbers yet
+- **Style settings (done).** `page.header` and `page.footer` (the HTML writer ignores them for now),
+  `docx.update_fields_on_open`; settings Word cannot express are a `StyleError` for DOCX
+- **Verification (done).** Every part validated against the ISO/IEC 29500 schemas (fetched in CI, not
+  stored), well-formedness fuzzing, a determinism test, and LibreOffice opening the documents through
+  UNO as the oracle (a `docx` CI job)
+- **Next.** Numbering structure in the render tree; a planner that maps the tree to Word (lists,
+  levels, bookmarks, cross-references composed of `REF` fields, cached values from a model of Word's
+  numbering); the body writer with the table of contents, title block, attachments and signature
+  blocks; a corpus checked against the plain-text oracle, also after edits made through UNO; a manual
+  Word checklist for releases
 
 ### v0.6 — PDF
 
 - Choose the engine ([ADR 0004](decisions/0004-html-first.md)). The leading option is WeasyPrint
   on the HTML writer; its print stylesheet already exists
-- Running headers and footers, and page numbers, from the style's `page` settings
+- Running headers and footers, and page numbers, from the style's `page` settings (`page.header` and
+  `page.footer` exist since the DOCX writer; the HTML writer's print stylesheet does not read them yet)
 
 ### Later — Full level
 
