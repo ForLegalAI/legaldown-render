@@ -214,14 +214,14 @@ def test_the_extension_of_a_file_name(name: str, extension: str) -> None:
 
 @pytest.mark.parametrize(("name", "expected"), [
     (".txt", "text"), ("x.txt.", "text"), ("x.html ", "html"), (".htm", "html"), ("x.unknown", None),
+    ("x.docx", "docx"), ("X.DOCX", "docx"), ("x.docx ", "docx"), (".docx", "docx"), ("x.doc", None),
 ])
 def test_the_format_a_file_name_implies(name: str, expected: str | None) -> None:
     assert format_for_path(name) == expected
 
 
-@pytest.mark.parametrize("name", ["x.docx", "x.pdf", "x.md", "x.DOCX", "x.doc", "x.odt", "x.rtf", "x.markdown",
-                                  "x.epub", "x.tex", "x.v2.Pdf", ".pdf", ".md", "x.pdf.", "x.docx ", "x.docx. .",
-                                  "dir.pdf", "x.MD"])
+@pytest.mark.parametrize("name", ["x.pdf", "x.md", "x.doc", "x.odt", "x.rtf", "x.markdown",
+                                  "x.epub", "x.tex", "x.v2.Pdf", ".pdf", ".md", "x.pdf.", "dir.pdf", "x.MD"])
 def test_unknown_output_extension_without_format_is_a_usage_error(
         tmp_path: Path, capsys: pytest.CaptureFixture[str], name: str) -> None:
     target = tmp_path / name
@@ -230,7 +230,7 @@ def test_unknown_output_extension_without_format_is_a_usage_error(
     assert exit_info.value.code == 2
     err = capsys.readouterr().err
     assert f"cannot tell the output format from '{target}'" in err
-    assert "--format html or text" in err
+    assert "--format html, text or docx" in err
     assert not target.exists()
     assert list(tmp_path.iterdir()) == []
 
@@ -240,8 +240,8 @@ def test_unknown_output_extension_without_format_is_a_usage_error(
 _TRAILING = pytest.mark.skipif(sys.platform == "win32", reason="Windows strips trailing dots and spaces from names")
 
 
-@pytest.mark.parametrize("name", ["x.docx", pytest.param("x.pdf.", marks=_TRAILING), ".md",
-                                  pytest.param("x.docx ", marks=_TRAILING)])
+@pytest.mark.parametrize("name", ["x.pdf", pytest.param("x.pdf.", marks=_TRAILING), ".md",
+                                  pytest.param("x.odt ", marks=_TRAILING)])
 def test_explicit_format_is_honoured_whatever_the_extension(tmp_path: Path, name: str) -> None:
     target = tmp_path / name
     assert main([FEATURES, "-q", "-f", "text", "-o", str(target)]) == 0
@@ -280,4 +280,4 @@ def test_the_help_states_the_output_rule(capsys: pytest.CaptureFixture[str]) -> 
     help_text = " ".join(capsys.readouterr().out.split())
     assert "its extension sets the format" not in help_text
     assert "any other name, with or without an extension, writes HTML" in help_text
-    assert ".docx, .doc, .odt, .rtf, .pdf, .md, .markdown, .epub, .tex" in help_text
+    assert ".doc, .odt, .rtf, .pdf, .md, .markdown, .epub, .tex" in help_text

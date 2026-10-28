@@ -9,10 +9,11 @@ later change that does not reverse a decision is appended to its Consequences as
 | [0001](0001-separate-package.md) | A separate package and repository, depending on `legaldown-validator` | Accepted |
 | [0002](0002-one-parser.md) | One LegalDown parser: the core package; CommonMark structure from markdown-it-py for now | Accepted; points 2 and 3 superseded by 0007 |
 | [0003](0003-resolved-document.md) | Resolve all legal semantics once, into a format-neutral resolved document | Accepted |
-| [0004](0004-html-first.md) | Output formats in order: text + HTML, then DOCX, then PDF | Accepted (DOCX numbering and the PDF engine still open) |
+| [0004](0004-html-first.md) | Output formats in order: text + HTML, then DOCX, then PDF | Accepted (DOCX decisions superseded by 0008; the PDF engine still open) |
 | [0005](0005-locale-formatting.md) | Locale formatting with Babel (CLDR) | Accepted (implemented in 0.1.0) |
 | [0006](0006-styles-and-options.md) | Style templates are data; render options are separate | Accepted |
 | [0007](0007-one-parser-validator-model.md) | One parser: build from the validator's document model; markdown-it-py for inline text only | Accepted (supersedes part of 0002) |
+| [0008](0008-docx-word-native.md) | DOCX with Word-native numbering and fields, written as OOXML directly | Accepted (supersedes the DOCX part of 0004) |
 
 ## Template
 

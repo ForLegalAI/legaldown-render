@@ -6,7 +6,7 @@ about what it says. It is split in two:
 * the **semantic** part — numbering, enumeration, references, values,
   labels — drives resolution, so it applies identically to every output
   format;
-* the **presentation** part — typography, headings, page, html — is read only
+* the **presentation** part — typography, headings, page, html, docx — is read only
   by writers.
 
 Every field has a default, so the built-in ``default`` template is simply
@@ -316,12 +316,52 @@ class Typography:
 
 
 @dataclass(frozen=True, slots=True)
+class PageText:
+    """The text of one running header or footer: three templates, set at the
+    left margin, centred, and at the right margin of every page. Each
+    substitutes the fields in :data:`PAGE_TEXT` (``{page}``, ``{pages}``,
+    ``{title}``, ``{version}``, ``{date}``); an empty one shows nothing."""
+
+    left: str = ""
+    center: str = ""
+    right: str = ""
+
+    def __bool__(self) -> bool:
+        return bool(self.left or self.center or self.right)
+
+
+@dataclass(frozen=True, slots=True)
 class Page:
-    """Print layout. Used by the HTML writer's print stylesheet now, and by
-    the PDF writer later."""
+    """Print layout: the HTML writer's print stylesheet (``size`` and
+    ``margin``), the DOCX writer's page setup, headers and footers, and the PDF
+    writer's later. The HTML writer sets no running header or footer yet."""
 
     size: str = css_field("page-size", "A4")
     margin: str = css_field("margin", "25mm")
+    #: Running header: empty by default.
+    header: PageText = field(default_factory=PageText)
+    #: Running footer: the page number and the page count, centred, by default.
+    footer: PageText = field(default_factory=lambda: PageText(center="{page} / {pages}"))
+
+
+@dataclass(frozen=True, slots=True)
+class Docx:
+    """Settings of the DOCX writer only (docs/style-templates.md)."""
+
+    #: Ask Word to update every field when it opens the file (``w:updateFields``):
+    #: the cross-references, the table of contents and its page numbers. Word
+    #: shows one prompt for it. The fields hold the values the renderer computed
+    #: (their cached results) either way, so a viewer that never updates fields
+    #: shows the document correctly, only without the page numbers of the table
+    #: of contents.
+    update_fields_on_open: bool = True
+    #: What Word's ``\t`` switch (``REF \n \t``, which leaves the words of a number out) is taken to do when a
+    #: cross-reference is built from fields (docs/style-templates.md, "DOCX"). ``off``: never used, so a reference that
+    #: needs it is fixed text. ``documented``: only where Microsoft's documentation says what Word returns (words before the first counter
+    #: and after the last are left out, a delimiter between counters stays). ``guess``: also where Word is expected to do
+    #: what it is not documented to (a period after the letters that lead a number: ``No. 1``, ``Čl. 1``, and words between
+    #: counters); to be checked in Word.
+    reference_text_switch: Literal["off", "documented", "guess"] = "documented"
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,6 +411,7 @@ class Style:
     headings: dict[int, HeadingStyle] = field(default_factory=_default_headings)
     page: Page = field(default_factory=Page)
     html: Html = field(default_factory=Html)
+    docx: Docx = field(default_factory=Docx)
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +446,9 @@ HEADING_REF = TemplateFields(frozenset({"n"}), frozenset({"n"}), "each level mus
 #: List items and paragraphs also see the containing section's designation.
 ITEM_LABEL = TemplateFields(frozenset({"n", "path", "section"}))
 ITEM_REF = TemplateFields(frozenset({"n", "section"}), frozenset({"n"}), "each item must tell itself apart (§13.3)")
+#: A running header or footer sees the page counters and the document's title,
+#: version and date; it requires nothing, as an empty one shows nothing.
+PAGE_TEXT = TemplateFields(frozenset({"page", "pages", "title", "version", "date"}))
 REFERENCE_FORMAT = TemplateFields(
     frozenset({"designation"}), frozenset({"designation"}), "every reference would read the same (§13.3)"
 )
@@ -451,6 +495,9 @@ def template_settings(style: Style) -> Iterator[tuple[str, str, TemplateFields]]
     yield ("paragraphs.format.ref", style.paragraphs.format.ref,
            ITEM_REF if style.paragraphs.numbered else _unused(ITEM_REF))
     yield "references.format", style.references.format, REFERENCE_FORMAT
+    for part in ("header", "footer"):
+        for side in ("left", "center", "right"):
+            yield f"page.{part}.{side}", getattr(getattr(style.page, part), side), PAGE_TEXT
     for item in fields(Labels):
         template = getattr(style.labels, item.name)
         if template is not None and item.name in LABEL_FIELDS:

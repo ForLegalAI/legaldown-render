@@ -134,10 +134,19 @@ typography:
 headings:                    # per level 1–5
   1: { size: 1.15em, weight: "700", italic: false, transform: uppercase, align: left }
 
-page: { size: A4, margin: 25mm }      # print stylesheet now; the PDF writer later
+page:
+  size: A4                   # HTML print stylesheet and DOCX page setup; the PDF writer later
+  margin: 25mm
+  header: { left: "", center: "", right: "" }              # running header (DOCX; not yet HTML or PDF), see "Headers and footers"
+  footer: { left: "", center: "{page} / {pages}", right: "" }
+
 html:
   max_width: 46rem
   extra_css: ""              # raw CSS, appended to the stylesheet as written (see "Trusted input")
+
+docx:                        # the DOCX writer only (see "DOCX")
+  update_fields_on_open: true
+  reference_text_switch: documented   # off | documented | guess: what a cross-reference may expect of Word's \t switch
 ```
 
 ### Level formats
@@ -181,6 +190,7 @@ just text.
 | `references.format` | `{designation}` | `{designation}`, or every reference reads the same |
 | `labels.condition` | `{condition}` | `{condition}`, as §15.8 requires the condition to be shown; an empty value is allowed and shows the bare condition |
 | `labels.attachment_file` | `{file}` | none |
+| `page.header.*`, `page.footer.*` (left, center, right) | `{page}`, `{pages}`, `{title}`, `{version}`, `{date}` | none: an empty text shows nothing |
 | every other label | not checked: braces are text | none |
 
 ```
@@ -191,6 +201,99 @@ legaldown-render: Invalid style 'default':
 
 A `ref` is one piece of a designation, so it cannot show the whole `{path}`. A label left unset
 takes the built-in one for the document language, which always passes.
+
+### Headers and footers
+
+`page.header` and `page.footer` are the running text at the top and bottom of every page, each as a
+`left`, a `center` and a `right` text set at the left margin, in the middle and at the right margin. The
+default footer is `{page} / {pages}` in the centre ("3 / 12"), and the default header is empty. A text
+may use these fields, and any other `{name}` in braces is refused when the style loads:
+
+| Field | Shows |
+|---|---|
+| `{page}` | the page number |
+| `{pages}` | the number of pages |
+| `{title}` | the document's title |
+| `{version}` | the frontmatter's `version`; empty when the document has none |
+| `{date}` | the frontmatter's `effective_date`, formatted as `values.date` says for the formatting locale; empty when the document has none |
+
+`{version}` and `{date}` are the same text the title block shows for them (directives in them resolved
+the same way, a valid date formatted as `values.date` says), whether or not `title_block` shows them
+there. A text that is empty everywhere (the header by default) writes no header at all.
+
+**Where it applies.** The **DOCX** writer writes them: `{page}` and `{pages}` are `PAGE` and `NUMPAGES`
+fields that Word and LibreOffice count while laying out the pages (a viewer that lays out no pages shows
+the cached "1", so the default footer reads "1 / 1" there), and the other three fields are text.
+A single text is aligned; two or three are separated by tab stops at the middle and the right margin.
+The **HTML** and plain-text writers do not read them yet; the PDF writer will (v0.6).
+
+```yaml
+page:
+  header: { left: "{title}", right: "Version {version}" }
+  footer: { center: "Page {page} of {pages}" }
+```
+
+### DOCX
+
+The DOCX writer reads the same presentation settings as the HTML writer and converts them to what
+Word has (docs/decisions/0008-docx-word-native.md). A setting Word cannot express is a **style error
+when the format is `docx`**, reported before anything is rendered and naming every such setting; HTML
+keeps accepting the same style.
+
+| Setting | In the DOCX |
+|---|---|
+| `page.size` | the paper size of the page: `A3` to `A5`, `B4`, `B5`, `letter`, `legal`, `ledger`, with `landscape` or `portrait`; or one or two lengths; `auto` and an orientation alone are A4 |
+| `page.margin` | one to four lengths (top, right, bottom, left, as in CSS); the header and footer sit half a margin from the edge, at most 1.27 cm |
+| `typography.font_family` | the **first** family: `Georgia` for `'Georgia, "Times New Roman", serif'`; `serif`, `sans-serif` and `monospace` alone are Times New Roman, Arial and Courier New. Word falls back to its own substitute when the font is not installed |
+| `typography.font_size`, `headings.N.size` | half-points (Word's unit for a font size, so a size is rounded to the nearest half-point: `11.3pt` is 11.5 pt); `headings.N.size` between 1 pt and 1638 pt, and `typography.font_size` between 1 pt and 1023 pt, because the title is 1.6 times the body |
+| `typography.line_height` | a number is that many lines (`1.5`), `normal` is one line, a length is the least height of a line |
+| `typography.color`, `typography.link_color` | `#rgb`, `#rrggbb` (an alpha part is dropped), `rgb()`, `hsl()`, or one of `black silver gray white maroon red purple fuchsia green lime olive yellow navy blue teal aqua orange`; any other colour name is an error, so write it as `#rrggbb` |
+| `headings.N.weight` | bold from 600 up (`bold`, `bolder`), otherwise regular |
+
+Lengths: `mm`, `cm`, `in`, `pt`, `pc` and `px` (96 to the inch) are absolute. **`em` and `rem`** are
+relative to `typography.font_size`, which is itself relative to 12 pt when it is written in them, as in a
+browser. **`%`, `ch` and `ex`** depend on a layout or a font that Word does not give the renderer, so
+each is an error for DOCX: `page.margin: 5%` raises "page.margin: uses '%', which a Word document cannot
+express". Units are not case-sensitive (`25MM`). Word's limits are enforced too, as style errors that never
+quote the value: a page edge of 7.2 pt to 1584 pt (22 inches), a margin of 0 to 1584 pt, margins that leave
+at least 36 pt (0.5 inch) of text in each direction, a line height of at most 1584 pt (or 100 lines), and a
+number of more than 32 digits is no length at all. `html.max_width` and `html.extra_css` are never read.
+
+The writer generates Word styles from the template (`Normal`, `heading 1` to `heading 5`, `Title`,
+`Subtitle`, `Quote`, `toc 1` to `toc 5`, `Hyperlink`, `Table Grid`, and styles of its own for drafting
+notes, code, defined terms, blanks, choices, failure markers and condition labels), so a change made to a
+style in Word applies to every paragraph that uses it.
+
+| Setting | Meaning |
+|---|---|
+| `docx.update_fields_on_open` | `true` (the default) asks Word to update every field when it opens the file: the cross-references, the table of contents and its page numbers. Word asks the reader once ("This document contains fields that may refer to other files. Update the fields?"). The fields hold the values the renderer computed either way, so a viewer that never updates fields (Word Online, Quick Look, Outlook's preview) shows the document right, but the table of contents without page numbers. LibreOffice and Word Online ignore the setting. `false` writes no such request |
+| `docx.reference_text_switch` | What a cross-reference may expect of Word's `\t` switch (`REF bookmark \n \t`), which leaves the words of a number out. A reference is built from `REF` fields so that it stays right when a clause is inserted; where the reference shows less than the number Word draws (`Section {designation}` for a number `Article I`, `čl. {designation}` for `Čl. 1`), the switch leaves the words out and the `references.format` text goes back in as literal text. LibreOffice ignores the switch (and shows the whole number there, which the render reports once as `render-docx-reference-word-only`). Microsoft documents it with one example (`Section 1.01` gives `1.01`: the words around the number go, a delimiter between its counters stays); what Word does with a delimiter in the text around the counters is not documented. **`documented`** (the default) uses the switch only where that example settles the result: words before the first counter or after the last go, a delimiter between counters stays (words between counters are not documented: only `guess` drops them), and a label with a delimiter around its number (`(a)`, `a)`, `1:`, `No. 1`) is not asked for it. **`off`** never uses it: a reference that needs it is fixed text, reported (`render-docx-reference`). **`guess`** also expects Word to leave out a period after the letters that lead a number (`No. 1`, `Čl. 1`) and words between counters (`Part 1 of 2` gives `12`): the checklist in `.github/PUBLISHING.md` says how to check what your Word does, and a reference that is wrong in Word is fixed by setting `documented` |
+
+Settings that were already part of the template gain a DOCX meaning:
+
+| Setting | In the DOCX |
+|---|---|
+| `contents.enabled`, `contents.depth` | A live `TOC \o "1-<depth>" \h \z \u` field after the title block, with the contents' entries as its cached result (`toc 1` to `toc 5` paragraphs, a dotted right tab at the text width, a `PAGEREF` page number Word fills in when it updates the field). The contents label is a `Contents Heading` paragraph: no outline level, no number, so never an entry |
+| `contents.attachments` | The attachments heading and each attachment title are paragraphs of the styles `Attachments Heading` and `Attachment Title`, which carry an outline level, so Word's TOC lists them (`\u`); without it they are body text for the contents. At `contents.depth: 1` the titles are listed with the headings (the first level), not under the attachments heading |
+| `attachments.separator` | `page-break`: a page break before the attachments part and between attachments (the paragraph property "page break before", so no empty paragraph or blank page is left); `rule`: a line above each attachment; `none`: nothing |
+| `signatures.enabled` | Borderless tables with a signing line, kept together on one page as far as one page allows. They follow the last attachment, as in the HTML. A name, title, date or place row whose label is blanked (`labels.signature_*`) and whose value is empty is left out, as the plain-text writer leaves it out |
+| `title_block.parties`, `title_block.effective_date`, `title_block.version` | The header rows and the parties, as borderless tables |
+
+The numbering and wording settings are the same as in the other formats; what they become in the file:
+
+| Setting | In the DOCX |
+|---|---|
+| `numbering.*` | The multilevel list the heading styles are linked to: `counter` is the level's number format, `label` its level text (`{n}` the level's own counter, `{path}` the counters of the levels above it joined as the label says). A label with a literal `%` before a digit or a counter cannot be written as a level text and is a style error for DOCX. With `scheme: none` the headings are not numbered |
+| `enumeration.*`, `paragraphs.*` | The lists of items and the numbered paragraphs, one numbering definition for each kind. A label that shows `{section}` can be live only on the heading list's next level, and is otherwise written without it and reported (`render-docx-section-label`) |
+| `references.format`, `numbering.levels[].ref`, `enumeration.levels[].ref` | The literal text around the `REF` fields of a cross-reference and between them; the cached result of the field is what Word draws. See `docx.reference_text_switch` |
+| `definitions.style`, `definitions.term_style` | The character styles of a defining occurrence and of a `{{term:}}` reference |
+| `typography.justify` | The justification of `Normal` |
+| `locale`, `values.*`, `placeholders.*`, `template_view.*`, `labels.*` | As in the other formats: dates, amounts, blanks, choices and labels are written as text (they are not numbers Word can compute) |
+| `html.max_width`, `html.extra_css` | Not read |
+
+The styles for this matter (`Title Block Text`, `Party Side`, `Party Name`, `Attachments Heading`, `Attachment Title`,
+`Attachment File`, `Signature Side`, `Signature Text`, `Signature Line`) are Word styles like the others: a lawyer who
+changes one in Word changes every paragraph that uses it.
 
 ### Trusted input
 
@@ -231,7 +334,8 @@ with `RenderOptions(untrusted=True, document_root=...)` (`legaldown-render --unt
 - `html.extra_css` must be empty.
 - `values.date` is `short`, `medium`, `long` or `full`, not a pattern.
 - Every free-text setting (`name`, `labels.*`, `references.format`, `placeholders.blank`,
-  `template_view.*`, and the `label` and `ref` of `numbering`, `enumeration` and `paragraphs` levels) is
+  `template_view.*`, `page.header.*`, `page.footer.*`, and the `label` and `ref` of `numbering`,
+  `enumeration` and `paragraphs` levels) is
   at most 200 characters, since it is repeated wherever the output shows it. NUL and lone surrogates
   (which no output encoding can write) are refused in any text.
 - YAML text is at most 64 KiB, may not use aliases, and a number in it is at most 32 characters.
@@ -253,7 +357,8 @@ how a firm adds a language.
 
 - Should styles be distributable as Python packages, discovered through entry points, so a firm
   can `pip install` its house style?
-- The DOCX writer will need a `docx` section that maps onto Word styles in a reference document.
-  Its shape is decided with that writer.
+- Should a DOCX start from a reference document (a `.dotx` or `.docx` with the firm's styles), as Pandoc
+  does? The `docx` section is deliberately small for now: the writer generates its styles from the
+  template, so a house style stays one YAML file.
 - Should `references.format` gain a generated prefix ("Section 4.2")? The word would have to come
   from `labels`, and it could double up with source text that already says "Section".

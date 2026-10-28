@@ -75,6 +75,54 @@ jobs:
         env:
           LEGALDOWN_SPEC_DIR: .legaldown-spec
 
+  docx:
+    # The DOCX writer is checked against the ISO/IEC 29500 schemas (fetched, not stored: tests/schemas/README.md)
+    # and against LibreOffice, which opens each document, updates its fields and says what it shows
+    # (tests/lo/uno_export.py runs under the system Python, which python3-uno provides, not the virtual
+    # environment's). A missing tool fails the job instead of skipping the tests.
+    name: DOCX (schemas and LibreOffice)
+    runs-on: ubuntu-latest
+    env:
+      LEGALDOWN_REQUIRE_DOCX_TOOLS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check out the LegalDown specification (its documents are validated too)
+        uses: actions/checkout@v7
+        with:
+          repository: ForLegalAI/LegalDown
+          ref: ${{ env.LEGALDOWN_SPEC_REF }}
+          path: .legaldown-spec
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice-writer python3-uno
+      - name: Show the versions of the system and of LibreOffice
+        run: |
+          lsb_release -ds || cat /etc/os-release
+          soffice --version
+      - run: pip install -e ".[dev]"
+      - name: Cache the OOXML schemas
+        id: schemas
+        uses: actions/cache@v6
+        with:
+          path: tests/schemas/ooxml
+          key: ooxml-schemas-${{ hashFiles('tests/schemas/fetch.py') }}
+      - if: steps.schemas.outputs.cache-hit != 'true'
+        run: python tests/schemas/fetch.py
+      - run: pytest -q -m ooxml_schema
+        env:
+          LEGALDOWN_SPEC_DIR: .legaldown-spec
+      # The acceptance corpus (tests/test_docx_acceptance.py) is part of both runs; it needs the specification's documents
+      - run: pytest -q -m libreoffice
+        env:
+          LEGALDOWN_SPEC_DIR: .legaldown-spec
+      - run: pytest -q -m "acceptance and not libreoffice and not ooxml_schema"
+        env:
+          LEGALDOWN_SPEC_DIR: .legaldown-spec
+
   validator-main:
     # Surfaces changes in legaldown-validator's model before they are released
     # (docs/decisions/0001). Informational: a failure here is a heads-up.

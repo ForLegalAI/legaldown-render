@@ -209,7 +209,7 @@ def _load(style: Any, overrides: Mapping[str, Any] | None, trusted: bool) -> Sty
         expanded = _expand_dotted(overrides, trusted)
         _refuse_meta_overrides(expanded)
         data = _merge(data, expanded)
-    return _build(data, source, trusted)
+    return _build(data, source if trusted else _UNTRUSTED_SOURCE, trusted)
 
 
 def style_to_dict(style: Style) -> dict[str, Any]:

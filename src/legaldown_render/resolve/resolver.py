@@ -85,7 +85,9 @@ from ..tree import (
     Inline,
     Link,
     List,
+    ListFamily,
     ListItem,
+    NumberingFormats,
     Paragraph,
     PartyInfo,
     Quote,
@@ -105,7 +107,7 @@ from ..tree import (
     unlinked,
 )
 from ..urls import file_reference_problem, is_empty_path, is_link_target, printable
-from .numbering import RENUMBERED, extend, fill, format_counter, heading_levels
+from .numbering import RENUMBERED, extend, fill, format_counter, formats_of, heading_levels
 from .values import DURATION_UNITS, Formatter
 
 #: Definition anchors are prefixed with a character no identifier can hold,
@@ -224,6 +226,9 @@ class _Target:
     enumerated: bool = True
     #: The numbered unit the anchor is on, for render-ref-ambiguous.
     slot: _Slot | None = None
+    #: The id (``Section.unit``, ``ListItem.unit``, ``Paragraph.unit``) of the
+    #: section, item or paragraph the anchor is on.
+    unit: str | None = None
     #: The section the anchor is in (a section's own index), None in the preamble.
     section_index: int | None = None
     #: For an item or paragraph: the (``ref`` template, counter text) of each
@@ -315,6 +320,8 @@ class Resolver:
         self._section_texts: list[str] = []
         # The section being structured, for the targets it holds.
         self._section_index: int | None = None
+        # How many item and paragraph unit ids have been given out (see _unit).
+        self._units = 0
         self.attachment_anchors: dict[str, str | None] = {}
         self.section_presences: list[Presence] = []
 
@@ -350,6 +357,8 @@ class Resolver:
             title = resolve(self.tree.title)
         with self._at(self.key_line("subtitle")):
             subtitle = resolve(self.tree.subtitle)
+        effective_date = self._effective_date()
+        version = self._version()
         resolved = replace(
             self.tree,
             title=title,
@@ -357,12 +366,15 @@ class Resolver:
             locale=self.formatter.tag,
             preamble=preamble,
             sections=sections,
-            header=self._header(),
+            header=self._header(effective_date, version),
+            version=plain_text(version),
+            effective_date=plain_text(effective_date),
             sides=self._sides() if self.style.title_block.parties else (),
             attachments=attachments,
             attachments_label=self.labels.attachments or "",
             contents=self._contents(sections, attachments),
             contents_label=self.labels.contents or "",
+            formats=self._formats(),
             colon=self.labels.colon or "",
             attachments_anchor=ATTACHMENTS_ANCHOR if attachments else "",
             signatures=self._signatures(),
@@ -383,6 +395,7 @@ class Resolver:
         """The preamble and the sections, numbered and labelled; under the
         ``none`` scheme with the section *designations* worked out by
         :meth:`_designate`, or else the headings' text alone."""
+        self._units = 0  # the same ids on every pass: they follow document order
         sections = self._number_sections(designations)
         self._section_index = None
         preamble = tuple(self._structure(block, section=None, depth=0, presence=ALWAYS) for block in self.tree.preamble)
@@ -392,6 +405,17 @@ class Resolver:
             out.append(replace(section, blocks=self._structure_section(section, presence)))
         self._section_index = None
         return tuple(out), preamble
+
+    def _formats(self) -> NumberingFormats:
+        """The numbering formats in effect (``RenderTree.formats``): those the
+        labels and designations were made with (:meth:`_number_sections`,
+        :meth:`_structure_list`, :meth:`_number_paragraph`)."""
+        return formats_of(self.style)
+
+    def _unit(self) -> str:
+        """The unit id of the next item or paragraph, in document order."""
+        self._units += 1
+        return f"u{self._units}"
 
     # -- designations under the none scheme (§13.3) ------------------------------
 
@@ -551,7 +575,7 @@ class Resolver:
             return ()
         entries = [
             ContentsEntry(section.level, section.label, unlinked(section.title), section.anchor,
-                          section.condition_label)
+                          section.condition_label, section.unit)
             for section in sections
             if section.level <= settings.depth
         ]
@@ -643,6 +667,8 @@ class Resolver:
         """
         levels = heading_levels(self.style.numbering)
         presences: dict[int, Presence] = {}  # level -> presence of the open section
+        open_units: list[tuple[int, str]] = []  # (level, unit) of the sections a section is inside
+        first_unit: dict[str, str] = {}  # section number -> unit of the first section that has it
         out: list[Section] = []
         for index, (section, indexed) in enumerate(zip(self.tree.sections, self.result.index.sections, strict=True)):
             # The heading's own level, clamped to 1-5 (§4.1), decides which
@@ -672,9 +698,19 @@ class Resolver:
             # Sections with one number are alternatives (the validator's).
             slot = _Slot(_SECTIONS, indexed.number, presences[level], "section", section.identifier)
             self._record(designation, slot)
-            self._register(section.identifier, _Target(designation, anchor, slot=slot, section_index=index))
-            out.append(replace(section, level=min(len(parts), 5), label=label, designation=designation,
-                               anchor=anchor))
+            unit = _section_unit(index)
+            self._register(section.identifier, _Target(designation, anchor, slot=slot, section_index=index, unit=unit))
+            rendered = min(len(parts), 5)
+            # The section a section is under is the nearest one above it with
+            # a smaller number of parts: a skipped level is no section.
+            while open_units and open_units[-1][0] >= rendered:
+                open_units.pop()
+            parent = open_units[-1][1] if open_units else None
+            open_units.append((rendered, unit))
+            first = first_unit.setdefault(indexed.number, unit)
+            out.append(replace(section, level=rendered, label=label, designation=designation, anchor=anchor,
+                               unit=unit, number=None if self.textual else parts[-1], parent_unit=parent,
+                               shares_number_with=first if first != unit and not self.textual else None))
         return out
 
     def _presence(self, condition: str) -> Presence:
@@ -730,8 +766,9 @@ class Resolver:
             if isinstance(block, Paragraph) and block.top_level:
                 # Alternative paragraphs share a number, as sections do (§15.8).
                 own = self._own_presence(block.condition, presence)
-                number = paragraphs.next(block.anchor_id, own)
-                block = self._number_paragraph(block, section, paragraphs, number,
+                unit = self._unit()
+                number, shares = paragraphs.next(block.anchor_id, own, unit)
+                block = self._number_paragraph(block, section, paragraphs, number, unit, shares,
                                                presence if own is None else own)
             out.append(self._structure(block, section=section, depth=0, presence=presence))
         return tuple(out)
@@ -743,7 +780,7 @@ class Resolver:
         return enclosing | own if own else None
 
     def _number_paragraph(self, block: Paragraph, section: Section, counter: _Counter, number: int,
-                          presence: Presence) -> Paragraph:
+                          unit: str, shares: str | None, presence: Presence) -> Paragraph:
         numbering = self.style.paragraphs
         base = section.designation or ""
         if numbering.numbered:
@@ -753,14 +790,17 @@ class Resolver:
             label = fill(fmt.label, n=n, section=base, path=designation)
             slot = _Slot(counter, number, presence, "paragraph", block.anchor_id)
             target = _Target(designation, None, slot=slot, section_index=self._section_index,
-                             parts=((fmt.ref, n),))
+                             parts=((fmt.ref, n),), unit=unit)
             self._record(designation, slot)
         else:
-            label, target = None, _Target(base, None, enumerated=False, section_index=self._section_index)
+            label = None
+            target = _Target(base, None, enumerated=False, section_index=self._section_index, unit=unit)
         anchor = self._anchor(block.anchor_id)
         if block.anchor_id:
             self._register(block.anchor_id, replace(target, anchor=anchor))
-        return replace(block, label=label, anchor=anchor)
+        return replace(block, label=label, anchor=anchor, unit=unit, parent_unit=section.unit,
+                       number=number if numbering.numbered else None,
+                       shares_number_with=shares if numbering.numbered else None)
 
     def _structure(self, block: Block, *, section: Section | None, depth: int, presence: Presence,
                    quoted: bool = False) -> Block:
@@ -769,7 +809,8 @@ class Resolver:
         match block:
             case List():
                 return self._structure_list(block, section=section, depth=depth,
-                                            parent=section.designation if section else "", presence=presence,
+                                            parent=section.designation if section else "",
+                                            parent_unit=section.unit if section else None, presence=presence,
                                             quoted=quoted)
             case Quote(blocks=blocks):
                 return replace(block, blocks=tuple(self._structure(child, section=section, depth=depth,
@@ -784,20 +825,25 @@ class Resolver:
                 return block
 
     def _structure_list(self, block: List, *, section: Section | None, depth: int, parent: str,
-                        presence: Presence, counters: dict[tuple[str, str] | None, _Counter] | None = None,
+                        parent_unit: str | None, presence: Presence,
+                        counters: dict[tuple[str, str] | None, _Counter] | None = None,
                         quoted: bool = False, parts: tuple[tuple[str, str], ...] = ()) -> List:
         """*block* numbered under *parent*. Sibling lists nested in the same
         item share *counters*, one per way of writing a designation (counter
         style and reference form): a second list whose designations would
-        read like the first's goes on from it, so none repeats."""
+        read like the first's goes on from it, so none repeats. *parent_unit* is
+        the unit of *parent*: the section, or the item the list is nested in."""
         enumeration = self.style.enumeration
         fmt: LevelFormat | None
+        family: ListFamily = "enumerated"
         if block.ordered and enumeration.ordered == "renumber":
-            fmt = RENUMBERED
+            fmt, family = RENUMBERED, "renumber"
         elif block.ordered or enumeration.enabled:
             fmt = enumeration.levels[depth % len(enumeration.levels)] if enumeration.levels else None
         else:
             fmt = None
+        if fmt is None:
+            family = "bullet"
         base = section.designation if section else ""
         items: list[ListItem] = []
         if counters is None:
@@ -807,7 +853,8 @@ class Resolver:
             counter = counters.setdefault(key, _Counter(self._exclusive))
             counter.new_list()
         for item in block.items:
-            index = counter.next(item.anchor_id, self._own_presence(item.condition, presence))
+            unit = self._unit()
+            index, shares = counter.next(item.anchor_id, self._own_presence(item.condition, presence), unit)
             # An item's nested blocks are present only when the item is.
             inner = presence | self._presence(item.condition)
             if fmt is not None:
@@ -815,27 +862,31 @@ class Resolver:
                 designation = extend(parent, fill(fmt.ref, n=n, section=base), textual=self.textual)
                 label = fill(fmt.label, n=n, section=base, path=designation)
                 item_parts = (*parts, (fmt.ref, n))
-                target = _Target(designation, None, section_index=self._section_index, parts=item_parts)
+                target = _Target(designation, None, section_index=self._section_index, parts=item_parts,
+                                 unit=unit)
                 if not quoted:
                     slot = _Slot(counter, index, inner, "item", item.anchor_id)
                     target = replace(target, slot=slot)
                     self._record(designation, slot)
             else:
                 designation, label, item_parts = parent, None, parts
-                target = _Target(base, None, enumerated=False, section_index=self._section_index)
+                target = _Target(base, None, enumerated=False, section_index=self._section_index, unit=unit)
             anchor = self._anchor(item.anchor_id)
             if item.anchor_id and section is not None:
                 self._register(item.anchor_id, replace(target, anchor=anchor))
             siblings: dict[tuple[str, str] | None, _Counter] = {}
             children = tuple(
-                self._structure_list(child, section=section, depth=depth + 1, parent=designation, presence=inner,
-                                     counters=siblings, quoted=quoted, parts=item_parts)
+                self._structure_list(child, section=section, depth=depth + 1, parent=designation,
+                                     parent_unit=unit, presence=inner, counters=siblings, quoted=quoted,
+                                     parts=item_parts)
                 if isinstance(child, List)
                 else self._structure(child, section=section, depth=depth + 1, presence=inner, quoted=quoted)
                 for child in item.blocks
             )
-            items.append(replace(item, blocks=children, label=label, anchor=anchor))
-        return List(block.ordered, tuple(items), enumerated=fmt is not None)
+            items.append(replace(item, blocks=children, label=label, anchor=anchor, unit=unit,
+                                 number=index if fmt is not None else None, parent_unit=parent_unit,
+                                 shares_number_with=shares if fmt is not None else None))
+        return List(block.ordered, tuple(items), enumerated=fmt is not None, family=family, depth=depth, format=fmt)
 
     # -- blocks ---------------------------------------------------------------
 
@@ -962,7 +1013,8 @@ class Resolver:
                 designation = _compose(target.parts, self._cut_text(self._section_texts[target.section_index]))
             else:
                 designation = self._cut_text(designation)
-        return CrossRef(self._reference_text(designation), target.anchor or "")
+        return CrossRef(self._reference_text(designation), target.anchor or "", target.unit,
+                        None if target.section_index is None else _section_unit(target.section_index))
 
     def _cut_text(self, text: str) -> str:
         """*text*, a heading's designation, as a reference shows it: at most
@@ -1332,15 +1384,28 @@ class Resolver:
     def _frontmatter(self, text: str) -> tuple[Inline, ...]:
         return self._resolve_inlines(plain_inlines(text))
 
-    def _header(self) -> tuple[tuple[str, tuple[Inline, ...]], ...]:
+    def _effective_date(self) -> tuple[Inline, ...]:
+        """The effective date as the title block shows it (a valid date formatted, any
+        other text resolved), or nothing when the document has none."""
+        if not self.metadata.effective_date:
+            return ()
+        with self._at(self.key_line("effective_date")):
+            return self._date_or_text(self.metadata.effective_date)
+
+    def _version(self) -> tuple[Inline, ...]:
+        """The version as the title block shows it, or nothing when the document has none."""
+        if not self.metadata.version:
+            return ()
+        with self._at(self.key_line("version")):
+            return self._frontmatter(self.metadata.version)
+
+    def _header(self, effective_date: tuple[Inline, ...],
+                version: tuple[Inline, ...]) -> tuple[tuple[str, tuple[Inline, ...]], ...]:
         rows: list[tuple[str, tuple[Inline, ...]]] = []
-        metadata = self.metadata
-        if self.style.title_block.effective_date and metadata.effective_date:
-            with self._at(self.key_line("effective_date")):
-                rows.append((self.labels.effective_date or "", self._date_or_text(metadata.effective_date)))
-        if self.style.title_block.version and metadata.version:
-            with self._at(self.key_line("version")):
-                rows.append((self.labels.version or "", self._frontmatter(metadata.version)))
+        if self.style.title_block.effective_date and effective_date:
+            rows.append((self.labels.effective_date or "", effective_date))
+        if self.style.title_block.version and version:
+            rows.append((self.labels.version or "", version))
         return tuple(rows)
 
     def _date_or_text(self, value: str) -> tuple[Inline, ...]:
@@ -1557,6 +1622,11 @@ _HANDLERS: dict[str, Callable[[Resolver, Directive, str], Inline | None]] = {
 }
 
 
+def _section_unit(index: int) -> str:
+    """The unit id of the section at *index* in document order (``Section.unit``)."""
+    return f"s{index + 1}"
+
+
 #: What numbers sections, in a unit's slot: the validator (its numbers).
 _SECTIONS = object()
 
@@ -1565,14 +1635,18 @@ class _Counter:
     """Numbers sibling units in order (§13.2, §15.8). A unit joins the
     previous unit's number when it is an alternative to it: the same
     identifier, and a presence that excludes the presence of every unit
-    already holding that number (§15.4). Only adjacent units are compared,
-    as the validator does for sections."""
+    already holding that number (§15.4). Only consecutive units *of this
+    counter* are compared, as the validator does for sections: for the
+    top-level paragraphs of a section, a list or table between two of them
+    does not separate them."""
 
     def __init__(self, exclusive: Callable[[Presence, Presence], bool]) -> None:
         self.exclusive = exclusive
         self.count = 0
         self.identifier = ""
         self.holders: list[Presence] = []
+        # The unit that first held the current number (see next).
+        self.first_unit: str | None = None
 
     def new_list(self) -> None:
         """Go on counting in another list: its first unit is no alternative
@@ -1580,17 +1654,20 @@ class _Counter:
         self.identifier = ""
         self.holders = []
 
-    def next(self, identifier: str, presence: Presence | None) -> int:
-        """The number for the next unit. *presence* is None for a unit with
-        no valid condition of its own, which is never an alternative."""
+    def next(self, identifier: str, presence: Presence | None, unit: str) -> tuple[int, str | None]:
+        """The number for the next unit, *unit*, and the unit that first held
+        it when *unit* is a later alternative, else None. *presence* is None
+        for a unit with no valid condition of its own, which is never an
+        alternative."""
         if (presence is not None and identifier and identifier == self.identifier
                 and all(self.exclusive(holder, presence) for holder in self.holders)):
             self.holders.append(presence)
-            return self.count
+            return self.count, self.first_unit
         self.count += 1
         self.identifier = identifier if presence is not None else ""
         self.holders = [presence] if presence is not None else []
-        return self.count
+        self.first_unit = unit
+        return self.count, None
 
 
 class _Slot(NamedTuple):

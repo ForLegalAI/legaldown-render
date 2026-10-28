@@ -90,17 +90,54 @@ Rendering what other people send, and reporting problems where they are. No new 
   self-contained
 - **Project.** CI also runs on Windows, and publishing to PyPI waits for CI
 
-### v0.5 — DOCX
+### v0.5 — DOCX (implemented; released after the Word checks)
 
-- `docx` writer behind the `[docx]` extra
-- To decide first: static numbers, or Word-native numbering with `REF` fields
-  ([ADR 0004](decisions/0004-html-first.md))
+A document lawyers can edit: in the .docx every number, cross-reference, the table of contents and
+the page numbers are live Word features (numbering definitions and fields), and the renderer's
+values appear only as the cached results of fields. Decided in
+[ADR 0008](decisions/0008-docx-word-native.md), which also settles the question 0004 left open.
+
+- **The writer.** A `docx` writer in the base package, written with the standard library only (no `[docx]`
+  extra): the OOXML parts, styles generated from the style template, settings (compatibility mode 15,
+  `w:updateFields`), page setup, running headers and footers with `PAGE`/`NUMPAGES` fields, document
+  properties, and deterministic bytes. The body is every block and inline: headings, paragraphs, lists, quotes,
+  drafting notes, code, tables with a repeated header row, rules, links, defined terms, blanks and choices
+  (images as their alt text), then the front and back matter: the title block, a live `TOC` field with cached
+  entries and `PAGEREF` page numbers, the attachments and the signature blocks
+- **The planner** (`resolve/docx_plan.py`): the render tree carries the numbering structure of every unit, and a pure
+  planning step maps it to Word numbering (the heading list, list families, paragraphs, qualified `5.1` labels on the
+  heading list's levels, alternatives that share a number as `numId 0` paragraphs with a `REF` field, restarts by
+  structure or by a fixed value), to bookmarks, and to the fields of every `{{ref:}}` (the designation cover), with the
+  cached results taken from a model of Word's counters. Where Word draws differently from the renderer, the render
+  reports a `render-docx-*` diagnostic (listed in [`CONFORMANCE.md`](../CONFORMANCE.md))
+- **Style settings.** `page.header` and `page.footer` (the HTML writer ignores them for now),
+  `docx.update_fields_on_open` and `docx.reference_text_switch`; settings Word cannot express are a `StyleError`
+  for DOCX only
+- **Verification.** Every part validated against the ISO/IEC 29500 schemas (fetched in CI, not stored), well-formedness
+  fuzzing, determinism, and LibreOffice as the oracle through UNO (a `docx` CI job): the numbers and references
+  unit by unit with the cached results made wrong on purpose, whole documents against the plain-text writer's
+  output under three styles, and edit-then-update (a heading, an item, a numbered paragraph inserted, a clause
+  deleted, as a lawyer does). The manual Word checklist in `.github/PUBLISHING.md` covers what only Word shows
+- **Behaviour changes this brings.**
+  - `-o -` writes to standard output for every format (it used to create a file named `-`).
+  - `.docx` is a writable extension; a DOCX with no `-o` goes to standard output when that is not a terminal, and is
+    never written to a terminal. `--fragment` with DOCX is a usage error.
+  - `render(..., format="docx")` returns the file as `RenderResult.binary` (bytes); `RenderResult.output` stays
+    `str` and is empty for it. `FORMATS` gains `docx`.
+  - `RenderTree` gains fields for the numbering structure (`formats`, and on sections, list items and
+    paragraphs `unit`, `number`, `parent_unit`, `shares_number_with`; `List.family`, `List.depth`, `List.format` and `List.start`; `CrossRef.target_unit`,
+    `section_unit`) and `version` and `effective_date` (plain text, filled whether or not the title block shows
+    them). HTML and plain-text output are byte-identical to 0.4 (the goldens are unchanged).
+  - New `render-docx-*` diagnostics for DOCX renders only.
+- **Next.** Running the manual Word checklist, which finds what only Word shows; its findings are recorded in the
+  release notes. Whether the writer then claims §13.6 for DOCX is decided in `CONFORMANCE.md`
 
 ### v0.6 — PDF
 
 - Choose the engine ([ADR 0004](decisions/0004-html-first.md)). The leading option is WeasyPrint
   on the HTML writer; its print stylesheet already exists
-- Running headers and footers, and page numbers, from the style's `page` settings
+- Running headers and footers, and page numbers, from the style's `page` settings (`page.header` and
+  `page.footer` exist since the DOCX writer; the HTML writer's print stylesheet does not read them yet)
 
 ### Later — Full level
 

@@ -387,6 +387,11 @@ def test_an_override_that_cannot_hold_keys_is_not_quoted() -> None:
     assert SECRET in str(caught.value)
 
 
+def test_an_untrusted_default_style_is_named_like_any_other_untrusted_style() -> None:
+    assert refused("default", {"page.margin": "9" * 400 + "mm"}).source == "'untrusted style'"
+    assert refused(None, {"page.margin": "9" * 400 + "mm"}).source == "'untrusted style'"
+
+
 def test_the_style_object_name_is_not_quoted() -> None:
     error = refused(Style(name=SECRET, typography=Typography(font_size=SECRET)))
     assert SECRET not in str(error)
