@@ -251,7 +251,7 @@ references show; the Warning says so. Every other heading reads exactly as its d
 |---|---|
 | `TextWriter` | Plain text (§13.6). A soft line break inside a paragraph is a space, a hard break a new line, and lists are indented with their labels, one quote stays one quote, and tables keep escaped cells and alignment. It takes the style's `attachments.separator` (default `page-break`; `rule` and `page-break` both print `---` before the attachments heading and between attachments). It is the **test oracle** for resolution |
 | `HtmlWriter` | A self-contained HTML5 page, or with `standalone=False` just the `<article>`. Semantic markup, with labels as real text rather than CSS counters, and a stylesheet generated from the style's presentation settings, including print rules |
-| `DocxWriter` | A `.docx` file, as bytes (`RenderResult.binary`; `output` is empty). OOXML written directly with `zipfile` and `xml.etree` ([ADR 0008](decisions/0008-docx-word-native.md)): the parts, the styles generated from the style template, settings, page setup, running headers and footers, properties, a deterministic ZIP, and one sanitiser for every text and attribute. **Interim body:** the title, headings (`heading N`) and plain-text paragraphs with no numbers; the numbering definitions, cross-reference fields and table of contents that make the numbers live in Word (ADR 0008) follow. The DOCX-only settings are converted and checked before rendering (`style/docx.py`) |
+| `DocxWriter` | A `.docx` file, as bytes (`RenderResult.binary`; `output` is empty). OOXML written directly with `zipfile` and `xml.etree` ([ADR 0008](decisions/0008-docx-word-native.md)): the parts, the styles generated from the style template, settings, page setup, running headers and footers, properties, a deterministic ZIP, and one sanitiser for every text and attribute. **The body is laid out as a `DocxPlan` says** (`resolve/docx_plan.py`, the planner's data model): `numbering.xml` from its abstract numberings and nums; each section, list item and top-level paragraph gets `w:numPr`, `w:ind`, bookmarks and, for a later alternative that shares a number (§15.8), `numId` 0 and its number as `REF` fields, as its `UnitPlan` says; a `{{ref:}}` is the literal text and `REF` fields (cached results as planned) of its `RefPlan`; a `{{term:}}` or an `{{attach:}}` is an internal hyperlink (or a `REF` for an attachment's title), a defined term a bookmark; every block (lists with their continuation blocks, quotes, drafting notes, code, tables with a repeated header row, rules) and inline (emphasis, strong, code, external links through relationships, breaks, images as alt text, blanks, choices, failure markers) has its Word form. The writer decides none of it (ADR 0003) and a field that points at a bookmark the document does not hold is a bug in the plan (`InternalError`). **Interim, until the planner is wired in:** the writer is given a plan with no numbering (`writers/docx/interim_plan.py`), so the file has no numbers or `REF` fields, and the title block, table of contents, attachments and signature blocks are not written yet. The DOCX-only settings are converted and checked before rendering (`style/docx.py`) |
 | PDF | Planned ([ADR 0004](decisions/0004-html-first.md)) |
 
 ## Package layout
@@ -268,6 +268,7 @@ src/legaldown_render/
 ├── resolve/
 │   ├── resolver.py    stage 4
 │   ├── numbering.py   counters, the §13.1 scheme presets, label templates
+│   ├── docx_plan.py   the DOCX plan: the data the planner hands to the DOCX writer
 │   └── values.py      Babel formatting of dates, money, durations
 ├── style/
 │   ├── model.py       the style dataclasses (every field has a default)
@@ -278,7 +279,9 @@ src/legaldown_render/
 └── writers/
     ├── html.py, text.py
     └── docx/          the DOCX writer: ooxml.py (sanitiser, builders), package.py (parts, relationships, ZIP),
-                       styles.py, settings.py, headers.py, properties.py, body.py (interim)
+                       styles.py, settings.py, headers.py, properties.py, numbering.py (numbering.xml
+                       from the plan), body.py (blocks, numbered paragraphs, tables), runs.py (inlines, fields,
+                       hyperlinks), interim_plan.py (the plan with no numbering, temporary)
 ```
 
 ## Dependencies
@@ -490,7 +493,8 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_errors.py` | The exception hierarchy and pickling of errors |
 | `tests/test_escaping.py` | Control characters from a document or the command line never reach a diagnostic or standard error unescaped |
 | `tests/test_docx_style.py` | `page.header`, `page.footer` and `docx.*`: validation, and how CSS lengths, colours and fonts become Word's units, with the StyleErrors only DOCX has |
-| `tests/test_docx_package.py` | The OOXML package: parts, relationships, content types, settings order, styles, page setup, headers and footers, properties, the interim body, determinism, the sanitiser and builders, the API and command line |
+| `tests/test_docx_package.py` | The OOXML package: parts, relationships, content types, settings order, styles, page setup, headers and footers, properties, the body without a plan, determinism, the sanitiser and builders, the API and command line |
+| `tests/test_docx_body.py` | The DOCX body from hand-made plans: numbering definitions, `w:numPr`/`w:ind`/alternatives, bookmarks and `REF` fields with cached results, hyperlinks, every inline and block, escaping, schema validity (marker `ooxml_schema`) and a LibreOffice round trip of headings, nested lists and references whose cached values are wrong on purpose (marker `libreoffice`) |
 | `tests/test_docx_escaping.py` | Well-formedness of every part for any text, with a seeded fuzz and the characters XML cannot carry |
 | `tests/test_docx_validation.py` | Every part of every generated document against the ISO/IEC 29500-4 schemas (marker `ooxml_schema`; needs lxml and `python tests/schemas/fetch.py`) |
 | `tests/test_docx_libreoffice.py` | The documents opened in LibreOffice through UNO (`tests/lo/uno_export.py`), fields updated: the words in order, header, footer, page count (marker `libreoffice`; skipped without `soffice` and `python3-uno`) |
