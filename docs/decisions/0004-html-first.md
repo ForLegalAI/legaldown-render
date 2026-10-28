@@ -41,3 +41,6 @@ The leading option is WeasyPrint. It will be decided with a spike when v0.4 star
 - 2026-10-03: v0.3 became the release built on legaldown-validator 0.4.0, so `docx` moves to
   v0.4 and `pdf` to v0.5 (see the [roadmap](../roadmap.md)). The open questions' "v0.3" (DOCX
   numbering) and "v0.4" (PDF spike) now read v0.4 and v0.5.
+- 2026-10-28: v0.4 became a hardening release (see the [roadmap](../roadmap.md)), so `docx`
+  moves to v0.5 and `pdf` to v0.6. The open questions now read v0.5 (DOCX numbering) and v0.6
+  (PDF spike).
