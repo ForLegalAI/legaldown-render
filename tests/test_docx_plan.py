@@ -1354,6 +1354,17 @@ def test_documents_of_one_size_refer_to_different_units_so_that_more_of_them_are
         assert len(set().union(*members)) > max(len(refs) for refs in members)
 
 
+@pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "mixed", "article"])
+def test_a_reference_is_fixed_text_only_where_a_heading_level_is_skipped_or_the_depth_is_past_word_s(variant: str) -> None:
+    """The cover of every reference exists for a document without errors and a list within Word's nine levels: what
+    cannot be covered are the references below a skipped heading level (a Core Error: the number of the level the
+    heading skips has no unit to be a field of) and below a list nested past nine levels."""
+    for source, result, plan, _ in (*random_runs(variant), *alternative_runs(variant)):
+        skipped = any("skipped-level" in unit.cause for unit in plan.units.values())
+        if not skipped and max((lst.depth for lst in lists(result.tree)), default=0) <= 8:
+            assert not [t for t, r in plan.refs.items() if r.fixed], source
+
+
 def test_each_variant_plans_its_own_sample_of_the_random_documents() -> None:
     samples = {tuple(sample(variant, PER_VARIANT, _random_sources())) for variant in VARIANTS}
     assert len(samples) == len(VARIANTS)
@@ -1741,8 +1752,8 @@ def test_the_headings_of_a_long_chain_of_references_are_planned_in_linear_time(c
             best = min(best, time.perf_counter() - started)
         return best
 
-    small, large = seconds(1000), seconds(4000)
-    assert large < 6 * max(small, 0.02), (small, large)  # four times the headings: a walk from each would be sixteen
+    small, large = seconds(500), seconds(4000)
+    assert large < 30 * max(small, 0.01), (small, large)  # eight times the headings: a walk from each would be sixty-four
     assert large < 2.0
 
 

@@ -1241,12 +1241,16 @@ class _Planner:
             self.item_units.add(unit)
         peek = self.sim.peek(num.id, ilvl)
         if node.shares_number_with is not None and peek != node.number:
-            holder = self.canon.get(node.shares_number_with, node.shares_number_with)
-            self.canon[unit] = holder
-            self.alts[unit] = (holder, abstract.levels[ilvl].suff)
-            self.add(node, kind, None, ilvl, explicit=True, cause=(*cause, "alternative"), holder=holder,
-                     ind=self.indent(abstract, ilvl, unit, parent, alternative=True))
-            return num
+            # Word would count on, and the number is the one the level holds now: the unit that last counted the level
+            # holds it, and the alternative shows that unit's number (a unit that shares a number but finds another
+            # in the level, because a list of the heading list counted in between, is restarted below).
+            count, holder = self.sim.current(num.id, ilvl)
+            if count == node.number and isinstance(holder, str) and holder in self.units:
+                self.canon[unit] = holder
+                self.alts[unit] = (holder, abstract.levels[ilvl].suff)
+                self.add(node, kind, None, ilvl, explicit=True, cause=(*cause, "alternative"), holder=holder,
+                         ind=self.indent(abstract, ilvl, unit, parent, alternative=True))
+                return num
         used = num
         if peek != node.number:
             used = self.new_num(abstract, ilvl, node.number)
@@ -1260,22 +1264,23 @@ class _Planner:
                     "items added or removed before it.", node.line)
         step = self.sim.step(used.id, ilvl, unit)
         if kind != "section":
-            ancestors = {unit}
+            # The counters of the unit's own chain: the units it stands under, and every part of the number of the
+            # section (a skipped heading level counts, as the ghost of the heading that skipped it).
+            chain: set[object] = {t.owner for t in self.desig.get(parent or "", ()) if isinstance(t, Count)}
             above = parent
             while above is not None:
-                ancestors.add(self.canon.get(above, above))
+                chain.add(self.canon.get(above, above))
                 above = self.parent.get(above)
             if "label-fallback" not in cause and any(
-                    isinstance(t, Count) and (isinstance(t.owner, Ghost) or t.owner not in ancestors)
-                    for t in step.tokens):
+                    isinstance(t, Count) and t.owner != unit and t.owner not in chain for t in step.tokens):
                 # The label shows the counter of a level of its list that no unit of its own chain holds: Word shows
                 # a level nothing numbers as 0, or the counter of whatever last counted it, and the resolver's label
                 # is that of the enclosing unit. Not left to Word's reading.
                 cause += ("label-fallback",)
                 self.report("render-docx-section-label", "warning",
                             f"The label of {word}s '{printable(node.label or '')}' shows the number of an enclosing "
-                            f"item that Word cannot show here (the list is not nested directly in an item of its own kind): in "
-                            f"Word it reads '{printable(step.label)}'.", node.line)
+                            f"item that Word cannot show here (the list is not nested directly in an item of its own "
+                            f"kind): in Word it reads '{printable(step.label)}'.", node.line)
         self.add(node, kind, used, ilvl, explicit=explicit, cause=cause, step=step,
                  ind=self.indent(abstract, ilvl, unit, parent, alternative=False))
         self.check(node, word, step, counter, group, cause, (abstract.id, ilvl))
@@ -1303,8 +1308,8 @@ class _Planner:
         self.shared_counter(
             f"The {word} '{printable(node.label or '')}' has the designation {printable(designation)}, which another "
             f"unit of its section has too (in every output format their designations collide), and in Word they "
-            f"share one counter. The number is kept as the renderer shows it by restarting at a fixed value, so "
-            f"inserting or deleting a clause before it will renumber it.{more}", node.line)
+            f"share one counter. The number is kept as the renderer shows it by restarting at a fixed value, which "
+            f"will not follow a heading or clause inserted or deleted before it in Word.{more}", node.line)
 
     def list_(self, lst: List, section: Section | None, quoted: bool = False) -> None:
         first = lst.items[0]
