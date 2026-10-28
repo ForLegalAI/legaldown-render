@@ -429,6 +429,44 @@ class _Placed(NamedTuple):
     abstract: _Abstract
 
 
+class _Paragraphs(NamedTuple):
+    """Where the numbered paragraphs of one section go: their num, the abstractNum and level it is on, and whether
+    their label is the foreign-free one for want of a place where Word can show the section."""
+
+    num: Num
+    abstract: _Abstract
+    ilvl: int
+    fallback: bool
+
+
+class _Alternative:
+    """A later alternative that shares a number, for the sections under it: they restart in a num of their own, made
+    when the first of them is numbered."""
+
+    def __init__(self, level: int) -> None:
+        self.level = level
+        self.num: Num | None = None
+
+
+#: The owner of the counter of the unit a level text is being made for.
+_SELF = object()
+
+#: What the list of a nested list that restarts by a fixed setting is called (``UnitPlan.cause``), and what is reported
+#: about it (information: Word's own "Restart at 1", which cannot be off when the document is opened).
+_RESTARTS: dict[str, tuple[tuple[str, ...], str]] = {
+    "restart-family": (("restart-family",), "A list nested in a list of another kind restarts by a fixed setting (Restart "
+                       "at 1), not by structure: an item added above it in Word will not restart it."),
+    "restart-section": (("restart-section",), "A list nested in an item whose number carries the section's cannot "
+                        "restart by structure here: it restarts by a fixed setting (Restart at 1), and an item "
+                        "added above it in Word will not restart it."),
+    "restart-alternative": (("restart-alternative",), "A list nested in an alternative that shares a number restarts by a "
+                            "fixed setting (Restart at 1), not by structure: an item added above it in Word will not "
+                            "restart it."),
+    "resync": (("resync",), "A list that Word would continue from another list in the same item restarts by a fixed "
+               "setting (Restart at 1), not by structure."),
+}
+
+
 class _Reference(NamedTuple):
     """The ``{{ref:}}`` to one unit that the plan builds fields for: the unit, its section, what the renderer shows and
     the first line it stands at (None outside the body)."""
@@ -480,7 +518,22 @@ class _Planner:
         self.parent: dict[str, str | None] = {}
         self.section_level: dict[str, int] = {}
         self.placed: dict[str, _Placed] = {}
-        self.paragraph_nums: dict[str, Num] = {}
+        self.paragraph_nums: dict[str, _Paragraphs] = {}
+        #: A later alternative that shares a number -> the unit it repeats and the suffix of its level; and every such
+        #: unit (items and paragraphs too) -> the unit that holds its number, for designations and fields.
+        self.alts: dict[str, tuple[str, Literal["tab", "space"]]] = {}
+        self.canon: dict[str, str] = {}
+        self.alternatives: list[_Alternative] = []
+        #: The levels of the heading abstractNum a unit other than a heading has defined, and the units on it that
+        #: Word would number off the resolver's (reported once).
+        self.claimed: set[int] = set()
+        self.collisions: list[tuple[_Unit, str]] = []
+        #: Items and paragraphs, and where the text of each on the heading list starts (twips), for its nested items.
+        self.item_units: set[str] = set()
+        self.text_left: dict[str, int] = {}
+        #: The level after the sections' fifth is kept for units of a level-5 section when the document has one and
+        #: a label that needs the section.
+        self.reserve5 = False
         self.flagged: set[str] = set()
         self.reported: set[tuple[str, object]] = set()
         self.drifts: list[_Drift] = []
@@ -702,6 +755,7 @@ class _Planner:
                 built[target] = made
         self.report_references()
         needed = {piece.owner for made in built.values() for piece in made.pieces if isinstance(piece, Field)}
+        needed |= {holder for holder, _ in self.alts.values()}
         #: A bookmark holds its paragraph's text only if a field returns that text; any other is a point at the start
         #: of the paragraph, so that no field ever stands inside the bookmark it points at.
         enclosing = {piece.owner for made in built.values() for piece in made.pieces
@@ -739,6 +793,13 @@ class _Planner:
             units[unit] = replace(units[unit], bookmarks=(name,), collapsed=unit not in enclosing)
         for unit, targets in cyclic.items():
             units[unit] = replace(units[unit], literal_refs=targets)
+        for unit, (holder, suff) in self.alts.items():
+            # The number of a later alternative is the number of the unit it repeats (§15.8).
+            shared = self.units[holder]
+            tail = shared.label[len(shared.word_ref):]
+            segments: list[Segment] = [FieldSeg(bookmark[holder], True, False, True, shared.word_ref, shared.word_ref)]
+            units[unit] = replace(units[unit], alt=AltNumber(
+                (*segments, *([Literal_(tail)] if tail else [])), suff))
         for inline in iter_tree_inlines(self.tree):
             if isinstance(inline, DefinedTerm) and inline.defining and inline.anchor and inline.anchor not in anchors:
                 anchors[inline.anchor] = names.anchor("lddef_", inline.anchor.removeprefix("def:"))
@@ -786,6 +847,9 @@ class _Planner:
     def run(self) -> tuple[DocxPlan, list[Diagnostic]]:
         if self.formats.headings:
             self.heading_num = self.new_num(self.abstract("headings"))
+            formats = [f for f in (*self.formats.enumerated[:1], self.formats.paragraphs) if f is not None]
+            self.reserve5 = any(section.level == 5 for section in self.tree.sections) and any(
+                shows_section(f.label, [f.ref], 0) for f in formats)
         for block in self.tree.preamble:
             self.block(block, None)
         for section in self.tree.sections:
@@ -794,6 +858,7 @@ class _Planner:
                 self.block(block, section)
         for drift in self.drifts:
             self.report_drift(drift)
+        self.report_collisions()
         units, anchors, refs, toc = self.finish()
         abstracts = tuple(
             AbstractNum(a.id, a.kind, f"{0x4C440000 + a.id:08X}",  # type: ignore[arg-type]
@@ -803,28 +868,37 @@ class _Planner:
         return (DocxPlan(abstracts, tuple(self.nums), heading_id, units=units, anchors=anchors, refs=refs, toc=toc),
                 by_line(self.diagnostics))
 
-    def block(self, block: object, section: Section | None) -> None:
+    def block(self, block: object, section: Section | None, quoted: bool = False) -> None:
+        """Plan *block*; *quoted*: it stands in a quote or a drafting note (§13.2), whose items are numbered like any
+        other but, being built on the section whatever they are nested in, never ride the heading list."""
         match block:
             case Paragraph(unit=str()) if section is not None:
                 self.paragraph(block, section)
             case List():
-                self.list_(block, section)
+                self.list_(block, section, quoted)
             case Quote(blocks=blocks) | DraftingNote(blocks=blocks):
                 for child in blocks:
-                    self.block(child, section)
+                    self.block(child, section, True)
 
     # -- what a unit gets -----------------------------------------------------------
 
     def add(self, node: _Unit, kind: Literal["section", "item", "paragraph"], num: Num | None, ilvl: int | None, *,
-            explicit: bool, cause: tuple[str, ...] = (), step: Step | None = None) -> None:
+            explicit: bool, cause: tuple[str, ...] = (), step: Step | None = None,
+            ind: tuple[int, int] | None = None, holder: str | None = None) -> None:
+        """Record the plan of *node*. A later alternative (*holder*: the unit whose number it repeats) takes the
+        label of its holder and ``numId`` 0; its number is written as fields by :meth:`finish`."""
         assert node.unit is not None
         self.nodes[node.unit] = node
+        num_id = num.id if num else None
+        label = word_ref = ""
+        count = None
         if step is not None:
             self.steps[node.unit] = step
-        self.units[node.unit] = UnitPlan(
-            node.unit, kind, num.id if num else None, ilvl, explicit, None, None,
-            step.label if step else "", step.word_ref if step else "", step.count if step else None,
-            cause, (), None)
+            label, word_ref, count = step.label, step.word_ref, step.count
+        if holder is not None:
+            num_id, label, word_ref = 0, self.units[holder].label, self.units[holder].word_ref
+        self.units[node.unit] = UnitPlan(node.unit, kind, num_id, ilvl, explicit, ind, None, label, word_ref, count,
+                                         cause, (), None)
 
     def ancestor_flagged(self, unit: str) -> bool:
         parent = self.parent.get(unit)
@@ -906,7 +980,8 @@ class _Planner:
     def section_designation(self, section: Section) -> list[Shown]:
         """The designation of *section* as tokens, written as the resolver writes it (§13.1): the ``ref`` of every part
         of its number after the one before; a part the document skipped is a :class:`Ghost` that no unit holds. Under
-        the ``none`` scheme it is the heading's text (§13.3), and empty when that is."""
+        the ``none`` scheme it is the heading's text (§13.3), and empty when that is. A later alternative that shares
+        a number with another holds none of its own: its part is the counter of the unit it repeats (§15.8)."""
         assert section.unit is not None
         if self.textual:
             text = section.designation or ""
@@ -915,7 +990,7 @@ class _Planner:
         del self.owners[section.level - 1:]
         while len(self.owners) < section.level - 1:
             self.owners.append((Ghost(section.unit, len(self.owners)), 1))
-        self.owners.append((section.unit, section.number))
+        self.owners.append((self.canon.get(section.unit, section.unit), section.number))
         designation: list[Shown] = []
         for part, (owner, value) in enumerate(self.owners):
             level = self.formats.headings[min(part, len(self.formats.headings) - 1)]
@@ -929,20 +1004,32 @@ class _Planner:
         assert unit is not None
         self.parent[unit] = section.parent_unit
         self.section_level[unit] = section.level
-        self.desig[unit] = self.section_designation(section)
         self.heading_text[unit] = _shown(section.title)
         if self.heading_num is None or section.number is None:
+            self.desig[unit] = self.section_designation(section)
             self.add(section, "section", None, None, explicit=False)
             return
+        abstract = self.by_kind["headings"]
         ilvl = section.level - 1
         parent = section.parent_unit
         skipped = (parent is None and section.level > 1) or (
             parent is not None and self.section_level[parent] + 1 < section.level)
-        cause = ("skipped-level",) if skipped else ()
-        step = self.sim.step(self.heading_num.id, ilvl, unit)
-        self.add(section, "section", self.heading_num, ilvl, explicit=False, cause=cause, step=step)
-        self.check(section, "heading", step, self.formats.headings[ilvl].counter, ("heading", section.level), cause,
-                   (0, ilvl))
+        # The sections under a later alternative restart in a num of their own: the alternative counts nothing, so
+        # on the headings' num they would go on from the alternative it repeats (§15.8).
+        while self.alternatives and self.alternatives[-1].level >= section.level:
+            self.alternatives.pop()
+        num, explicit = self.heading_num, False
+        if self.alternatives:
+            context = self.alternatives[-1]
+            if context.num is None:
+                context.num = self.new_num(abstract, ilvl, section.number)
+            num, explicit = context.num, True
+        self.numbered(section, "section", num, abstract, ilvl, counter=self.formats.headings[ilvl].counter,
+                      group=("heading", section.level), cause=("skipped-level",) if skipped else (),
+                      explicit=explicit)
+        if unit in self.alts:
+            self.alternatives.append(_Alternative(section.level))
+        self.desig[unit] = self.section_designation(section)
 
     def paragraph(self, paragraph: Paragraph, section: Section) -> None:
         assert paragraph.unit is not None and section.unit is not None
@@ -953,49 +1040,237 @@ class _Planner:
             self.desig[paragraph.unit] = base
             self.add(paragraph, "paragraph", None, None, explicit=False)
             return
-        piece = fill_tokens(fmt.ref, n=[Count(paragraph.unit, format_counter(paragraph.number, fmt.counter))],
-                            section=base)
-        self.desig[paragraph.unit] = extend_tokens(base, piece, textual=self.textual)
-        abstract = self.abstract("paragraphs")
-        num = self.paragraph_nums.get(section.unit)
-        if num is None:
-            num = self.paragraph_nums[section.unit] = self.new_num(abstract, 0)
+        shows = shows_section(fmt.label, [fmt.ref], 0, textual=self.textual)
+        entry = self.paragraph_nums.get(section.unit)
+        if entry is None:
+            slot = self.qualified(fmt, section) if shows else None
+            abstract, ilvl = slot or (self.abstract("paragraphs"), 0)
+            entry = self.paragraph_nums[section.unit] = _Paragraphs(
+                self.new_num(abstract, ilvl), abstract, ilvl, shows and slot is None)
         cause: tuple[str, ...] = ()
-        if shows_section(fmt.label, [fmt.ref], 0, textual=self.textual):
+        if entry.fallback:
             cause = ("label-fallback",)
             self.fallback_label(fmt, "paragraphs", 0, "paragraph", paragraph.line)
-        step = self.sim.step(num.id, 0, paragraph.unit)
-        self.add(paragraph, "paragraph", num, 0, explicit=True, cause=cause, step=step)
-        self.check(paragraph, "paragraph", step, fmt.counter, ("paragraphs", section.unit), cause, (abstract.id, 0))
+        self.numbered(paragraph, "paragraph", entry.num, entry.abstract, entry.ilvl, counter=fmt.counter,
+                      group=("paragraphs", section.unit), cause=cause)
+        piece = fill_tokens(fmt.ref, n=[self.counted(paragraph, fmt.counter)], section=base)
+        self.desig[paragraph.unit] = extend_tokens(base, piece, textual=self.textual)
 
-    def list_(self, lst: List, section: Section | None) -> None:
+    def counted(self, node: ListItem | Paragraph, counter: str) -> Count:
+        """The counter token of *node* in a designation: the unit's own, or, for a later alternative, the one of the
+        unit it repeats."""
+        assert node.unit is not None and node.number is not None
+        return Count(self.canon.get(node.unit, node.unit), format_counter(node.number, counter))
+
+    # -- the heading list's free levels (§2.5) ----------------------------------------
+
+    def candidate(self, fmt: LevelFormat, section: Section) -> LevelParts | None:
+        """The level text a unit of *fmt* directly in *section* would have on the heading list: its label filled in
+        as the resolver does, with the counter of each part of the section's number as ``%j`` of the heading level
+        that holds it and its own counter at the level after the section's. None when a counter is of another
+        owner or the text cannot be written."""
+        assert section.unit is not None
+        designation = self.desig[section.unit]
+        own = [Count(_SELF, "")]
+        path = extend_tokens(designation, fill_tokens(fmt.ref, n=own, section=designation), textual=False)
+        tokens = fill_tokens(fmt.label, n=own, path=path, section=designation)
+        level_of = {owner: j for j, (owner, _) in enumerate(self.owners)}
+        parts: list[str | int] = []
+        for token in tokens:
+            if isinstance(token, Count):
+                j = section.level if token.owner is _SELF else level_of.get(token.owner)
+                if j is None:
+                    return None
+                parts.append(j)
+            elif parts and isinstance(parts[-1], str):
+                parts[-1] += token.text
+            else:
+                parts.append(token.text)
+        return None if level_text_problem(tuple(parts)) is not None else tuple(parts)
+
+    def claim(self, ilvl: int, definition: LevelDef, *, section_level: bool) -> tuple[_Abstract, int] | None:
+        """The heading abstractNum at *ilvl* if the level reads as *definition*: a heading level when it is the same,
+        a free level (levels 6-9) when nothing claimed it or it is the same, which defines it. The level after the
+        sections' fifth, which only a level-5 section's units can use, is kept for them when the document has one."""
+        abstract = self.by_kind["headings"]
+        current = abstract.levels[ilvl]
+        if ilvl <= 4 or ilvl in self.claimed:
+            same = (current.lvl_text, current.num_fmt) == (definition.lvl_text, definition.num_fmt)
+            return (abstract, ilvl) if same else None
+        if ilvl == 5 and self.reserve5 and not section_level:
+            return None
+        abstract.levels[ilvl] = definition
+        self.claimed.add(ilvl)
+        return abstract, ilvl
+
+    def qualified(self, fmt: LevelFormat, section: Section) -> tuple[_Abstract, int] | None:
+        """Where the units of *fmt* directly in *section* go when their label needs the section's number: the heading
+        list's level after the section's (``%1.%2`` after a level-1 section), where Word can show the section's
+        counters, if that level reads as the label does. None: the label has a foreign-free form of its own
+        (:meth:`fallback_label`). Under the ``none`` scheme the section's number is its heading text."""
+        if self.textual or "headings" not in self.by_kind:
+            return None
+        parts = self.candidate(fmt, section)
+        if parts is None:
+            return None
+        levels = self.by_kind["headings"].levels
+        definition = _level(section.level, NUM_FMT[fmt.counter], parts,
+                            widths={j: levels[j].num_fmt for j in range(9)})
+        return self.claim(section.level, definition, section_level=True)
+
+    def reserved(self, fmt: LevelFormat, depth: int) -> tuple[_Abstract, int] | None:
+        """Where a list nested *depth* levels below a unit on the heading list goes: the heading abstractNum's level
+        ``4 + depth``, defined on first use with the label's foreign-free text (nothing of the section in it)."""
+        refs = [self.formats.enumerated[j % len(self.formats.enumerated)].ref for j in range(9)]
+        parts = level_text(fmt.label, refs, depth, section=(), textual=False)
+        if any(isinstance(part, int) and part != depth for part in parts) or level_text_problem(parts) is not None:
+            return None
+        ilvl = 4 + depth
+        return self.claim(ilvl, _level(ilvl, NUM_FMT[fmt.counter], tuple(ilvl if isinstance(p, int) else p
+                                                                         for p in parts)), section_level=False)
+
+    # -- numbering a unit ---------------------------------------------------------------
+
+    def indent(self, abstract: _Abstract, ilvl: int, unit: str, parent: str | None, *, alternative: bool
+               ) -> tuple[int, int] | None:
+        """The indent a unit carries itself, in twips ``(left, hanging)``: the level's for a later alternative (which
+        has no numbering to take it from), and for a unit of the heading abstractNum that is no heading (whose level
+        indents the headings) the width of the heading level it stands on, one step more for each level of nesting
+        below it."""
+        level = abstract.levels[ilvl]
+        if abstract.kind == "headings" and unit in self.item_units:
+            if parent in self.text_left:
+                left, hanging = self.text_left[parent] + _STEP, _STEP
+            else:
+                left, hanging = level.left, level.hanging
+            self.text_left[unit] = left
+            return left, hanging
+        return (level.left, level.hanging) if alternative else None
+
+    def numbered(self, node: _Unit, kind: Literal["section", "item", "paragraph"], num: Num, abstract: _Abstract,
+                 ilvl: int, *, counter: str, group: object, cause: tuple[str, ...] = (), explicit: bool = True) -> Num:
+        """Number *node* on *num* at *ilvl* of *abstract* and check it against the resolver; returns the num it is on.
+
+        * A later alternative whose number Word would not give (§15.8) takes ``numId`` 0 and the number of the unit
+          it repeats, as fields.
+        * A unit whose number Word would give differently (it goes on where the resolver restarts) is put on a num
+          that starts there, a fixed setting (§2.7).
+        * A label that shows a number of a unit outside the unit's own ancestors, which Word shows from the levels
+          of its list, is marked ``label-fallback``."""
+        assert node.unit is not None and node.number is not None
+        unit = node.unit
+        word = {"section": "heading", "item": "list item", "paragraph": "paragraph"}[kind]
+        parent = node.parent_unit
+        if kind != "section":
+            self.item_units.add(unit)
+        peek = self.sim.peek(num.id, ilvl)
+        if node.shares_number_with is not None and peek != node.number:
+            holder = self.canon.get(node.shares_number_with, node.shares_number_with)
+            self.canon[unit] = holder
+            self.alts[unit] = (holder, abstract.levels[ilvl].suff)
+            self.add(node, kind, None, ilvl, explicit=True, cause=(*cause, "alternative"), holder=holder,
+                     ind=self.indent(abstract, ilvl, unit, parent, alternative=True))
+            return num
+        used = num
+        if peek != node.number:
+            used = self.new_num(abstract, ilvl, node.number)
+            cause, explicit = (*cause, "resync"), True
+            if abstract.kind == "headings":
+                self.collisions.append((node, word))
+            else:
+                self.shared_counter(
+                    "Word's counter for a level of this list was also used by another list in between; the numbers "
+                    "are kept as the renderer shows them by restarting at a fixed number, which will not follow "
+                    "items added or removed before it.", node.line)
+        step = self.sim.step(used.id, ilvl, unit)
+        if kind != "section":
+            ancestors = {unit}
+            above = parent
+            while above is not None:
+                ancestors.add(self.canon.get(above, above))
+                above = self.parent.get(above)
+            if "label-fallback" not in cause and any(
+                    isinstance(t, Count) and (isinstance(t.owner, Ghost) or t.owner not in ancestors)
+                    for t in step.tokens):
+                # The label shows the counter of a level of its list that no unit of its own chain holds: Word shows
+                # a level nothing numbers as 0, or the counter of whatever last counted it, and the resolver's label
+                # is that of the enclosing unit. Not left to Word's reading.
+                cause += ("label-fallback",)
+                self.report("render-docx-section-label", "warning",
+                            f"The label of {word}s '{printable(node.label or '')}' shows the number of an enclosing "
+                            f"item that Word cannot show here (the list is not nested directly in an item of its own kind): in "
+                            f"Word it reads '{printable(step.label)}'.", node.line)
+        self.add(node, kind, used, ilvl, explicit=explicit, cause=cause, step=step,
+                 ind=self.indent(abstract, ilvl, unit, parent, alternative=False))
+        self.check(node, word, step, counter, group, cause, (abstract.id, ilvl))
+        return used
+
+    def restart_class(self, parent: str, placed: _Placed, abstract: _Abstract) -> str:
+        """Why a list nested in the item *parent* does not take its num: the item is a later alternative (numbered by
+        no list), it is on the heading list but the list cannot be, it is on another kind of list, or Word would
+        go on counting from another list in the same item."""
+        if self.units[parent].num_id == 0:
+            return "restart-alternative"
+        if placed.abstract is not abstract:
+            return "restart-section" if placed.abstract.kind == "headings" else "restart-family"
+        return "resync"
+
+    def report_collisions(self) -> None:
+        """One finding for the units of the heading list that Word would number off the resolver's because they share
+        a counter with others of their section (§2.7): the first, and how many more."""
+        if not self.collisions:
+            return
+        node, word = self.collisions[0]
+        assert node.unit is not None
+        designation = text_of(self.desig[node.unit])
+        more = f" {len(self.collisions) - 1} more units do the same." if len(self.collisions) > 1 else ""
+        self.shared_counter(
+            f"The {word} '{printable(node.label or '')}' has the designation {printable(designation)}, which another "
+            f"unit of its section has too (in every output format their designations collide), and in Word they "
+            f"share one counter. The number is kept as the renderer shows it by restarting at a fixed value, so "
+            f"inserting or deleting a clause before it will renumber it.{more}", node.line)
+
+    def list_(self, lst: List, section: Section | None, quoted: bool = False) -> None:
         first = lst.items[0]
         if lst.family == "bullet":
-            self.bullets(lst, section)
+            self.bullets(lst, section, quoted)
             return
         fmt = lst.format
         assert fmt is not None
-        abstract = self.abstract(lst.family)
-        ilvl = min(lst.depth, 8)
+        depth = lst.depth
         # The counter of the level Word uses: past level 9 that is level 9's, not the resolver's cycle.
         levels = self.formats.enumerated if lst.family == "enumerated" else (fmt,)
-        counter = levels[min(lst.depth, 8) % len(levels)].counter
+        counter = levels[min(depth, 8) % len(levels)].counter
         parent = first.parent_unit
         placed = self.placed.get(parent) if parent is not None else None
+        parent_live = placed is not None and self.units[parent].num_id not in (None, 0)
+        refs = ([f.ref for f in (self.formats.enumerated[j % len(self.formats.enumerated)] for j in range(depth + 1))]
+                if lst.family == "enumerated" else [fmt.ref] * (depth + 1))
+        shows = section is not None and shows_section(fmt.label, refs, depth, textual=self.textual)
+        # A label that needs the section's number goes on the heading list's level after the section's; a list nested
+        # in a unit that is on the heading list goes on its reserved levels, so that Word keeps restarting it by
+        # structure. Otherwise the family's own abstractNum, with a label Word can write.
+        slot = None
+        if lst.family == "enumerated" and section is not None and not quoted:
+            if shows:
+                slot = self.qualified(fmt, section) if depth == 0 and placed is None else None
+            elif placed is not None and placed.abstract.kind == "headings" and 1 <= depth <= 4:
+                slot = self.reserved(fmt, depth)
+        abstract, ilvl = slot or (self.abstract(lst.family), min(depth, 8))
         cause: tuple[str, ...] = ()
-        # Nested in an item: that item's num, if it is of the same kind and Word counts the list from where the
+        # Nested in an item: that item's num, if it is live, of the same kind and Word counts the list from where the
         # resolver does (a sibling list continues, a list in a new item restarts); otherwise a num of its own.
-        if (placed is not None and placed.abstract is abstract and lst.depth <= 8
+        if (placed is not None and parent_live and placed.abstract is abstract and depth <= 8
                 and self.sim.peek(placed.num.id, ilvl) == first.number):
             num = placed.num
         else:
             num = self.new_num(abstract, ilvl, first.number or 1)
-            if lst.depth > 8:
+            if depth > 8:
                 cause = ("clamped",)
                 if not self.depth_reported:
                     self.depth_reported = True
                     self.report("render-docx-list-depth", "warning",
-                                f"A list is nested {lst.depth} levels deep: Word has 9. Items from level 10 on are "
+                                f"A list is nested {depth} levels deep: Word has 9. Items from level 10 on are "
                                 f"numbered in the format of level 9 and restart by fixed values.", first.line)
             elif placed is not None and first.number > 1:
                 cause = ("resync",)
@@ -1004,56 +1279,34 @@ class _Planner:
                     "starts at a fixed number in Word: it will not follow items added or removed before it.",
                     first.line)
             elif placed is not None:
-                kinds = placed.abstract is not abstract
-                cause = ("restart-family",) if kinds else ("resync",)
-                self.report("render-docx-static-restart", "info",
-                            "A list nested in a list of another kind restarts by a fixed setting (Restart at 1), "
-                            "not by structure: an item added above it in Word will not restart it." if kinds else
-                            "A list that Word would continue from another list in the same item restarts by a fixed "
-                            "setting (Restart at 1), not by structure.", first.line)
-        refs = ([f.ref for f in (self.formats.enumerated[j % len(self.formats.enumerated)]
-                                 for j in range(lst.depth + 1))]
-                if lst.family == "enumerated" else [fmt.ref] * (lst.depth + 1))
-        qualified = section is not None and shows_section(fmt.label, refs, lst.depth, textual=self.textual)
-        if qualified:
-            self.fallback_label(fmt, lst.family, ilvl, "list item", first.line)
+                cause, message = _RESTARTS[self.restart_class(parent, placed, abstract)]
+                self.report("render-docx-static-restart", "info", message, first.line)
+        if slot is not None and abstract.kind == "headings" and depth > 0:
+            cause += ("reserved-level",)
+        fallback = shows and slot is None
+        if fallback:
+            self.fallback_label(fmt, lst.family, min(depth, 8), "list item", first.line)
         parent_des = self.desig.get(parent, []) if parent is not None else []
         section_des = self.desig[section.unit] if section is not None and section.unit is not None else []
         for index, item in enumerate(lst.items):
             assert item.unit is not None and item.number is not None
             self.parent[item.unit] = item.parent_unit
-            piece = fill_tokens(fmt.ref, n=[Count(item.unit, format_counter(item.number, fmt.counter))],
-                                section=section_des)
-            self.desig[item.unit] = extend_tokens(parent_des, piece, textual=self.textual)
             item_cause = cause if index == 0 else ()
-            if lst.depth > 8 and "clamped" not in item_cause:
+            if depth > 8 and "clamped" not in item_cause:
                 item_cause += ("clamped",)
-            if qualified:
+            if slot is not None and depth > 0 and "reserved-level" not in item_cause:
+                item_cause += ("reserved-level",)
+            if fallback:
                 item_cause += ("label-fallback",)
-            # Another list used Word's counter of this level in between: restart it where the resolver is.
-            if index and item.shares_number_with is None and self.sim.peek(num.id, ilvl) != item.number:
-                num = self.new_num(abstract, ilvl, item.number)
-                item_cause += ("resync",)
-                self.shared_counter(
-                    "Word's counter for a level of this list was also used by another list in between; the numbers "
-                    "are kept as the renderer shows them by restarting at a fixed number, which will not follow "
-                    "items added or removed before it.", item.line)
-            step = self.sim.step(num.id, ilvl, item.unit)
-            if any(isinstance(token, Count) and isinstance(token.owner, Ghost) for token in step.tokens):
-                # The label shows a level of its list that nothing numbers here: Word shows it as 0, and the
-                # resolver's label is that of the enclosing item of another kind. Not left to Word's reading.
-                item_cause += ("label-fallback",)
-                self.report("render-docx-section-label", "warning",
-                            f"The label '{printable(fmt.label)}' of list items shows the number of an enclosing item "
-                            f"that Word cannot show here (the list is not nested in one of its own kind): in Word "
-                            f"it reads '{printable(step.label)}'.", item.line)
-            self.add(item, "item", num, ilvl, explicit=True, cause=item_cause, step=step)
-            self.check(item, "list item", step, counter, ("list", first.unit), item_cause, (abstract.id, ilvl))
-            self.placed[item.unit] = _Placed(num, abstract)
+            used = self.numbered(item, "item", num, abstract, ilvl, counter=counter, group=("list", first.unit),
+                                 cause=item_cause)
+            piece = fill_tokens(fmt.ref, n=[self.counted(item, fmt.counter)], section=section_des)
+            self.desig[item.unit] = extend_tokens(parent_des, piece, textual=self.textual)
+            self.placed[item.unit] = _Placed(used, abstract)
             for child in item.blocks:
-                self.block(child, section)
+                self.block(child, section, quoted)
 
-    def bullets(self, lst: List, section: Section | None) -> None:
+    def bullets(self, lst: List, section: Section | None, quoted: bool) -> None:
         """Bullets count nothing, so every bullet list of the document is numbered by one num."""
         abstract = self.abstract("bullet")
         if self.bullet_num is None:
@@ -1070,7 +1323,7 @@ class _Planner:
                                              None, cause, (), None)
             self.placed[item.unit] = _Placed(self.bullet_num, abstract)
             for child in item.blocks:
-                self.block(child, section)
+                self.block(child, section, quoted)
 
 
 def plan_docx(tree: RenderTree, *, file: str | None = None) -> tuple[DocxPlan, list[Diagnostic]]:

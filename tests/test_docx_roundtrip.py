@@ -460,10 +460,14 @@ def check(case: Case) -> None:
         mine = case.plan.units[node.unit]
         if not (isinstance(node, Section) or mine.explicit):
             continue
-        number, _ = lines[node.unit]
+        number, text = lines[node.unit]
         label = node.label or ""
         if mine.num_id is None:
             assert number == "", (node.unit, number)
+        elif mine.num_id == 0:  # a later alternative: no number of its own, the holder's as fields, which LibreOffice
+            # updates to what the renderer wrote
+            assert number == "" and text.startswith(label), (node.unit, "LibreOffice", number, text, "renderer", label)
+            assert text.startswith(mine.label), (node.unit, "LibreOffice", text, "plan", mine.label)
         elif mine.count is None:  # a bullet: LibreOffice draws its own symbol
             assert number != "", node.unit
         else:
