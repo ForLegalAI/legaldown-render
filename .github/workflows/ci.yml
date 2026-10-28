@@ -75,6 +75,29 @@ jobs:
         env:
           LEGALDOWN_SPEC_DIR: .legaldown-spec
 
+  docx:
+    # The DOCX writer is checked against the ISO/IEC 29500 schemas (fetched, not stored: tests/schemas/README.md)
+    # and against LibreOffice, which opens each document, updates its fields and says what it shows
+    # (tests/lo/uno_export.py runs under the system Python, which python3-uno provides, not the virtual
+    # environment's). A missing tool fails the job instead of skipping the tests.
+    name: DOCX (schemas and LibreOffice)
+    runs-on: ubuntu-latest
+    env:
+      LEGALDOWN_REQUIRE_DOCX_TOOLS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice-writer python3-uno
+      - run: pip install -e ".[dev]"
+      - run: python tests/schemas/fetch.py
+      - run: pytest -q -m ooxml_schema
+      - run: pytest -q -m libreoffice
+
   validator-main:
     # Surfaces changes in legaldown-validator's model before they are released
     # (docs/decisions/0001). Informational: a failure here is a heads-up.
