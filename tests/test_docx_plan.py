@@ -6,9 +6,11 @@ round trip is in test_docx_roundtrip.py)."""
 from __future__ import annotations
 
 import functools
+import io
 import random
 import re
 import time
+import zipfile
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -44,6 +46,7 @@ from legaldown_render.tree import (
     Section,
     iter_tree_inlines,
 )
+from legaldown_render.writers.docx import DocxWriter
 
 NONE = {"numbering.scheme": "none"}
 PARAGRAPHS = {"paragraphs.numbered": True}
@@ -1757,10 +1760,10 @@ SECTION_WORD = {"numbering.levels": [
     {"counter": "decimal", "label": "Section {path}", "ref": ".{n}"}], "references.format": "Section {designation}"}
 
 
-def covers(variant: str, **settings: object) -> dict[str, tuple[str, str]]:
+def covers(variant: str, text_switch: str = "documented", **settings: object) -> dict[str, tuple[str, str]]:
     """Anchor of each target to (what the renderer shows, the plan's cover), for the document of :data:`TARGETS`."""
     result = render(FRONT + TARGETS + REFERENCES, format="text", **settings)
-    plan, _ = plan_docx(result.tree)
+    plan, _ = plan_docx(result.tree, text_switch=text_switch)  # type: ignore[arg-type]
     units_of = {n.unit: n for n in units(result.tree)}
     found = {}
     for inline in iter_tree_inlines(result.tree):
@@ -1979,6 +1982,68 @@ def test_the_words_of_the_format_that_the_number_holds_too_need_no_switch() -> N
     assert [segment.cached for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)
             for segment in plan.refs[i.target_unit].segments] == ["Article I", "Article II"]
     assert diagnostics == []
+
+
+#: A label that says another word than the format (the words go with ``\t``, the number between its counters stays) and a
+#: label that leads with an abbreviation that has a period.
+SECTION_SHORT = {"overrides": {**SECTION_WORD, "references.format": "Sec. {designation}"}}
+CL_LOWER = {"overrides": {**CL_PERIOD, "references.format": "čl. {designation}"}}
+
+
+@pytest.mark.parametrize(("switch", "settings", "anchor", "expected"), [
+    # Microsoft's example, "Section 1.01" gives "1.01": words go, the delimiter between the counters stays
+    ("off", SECTION_SHORT, "beta", ("Sec. I.1", '"Sec. I.1"')),
+    ("documented", SECTION_SHORT, "beta", ("Sec. I.1", '"Sec. " + REF beta \\t')),
+    ("guess", SECTION_SHORT, "beta", ("Sec. I.1", '"Sec. " + REF beta \\t')),
+    ("documented", SECTION_SHORT, "i1", ("Sec. I(a)", '"Sec. " + REF alpha \\t + REF i1')),
+    # a period after letters ("Čl. 1") is not documented: only the setting that guesses uses it
+    ("off", CL_LOWER, "alpha", ("čl. 1", '"čl. 1"')),
+    ("documented", CL_LOWER, "alpha", ("čl. 1", '"čl. 1"')),
+    ("guess", CL_LOWER, "alpha", ("čl. 1", '"čl. " + REF alpha \\t')),
+    ("guess", CL_LOWER, "i1", ("čl. 1(a)", '"čl. " + REF alpha \\t + REF i1')),
+    # what the cover does without the switch does not depend on the setting
+    ("off", CL_LOWER, "beta", ("čl. 1.1", '"čl. " + REF beta')),
+    ("guess", CL_LOWER, "beta", ("čl. 1.1", '"čl. " + REF beta')),
+])
+def test_the_text_switch_setting_decides_which_references_use_the_switch(
+        switch: str, settings: dict, anchor: str, expected: tuple[str, str]) -> None:
+    assert covers("x", switch, **settings)[anchor] == expected
+
+
+def test_a_reference_that_needs_a_switch_the_setting_does_not_allow_is_fixed_text_and_reported() -> None:
+    body = "# A {#a}\n\nSee {{ref: a}}.\n"
+    for switch, fixed in (("off", True), ("documented", True), ("guess", False)):
+        result = render(FRONT + body, format="text", **CL_LOWER)
+        plan, diagnostics = plan_docx(result.tree, text_switch=switch)  # type: ignore[arg-type]
+        assert plan.refs["s1"].fixed is fixed
+        assert any(d.rule == "render-docx-reference" and "not a field" in d.message for d in diagnostics) is fixed
+        assert any(d.rule == "render-docx-reference-word-only" for d in diagnostics) is not fixed
+    # off: no field of the document has the switch, whatever the labels
+    result = render(FRONT + TARGETS + REFERENCES, format="text", **SECTION_SHORT)
+    plan, diagnostics = plan_docx(result.tree, text_switch="off")
+    assert not any(isinstance(s, FieldSeg) and s.suppress_text for r in plan.refs.values() for s in r.segments)
+    assert "render-docx-reference-word-only" not in rules(diagnostics)
+    assert any(r.fixed for r in plan.refs.values())
+
+
+def test_the_rendered_file_has_the_switch_only_where_the_style_allows_it() -> None:
+    body = "# A {#a}\n\nSee {{ref: a}}.\n"
+    texts = {}
+    for switch in ("off", "documented", "guess"):
+        result = render(FRONT + body, format="docx", overrides={**CL_LOWER["overrides"], "docx.reference_text_switch": switch})
+        assert result.binary is not None
+        texts[switch] = zipfile.ZipFile(io.BytesIO(result.binary)).read("word/document.xml").decode("utf-8")
+    assert ["\\t" in texts[switch] for switch in texts] == [False, False, True]
+
+
+def test_a_writer_that_plans_the_tree_itself_plans_it_with_the_styles_switch() -> None:
+    result = render(FRONT + "# A {#a}\n\nSee {{ref: a}}.\n", format="text",
+                    overrides={**CL_LOWER["overrides"], "docx.reference_text_switch": "guess"})
+    data = DocxWriter(result.style).write(result.tree)
+    assert "\\t" in zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml").decode("utf-8")
+    other = render(FRONT + "# A {#a}\n\nSee {{ref: a}}.\n", format="text", **CL_LOWER)
+    data = DocxWriter(other.style).write(other.tree)
+    assert "\\t" not in zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml").decode("utf-8")
 
 
 def test_reference_findings_name_the_file_and_the_first_line_of_a_repeated_reference() -> None:
@@ -2205,13 +2270,35 @@ def test_the_atom_nothing_can_stand_for_is_found() -> None:
     assert uncovered([Count("a", "I")], fields) is None
 
 
-def test_the_switch_that_drops_text_is_modelled_only_where_it_leaves_bare_counters() -> None:
+def test_the_switch_that_drops_text_is_modelled_only_where_its_result_is_known() -> None:
+    one, two = Count("a", "1"), Count("b", "2")
+    # the words around a number go (Microsoft: "Section 1.01" gives "1.01"), the delimiter between its counters stays
     assert suppressed([Lit("Article "), Count("a", "I")]) == (Count("a", "I"),)
     assert suppressed([Lit("§ "), Count("a", "3")]) == (Count("a", "3"),)
+    assert suppressed([Lit("Section "), one, Lit("."), two]) == (one, Lit("."), two)
+    assert suppressed([one, Lit("."), two]) == (one, Lit("."), two)  # nothing to drop: no field of its own is needed
+    assert suppressed([Lit("Part "), one, Lit(" of "), two]) == (one, two)  # words between counters go too
+    # a delimiter around the counters, or mixed with words between them, is not documented
     assert suppressed([Lit("("), Count("a", "a"), Lit(")")]) is None
-    assert suppressed([Count("a", "1"), Lit("."), Count("b", "2")]) is None
-    assert suppressed([Lit("No. "), Count("a", "1")]) is None
-    assert suppressed([Lit("Article")]) is None
+    assert suppressed([Count("a", "a"), Lit(")")]) is None
+    assert suppressed([one, Lit(":")]) is None
+    assert suppressed([Lit("No. "), one]) is None
+    assert suppressed([one, Lit(" to."), two]) is None
+    assert suppressed([Lit("Article")]) is None and suppressed([]) is None
+
+
+def test_the_switch_setting_says_what_word_may_be_expected_to_do() -> None:
+    one, two = Count("a", "1"), Count("b", "2")
+    # off: never
+    assert suppressed([Lit("Article "), Count("a", "I")], "off") is None
+    assert suppressed([Lit("Section "), one, Lit("."), two], "off") is None
+    # guess: a period after the letters that lead a number goes too; no other delimiter does, and only in leading text
+    assert suppressed([Lit("No. "), one], "guess") == (one,)
+    assert suppressed([Lit("Čl. "), one], "guess") == (one,)
+    assert suppressed([Lit("Art. "), one, Lit("."), two], "guess") == (one, Lit("."), two)
+    assert suppressed([Lit("("), one], "guess") is None and suppressed([Lit("1. "), one], "guess") is None
+    assert suppressed([one, Lit(" Art.")], "guess") is None and suppressed([Lit("No: "), one], "guess") is None
+    assert suppressed([Lit("Article "), Count("a", "I")], "guess") == (Count("a", "I"),)
 
 
 # -- Bookmarks ----------------------------------------------------------------------------------------------

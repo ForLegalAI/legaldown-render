@@ -31,6 +31,7 @@ import colorsys
 import math
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from ..errors import StyleError
 from ..resolve.docx_plan import docx_style_errors
@@ -153,6 +154,8 @@ class DocxSettings:
     justify: bool
     headings: dict[int, HeadingFormat]
     update_fields_on_open: bool
+    #: ``off``, ``documented`` or ``guess``: what a cross-reference may expect of Word's ``\t`` switch.
+    reference_text_switch: Literal["off", "documented", "guess"]
 
     @property
     def points(self) -> float:
@@ -207,7 +210,8 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
     return DocxSettings(
         page=page, font=_family(typography.font_family), half_points=half_points, line=line, line_rule=rule,
         color=color, link_color=link_color, justify=typography.justify, headings=headings,
-        update_fields_on_open=style.docx.update_fields_on_open)
+        update_fields_on_open=style.docx.update_fields_on_open,
+        reference_text_switch=style.docx.reference_text_switch)
 
 
 # -- Lengths ----------------------------------------------------------------------

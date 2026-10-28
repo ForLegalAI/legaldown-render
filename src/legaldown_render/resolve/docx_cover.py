@@ -21,21 +21,26 @@ planner reports). A literal may stand only for characters of literal text, never
 covers the one with the fewest fields wins, then the fewest fields using ``\\t``, then the fewest literal
 characters; of equal ones the first in the order the fields were given.
 
-``\\t`` (Word only; LibreOffice ignores it) suppresses the text around the counters of a number. It is modelled only
-where its result is certain: when every literal of the field is text to drop (``Article I`` gives ``I``,
-``§ 3`` gives ``3``), and not when one of them is a delimiter (``(a)``, ``a)``, ``1.2``), where what Word does
-is not known (:func:`suppressed`).
+``\\t`` (Word only; LibreOffice ignores it) suppresses the text of a number that is not a counter or a delimiter.
+Microsoft documents it with one example (``Section 1.01`` gives ``1.01``): the words around the number go, the delimiter
+between its counters stays. What it returns where the text around the counters holds a delimiter (``(a)``, ``a)``,
+``No. 1``) is not documented, so it is modelled by the style's ``docx.reference_text_switch`` (:func:`suppressed`):
+``off`` never, ``documented`` only for what the documentation settles, ``guess`` also for a period after the
+letters that lead a number.
 """
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from .docx_numbering import Count, Lit, Token
 
-#: The characters Word keeps when ``\t`` drops the text of a number: a field whose literal text holds one of them
-#: has no ``\t`` form (what Word would make of it is not known).
+#: The characters Word keeps when ``\t`` drops the text of a number. Between two counters they stay; in the text before
+#: the first counter or after the last, what Word does with them is not documented (:func:`suppressed`).
 DELIMITERS = frozenset(".,;:()[]/-–")
+
+#: What ``docx.reference_text_switch`` can say of ``\t``.
+TextSwitch = Literal["off", "documented", "guess"]
 
 
 class Title(NamedTuple):
@@ -77,18 +82,37 @@ def atoms(tokens: Sequence[Shown]) -> list[tuple[str, object]]:
     return out
 
 
-def suppressed(tokens: Sequence[Shown]) -> tuple[Shown, ...] | None:
-    """What ``REF \\n \\t`` returns for a field that returns *tokens* with ``\\n``: the counters alone, when every
-    literal text between them is text Word drops; None when one holds a delimiter or there is no counter, since what
-    Word keeps is then not known."""
+def suppressed(tokens: Sequence[Shown], mode: TextSwitch = "documented") -> tuple[Shown, ...] | None:
+    """What ``REF \\n \\t`` returns for a field that returns *tokens* with ``\\n``, or None where the switch is not used
+    (the *mode* is ``off``, there is no counter, or what Word returns is not known).
+
+    * Text before the first counter and after the last that holds no delimiter is dropped (``Article I`` gives ``I``,
+      ``§ 3`` gives ``3``). With a delimiter in it (``(a)``, ``a)``, ``1:``) Word's result is not documented: None.
+      Mode ``guess`` also drops leading text that has a period after letters in it (``No. 1``, ``Čl. 1`` give ``1``).
+    * Text between two counters that is nothing but delimiters stays (Microsoft's example: ``Section 1.01`` gives
+      ``1.01``); text between them with no delimiter in it is dropped; a mixture is None.
+    """
+    if mode == "off":
+        return None
+    counters = [index for index, token in enumerate(tokens) if not isinstance(token, Lit)]
+    if not counters:
+        return None
     kept: list[Shown] = []
-    for token in tokens:
-        if isinstance(token, Lit):
-            if any(character in DELIMITERS for character in token.text):
-                return None
-        else:
+    for index, token in enumerate(tokens):
+        if not isinstance(token, Lit):
             kept.append(token)
-    return tuple(kept) if kept else None
+            continue
+        found = {character for character in token.text if character in DELIMITERS}
+        if index < counters[0] or index > counters[-1]:
+            period_after_letters = (mode == "guess" and index < counters[0] and found == {"."}
+                                    and any(character.isalpha() for character in token.text))
+            if found and not period_after_letters:
+                return None
+        elif found:
+            if not all(character in DELIMITERS for character in token.text):
+                return None
+            kept.append(token)
+    return tuple(kept)
 
 
 def _fits(wanted: Sequence[tuple[str, object]], at: int, field: Sequence[tuple[str, object]]) -> bool:

@@ -146,6 +146,7 @@ html:
 
 docx:                        # the DOCX writer only (see "DOCX")
   update_fields_on_open: true
+  reference_text_switch: documented   # off | documented | guess: what a cross-reference may expect of Word's \t switch
 ```
 
 ### Level formats
@@ -266,6 +267,7 @@ style in Word applies to every paragraph that uses it.
 | Setting | Meaning |
 |---|---|
 | `docx.update_fields_on_open` | `true` (the default) asks Word to update every field when it opens the file: the cross-references, the table of contents and its page numbers. Word asks the reader once ("This document contains fields that may refer to other files. Update the fields?"). The fields hold the values the renderer computed either way, so a viewer that never updates fields (Word Online, Quick Look, Outlook's preview) shows the document right, but the table of contents without page numbers. LibreOffice and Word Online ignore the setting. `false` writes no such request |
+| `docx.reference_text_switch` | What a cross-reference may expect of Word's `\t` switch (`REF bookmark \n \t`), which leaves the words of a number out. A reference is built from `REF` fields so that it stays right when a clause is inserted; where the reference shows less than the number Word draws (`Section {designation}` for a number `Article I`, `čl. {designation}` for `Čl. 1`), the switch leaves the words out and the `references.format` text goes back in as literal text. LibreOffice ignores the switch (and shows the whole number there, which the render reports once as `render-docx-reference-word-only`). Microsoft documents it with one example (`Section 1.01` gives `1.01`: the words around the number go, a delimiter between its counters stays); what Word does with a delimiter in the text around the counters is not documented. **`documented`** (the default) uses the switch only where that example settles the result: words before the first counter or after the last go, a delimiter between counters stays, and a label with a delimiter around its number (`(a)`, `a)`, `1:`, `No. 1`) is not asked for it. **`off`** never uses it: a reference that needs it is fixed text, reported (`render-docx-reference`). **`guess`** also expects Word to leave out a period after the letters that lead a number (`No. 1`, `Čl. 1`): the checklist in `.github/PUBLISHING.md` says how to check what your Word does, and a reference that is wrong in Word is fixed by setting `documented` |
 
 Settings that were already part of the template gain a DOCX meaning:
 

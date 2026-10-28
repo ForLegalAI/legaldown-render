@@ -66,7 +66,7 @@ from ..tree import (
 )
 from ..urls import displayed_url, printable
 from .docx_bookmarks import ATTACHMENTS_HEADING, BookmarkNames
-from .docx_cover import Field, Shown, Title, atoms, cover, suppressed, text_of, uncovered
+from .docx_cover import Field, Shown, TextSwitch, Title, atoms, cover, suppressed, text_of, uncovered
 from .docx_numbering import (
     NUM_FMT,
     SAMPLE_COUNTER,
@@ -599,8 +599,8 @@ class _Drift:
 
 
 class _Planner:
-    def __init__(self, tree: RenderTree, file: str | None) -> None:
-        self.tree, self.file = tree, file or ""
+    def __init__(self, tree: RenderTree, file: str | None, text_switch: TextSwitch = "documented") -> None:
+        self.tree, self.file, self.text_switch = tree, file or "", text_switch
         self.formats = tree.formats
         self.textual = tree.formats.scheme == "none"
         self.diagnostics: list[Diagnostic] = []
@@ -719,7 +719,7 @@ class _Planner:
             elif owner in self.steps:
                 words = self.words(owner)
                 fields.append(Field(owner, True, False, words))
-                bare = suppressed(words)
+                bare = suppressed(words, self.text_switch)
                 if bare is not None and atoms(bare) != atoms(words):
                     fields.append(Field(owner, True, True, bare))
         return fields
@@ -1607,9 +1607,12 @@ class _Planner:
                 self.block(child, section, quoted)
 
 
-def plan_docx(tree: RenderTree, *, file: str | None = None) -> tuple[DocxPlan, list[Diagnostic]]:
+def plan_docx(tree: RenderTree, *, file: str | None = None, text_switch: TextSwitch = "documented"
+              ) -> tuple[DocxPlan, list[Diagnostic]]:
     """The numbering plan of *tree* for Word, and the diagnostics only planning can produce (all
-    ``render-docx-*``, in the order of their lines, naming *file*). Pure: the same tree gives an equal plan, and
-    ``tree.formats`` carries the style's numbering. A style Word's numbering cannot express (:func:`docx_style_errors`)
-    is refused before rendering (ADR 0006), so it never reaches here."""
-    return _Planner(tree, file).run()
+    ``render-docx-*``, in the order of their lines, naming *file*). Pure: the same tree and *text_switch* (the style's
+    ``docx.reference_text_switch``: what a reference may expect of Word's ``\\t`` switch, see
+    :func:`.docx_cover.suppressed`) give an equal plan, and ``tree.formats`` carries the style's numbering. A style
+    Word's numbering cannot express (:func:`docx_style_errors`) is refused before rendering (ADR 0006), so it never
+    reaches here."""
+    return _Planner(tree, file, text_switch).run()

@@ -61,7 +61,7 @@ class DocxWriter:
         one the tree is planned here (:func:`~legaldown_render.resolve.docx_plan.plan_docx`), whose diagnostics
         are then lost: :func:`~legaldown_render.render` plans first and reports them."""
         if plan is None:
-            plan = plan_docx(tree)[0]
+            plan = plan_docx(tree, text_switch=self.settings.reference_text_switch)[0]
         settings = self.settings
         language = language_tag(tree.language, self.style.locale)
         title = document_title(tree)

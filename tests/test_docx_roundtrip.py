@@ -385,7 +385,8 @@ FEW_VARIANTS: dict[str, tuple[str, ...]] = {
 #: The variants that show some stress documents only.
 ONLY_DOCS: dict[str, tuple[str, ...]] = {
     "five levels": ("qualified",), "shared level": ("qualified", "nested"), "path items": ("paths", "lists", "deep"),
-    "ordered parent": ("ordered paths", "lists")}
+    "ordered parent": ("ordered paths", "lists"), "section-short": ("nested", "qualified"),
+    "cl-guess": ("nested", "qualified")}
 
 #: The settings that give the numbering words and symbols: a field that returns the same words as the reference's format
 #: stands for them, otherwise Word's ``\t`` switch drops them from the number.
@@ -397,6 +398,14 @@ WORDS: dict[str, dict] = {
     # the format says a word the label does not: Word's \t leaves the label's out and the format's is put back
     "article-short": {"overrides": {"numbering.levels": [
         {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"}], "references.format": "Art. {designation}"}},
+    # a number with a delimiter between its counters ("Section 1.1") that the format words differently: Word's \t keeps it
+    "section-short": {"overrides": {"numbering.levels": [
+        {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"},
+        {"counter": "decimal", "label": "Section {path}", "ref": ".{n}"}], "references.format": "Sec. {designation}"}},
+    # a period after letters ("Čl. 1") that only the setting that guesses lets the switch drop
+    "cl-guess": {"overrides": {"numbering.levels": [
+        {"counter": "decimal", "label": "Čl. {n}", "ref": "{n}"}, {"counter": "decimal", "label": "{path}", "ref": ".{n}"}],
+        "references.format": "čl. {designation}", "docx.reference_text_switch": "guess"}},
     "paragraphs": {"overrides": {"paragraphs.numbered": True}},
     # the items and the paragraphs of a section share the heading list's level: the numbers are restarted where the
     # resolver counts them apart
@@ -539,7 +548,7 @@ def make_case(variant: str, name: str, source: str) -> Case | None:
     except DocumentError:
         return None
     assert result.binary is not None
-    plan, diagnostics = plan_docx(result.tree)
+    plan, diagnostics = plan_docx(result.tree, text_switch=result.style.docx.reference_text_switch)
     return Case(variant, name, result.tree, plan, {d.rule for d in diagnostics}, result.binary,
                 prepared(result.binary, result.tree, plan))
 

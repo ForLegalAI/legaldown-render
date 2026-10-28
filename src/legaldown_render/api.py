@@ -175,7 +175,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if isinstance(writer, DocxWriter):
         # What Word will draw differently from the other formats (docs/decisions/0008) is the planner's to report; its
         # findings are the renderer's, and are ordered with them.
-        plan, planned = plan_docx(tree, file=document.filename)
+        plan, planned = plan_docx(tree, file=document.filename, text_switch=writer.settings.reference_text_switch)
         extra = [*extra, *planned]
     # The renderer's findings that the validator's or the assembly's already
     # name (the same rule, level and message), wherever they are, are not repeated;
