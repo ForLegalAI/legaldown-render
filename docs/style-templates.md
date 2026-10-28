@@ -274,7 +274,7 @@ Settings that were already part of the template gain a DOCX meaning:
 | `contents.enabled`, `contents.depth` | A live `TOC \o "1-<depth>" \h \z \u` field after the title block, with the contents' entries as its cached result (`toc 1` to `toc 5` paragraphs, a dotted right tab at the text width, a `PAGEREF` page number Word fills in when it updates the field). The contents label is a `Contents Heading` paragraph: no outline level, no number, so never an entry |
 | `contents.attachments` | The attachments heading and each attachment title are paragraphs of the styles `Attachments Heading` and `Attachment Title`, which carry an outline level, so Word's TOC lists them (`\u`); without it they are body text for the contents. At `contents.depth: 1` the titles are listed with the headings (the first level), not under the attachments heading |
 | `attachments.separator` | `page-break`: a page break before the attachments part and between attachments (the paragraph property "page break before", so no empty paragraph or blank page is left); `rule`: a line above each attachment; `none`: nothing |
-| `signatures.enabled` | Borderless tables with a signing line, kept on one page |
+| `signatures.enabled` | Borderless tables with a signing line, kept together on one page as far as one page allows. They follow the last attachment, as in the HTML. A name, title, date or place row whose label is blanked (`labels.signature_*`) and whose value is empty is left out, as the plain-text writer leaves it out |
 | `title_block.parties`, `title_block.effective_date`, `title_block.version` | The header rows and the parties, as borderless tables |
 
 The styles for this matter (`Title Block Text`, `Party Side`, `Party Name`, `Attachments Heading`, `Attachment Title`,

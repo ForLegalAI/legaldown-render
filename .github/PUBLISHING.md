@@ -81,17 +81,37 @@ markdown-it-py) come from PyPI.
 ## Checking the DOCX in Word (before a release)
 
 CI proves the DOCX against the ISO/IEC 29500 schemas and in LibreOffice; it cannot run Word. Before a release, a maintainer
-opens the golden documents in Word (the desktop application, a current version) and checks what only Word can show. Make
-the documents with a table of contents, for each of the three built-in styles:
+opens the golden documents in Word (the desktop application, a current version) and checks what only Word can show.
+Make them with the Python API, which is the same on Linux, macOS and Windows (run it from the repository root, in an
+environment with the package installed):
 
-```bash
-for style in default continental outline; do
-  for doc in features template; do
-    legaldown-render tests/documents/$doc.lgd -s $style --set contents.enabled=true --set contents.depth=3 \
-        -o /tmp/word-check/$doc.$style.docx
-  done
-done
+```python
+from pathlib import Path
+from legaldown_render import render
+
+out = Path("word-check")          # any folder; created here
+out.mkdir(exist_ok=True)
+contents = {"contents.enabled": True, "contents.depth": 3}
+for doc in ("features", "template"):
+    source = Path(f"tests/documents/{doc}.lgd").read_text(encoding="utf-8")
+    for style in ("default", "continental", "outline"):
+        (out / f"{doc}.{style}.docx").write_bytes(render(source, format="docx", style=style, overrides=contents).binary)
+    # the settings whose effect only Word shows (see item 7)
+    for name, extra in {
+        "attachments-not-listed": {"contents.attachments": False},
+        "depth-1": {"contents.depth": 1},
+        "no-attachments-label": {"labels.attachments": ""},
+        "separator-none": {"attachments.separator": "none"},
+        "separator-rule": {"attachments.separator": "rule"},
+        "scheme-none": {"numbering.scheme": "none"},
+    }.items():
+        data = render(source, format="docx", overrides={**contents, **extra}).binary
+        (out / f"{doc}.{name}.docx").write_bytes(data)
 ```
+
+(On the command line, `legaldown-render tests/documents/features.lgd -s continental --set contents.enabled=true
+--set contents.depth=3 -o word-check/features.continental.docx` makes one of them; create the folder first with
+`mkdir -p word-check` on Linux and macOS or `mkdir word-check` on Windows.)
 
 For each file:
 
@@ -112,12 +132,22 @@ For each file:
 5. **Zero-length bookmarks.** A `REF \n` to the zero-length (point) bookmark at the start of a numbered paragraph
    returns the number. Press Enter at the start of that paragraph and update the fields: the references still
    point at the paragraph they pointed at and read right.
-6. **`none` scheme.** With `--set numbering.scheme=none`, a heading referenced with `{{ref:}}` shows its title text
+6. **`none` scheme** (the `scheme-none` files): a heading referenced with `{{ref:}}` shows its title text
    (`REF \h`), and the references inside a heading that refers to itself are plain text: no "Error! Reference source
    not found" and no self-reference.
-7. **Front and back matter.** The title block (header rows, parties) is two aligned columns without borders; each
-   attachment starts on a new page with `attachments.separator: page-break` and has a rule above it with `rule`; the
-   signature blocks are borderless, with a signing line above each name, and stay on one page (try a longer document).
+7. **Front and back matter.** The title block (header rows, parties) is two aligned columns without borders, the
+   labels in italics; each attachment starts on a new page with `attachments.separator: page-break` and has a rule above
+   it with `rule`; with `none` (`separator-none`) there is no break and no rule; the signature blocks are borderless,
+   with a signing line above each name, and stay on one page when one page can hold them (try a longer document). The
+   settings variants:
+   - `attachments-not-listed`: the attachments heading and titles are **absent** from the table of contents and from
+     the navigation pane (outline level 9, body text).
+   - `depth-1`: the attachments are still in the contents, as first-level entries (the HTML indents the titles one
+     level more, the documented difference), and no second-level heading is.
+   - `no-attachments-label`: there is no attachments heading, and each title is a first-level entry.
+   - `\u` honours the outline levels of the attachment styles and paragraphs: the attachment titles are entries, at
+     the level the table of contents gives them, in every variant that lists them. If Word does not list them, the
+     fix is a `\t "Attachment Title,2"` list in the field (locale list separator permitting); report it.
 8. **The numbering corner cases:**
    - `\t` with words before the number: a label such as `Article {n}` or `§ {n}` referenced with `{n}`, whose reference
      drops the words (`REF \n \t`): Word shows the bare number, where LibreOffice ignores `\t` and shows the words.

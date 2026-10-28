@@ -161,12 +161,10 @@ cached entries are the contents the HTML shows, each a link to its heading with 
 fills in when it updates the field; with `contents.attachments` the attachments are listed by outline level, so
 the field has no locale-dependent style list), the attachments (the heading and a titled placeholder each, bookmarked so
 that `{{attach:}}` is a `REF` field or a link, separated by a page break or a rule as `attachments.separator` says),
-and the signature blocks (borderless tables with signing lines, kept on one page). Viewers that never update
+and the signature blocks (borderless tables with signing lines, kept together on one page as far as one page allows). Viewers that never update
 fields (Word Online, Quick Look, Google Docs import, Outlook's preview) show the contents without page numbers. A
 reference whose form Word cannot compose from fields (a custom style's `{path}` item labels, say) is fixed text and
-is reported as `render-docx-reference`. Before a DOCX is sent as a contract, the maintainers' manual check in Word
-([the checklist](https://github.com/ForLegalAI/legaldown-render/blob/main/.github/PUBLISHING.md)) is the last
-word. Settings Word cannot express (a `%` length, say) are an error for DOCX only. See
+is reported as `render-docx-reference`. The maintainers also check the golden documents in Word before each release ([the checklist](https://github.com/ForLegalAI/legaldown-render/blob/main/.github/PUBLISHING.md)), since CI cannot run Word. Settings Word cannot express (a `%` length, say) are an error for DOCX only. See
 [Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#docx)
 and the [roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md).
 
