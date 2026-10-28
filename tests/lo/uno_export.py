@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 """Open DOCX files in headless LibreOffice through UNO, update every field and index,
 and write what the document says: one ``NAME.txt`` per file (the body as plain text,
-UTF-8, as LibreOffice's text export writes it) and one ``NAME.json`` with the page
-count and the text of the running header and footer.
+UTF-8, one line per paragraph, read from the document model: tests/lo/uno_text.py) and one
+``NAME.json`` with the page count and the text of the running header and footer.
 
 Run it with the system Python that has the ``uno`` module (``/usr/bin/python3`` once
 ``python3-uno`` is installed), **not** with the project's virtual environment:
@@ -31,6 +31,7 @@ import uuid
 
 import uno  # type: ignore[import-not-found]  # noqa: I001 - provided by python3-uno, not by pip
 from com.sun.star.beans import PropertyValue  # type: ignore[import-not-found]
+from uno_text import body_text
 
 
 def _value(name: str, value: object) -> PropertyValue:
@@ -93,8 +94,8 @@ def export(out_dir: str, files: list[str], *, update: bool = True) -> None:
                 if update:
                     _update(document)
                 header, footer = _page_texts(document)
-                document.storeToURL(uno.systemPathToFileUrl(os.path.join(out_dir, f"{stem}.txt")),
-                                    (_value("FilterName", "Text (encoded)"), _value("FilterOptions", "UTF8")))
+                with open(os.path.join(out_dir, f"{stem}.txt"), "w", encoding="utf-8", newline="") as handle:
+                    handle.write(body_text(document))
                 pages = document.getCurrentController().PageCount
                 with open(os.path.join(out_dir, f"{stem}.json"), "w", encoding="utf-8") as handle:
                     json.dump({"header": header, "footer": footer, "pages": pages}, handle)
