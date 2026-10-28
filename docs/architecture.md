@@ -132,7 +132,8 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
    a skipped heading level counts as 1. The style only formats them, the n-th part of a number
    with the n-th level format. For paragraphs and list items, **alternatives** follow the
    validator's rule, applied the same way: an alternative directly follows its
-   sibling, has the same identifier and a valid condition, and its full presence (its own condition
+   sibling among the units numbered together (a list or table between two top-level paragraphs does
+   not separate them), has the same identifier and a valid condition, and its full presence (its own condition
    and every enclosing one) excludes that of every unit already holding the number (§15.4, the
    validator's `exclusive()`). It then labels
    list items by depth and top-level paragraphs, and allocates output anchors. Every anchor
@@ -142,7 +143,7 @@ Guessing at lost structure was tried, and it traded each gap for new bugs.
 
 | Directive | Resolves to | Failure markers |
 |---|---|---|
-| `{{ref:}}` | `CrossRef(designation, anchor)` (§13.3). A ref to an unnumbered item or paragraph falls back to its section's designation, with `ref-not-enumerated` | `[BROKEN REF: id]` |
+| `{{ref:}}` | `CrossRef(designation, anchor, target_unit, section_unit)` (§13.3). A ref to an unnumbered item or paragraph falls back to its section's designation, with `ref-not-enumerated` | `[BROKEN REF: id]` |
 | `{{term:}}` | `TermRef(label or the definition's rendered term text, def anchor)` (§7.3, §13.4); the text is the first definition's term resolved as at the definition, worked out on first use by `Resolver._term_text` (`_survey` only records which definition is first) | `[UNDEFINED: id]` |
 | `"Term" {{def:}}` | `DefinedTerm` without quotation marks, anchored at `def:<id>` (§7.2) | n/a |
 | `{{date:}}` `{{money:}}` `{{duration:}}` | `Value`, formatted for the locale by Babel (ADR 0005): amounts and durations keep every written digit (a fraction beyond Python's 4300-digit limit takes its plural form from its first 30 digits), and a duration without a pattern in the locale falls back to another length, the language alone, then English with `render-locale-fallback` | `[INVALID DATE: …]`, `[INVALID AMOUNT: …]`, `[UNKNOWN CURRENCY: …]`, `[INVALID DURATION: …]`, `[INVALID DURATION UNIT: …]` |
@@ -171,6 +172,32 @@ resolved. Terms in titles or alt text get none. After everything is resolved, on
 link of any `{{term:}}` whose definition got no anchor, so term links always have a target.
 
 Headings are numbered with their level clamped to 1–5, as the validator numbers them.
+
+**The numbering structure in the tree.** The resolver is the only place the rules of §13 live, and
+a writer that builds numbering of its own (DOCX does) must not work them out again. So the tree
+carries the structure behind every number, in terms that name no output format:
+
+| Where | Field | Holds |
+|---|---|---|
+| `RenderTree.formats` | `NumberingFormats` | The formats the labels were made with, after the style is resolved: `scheme`; `headings`, one `LevelFormat` (counter, `label` and `ref` templates) per heading level (empty under `none`); `enumerated`, the formats by list depth (cycling); `renumber`, the one format of ordered lists (None under `enumeration.ordered: enumerate`); `paragraphs` (None unless numbered); `reference`, `references.format` |
+| `Section`, `ListItem`, `Paragraph` | `unit` | An id, unique in the document and equal on every render: `s<k>` for the k-th section, `u<k>` for the k-th item or top-level paragraph of a section in document order, the preamble first. Not the anchor. Every section, every item (in a quote too) and every top-level paragraph of a section has one, numbered or not, since an unnumbered one can still be the target of a reference; a paragraph inside an item, or in the preamble, is not a unit (None) |
+| same | `number` | The unit's own counter value (the last part of "2.1" is 1; the item's position in its list; the paragraph's in its section). None when the unit is not numbered: any section under `none`, an item of a list that is not enumerated, a paragraph when the style does not number them |
+| same | `parent_unit` | The unit its designation is built on. For a section, the nearest section above it with fewer number parts (a skipped heading level counts as 1 and is no unit: "1.2.1.1" under "1.2" has a gap of one level, which `level` shows); for an item of a list not nested in an item, and for a paragraph, its section (None in the preamble); for a nested item, the item. A list in a quote or drafting note, even inside an item, is built on the section, as its designation is; to see where a list nests, follow `parent_unit` (an item or a section), never `depth` |
+| same | `shares_number_with` | For a later alternative that shares its number (§15.8, §15.4), the unit of the **first**; None otherwise, and always None on an unnumbered unit. Every alternative has a unit of its own. Sections share by number, as the validator numbers them: the subsections of a later alternative section repeat the numbers of the earlier one's ("1.1" again), and each repeat shares the number of the first section that had it |
+| `List` | `family` | `renumber` (ordered, counted 1., 2., … whatever the source says), `enumerated` (counted in the format of the nesting depth) or `bullet` (no numbers; `enumerated` is False) |
+| `List` | `depth`, `format`, `start` | The nesting depth the format was chosen at (a list in a quote in an item is one deeper), which selects the format and nothing else; the `LevelFormat` itself, so the entry of `formats` is never selected again (None for `bullet`); and `start`, the number of the first item (`items[0].number`). A list is not always counted from 1: lists nested directly in one item share a counter per way of writing a designation (counter style and `ref`), so a second list after a paragraph, or a renumbered list beside an enumerated one with the same designations, continues the first's numbers (a, b, then c) and no designation repeats; top-level lists and lists in quotes start at 1. A list has no id of its own: name it by `items[0].unit` |
+| `CrossRef` | `target_unit`, `section_unit` | The unit the identifier is on, and the section that qualifies the designation (for a section target, itself). With alternatives sharing the identifier, `target_unit` is the first, as the anchor is. For an unnumbered item or paragraph the unit is still the target and `text` is the section's designation. Under `none` both are set as usual and the section's `number` is None. A reference that does not resolve is a `FailureMarker`, and so is a `{{ref:}}` to an attachment id (§5.6); an attachment is reached with `{{attach:}}`, a `Value` whose `href` is `#` and the `AttachmentPart.anchor`. Both are None for a copy that no longer links (`unlinked`, as in the table of contents) |
+
+A designation is the parent's designation followed by the unit's `ref` template filled in
+(`{n}` the unit's number in its counter style, `{section}` the designation of the section, which a
+preamble item has none of; under `none` the heading text stands for the section's designation and a
+space goes before the piece), and a label is the unit's `label` template filled in with the same and
+`{path}`, the designation up to the unit. `tests/test_numbering_structure.py` writes every label,
+designation and reference text again from these fields alone, for each built-in style and the
+specification's corpus, so the structure is known to be enough.
+
+Unit ids come out the same in the second numbering pass of the `none` scheme (below): they follow
+document order, and the counter starts again with each pass.
 
 **Designations under the `none` scheme (§13.3).** A section's designation is its heading as
 rendered, as plain text with white space collapsed: the `{{ref:}}`s and `{{term:}}`s in it are
@@ -444,6 +471,7 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_render.py` | Numbering schemes, designations, fallbacks, every failure marker, template view, labels by language, HTML safety, unique anchors, determinism, strict mode, locales; the renderer's reading of the validator's structure (lists, quotes, comments, markers) |
 | `tests/test_values.py` | Money, dates and durations in a locale: exact digits, plural of the value shown, currency display, CLDR fallback to English |
 | `tests/test_numbering.py` | Counter formats, label templates and the preamble's `{section}` |
+| `tests/test_numbering_structure.py` | The numbering structure in the tree (`formats`, unit ids, numbers, parents, alternatives, list families, cross-reference units): headings in each scheme and with skipped levels, nested lists, section-qualified items, numbered paragraphs, alternatives, the `none` scheme and its second pass; and that every label, designation and reference can be written again from the structure alone, over the tests' and the specification's documents |
 | `tests/test_build.py` | Building the tree: comment-only items and quotes, emphasis next to a directive, spacing where an inline comment was dropped |
 | `tests/test_terms.py` | What `{{term:}}` shows, references inside terms, terms that name themselves or each other, the cap on a term text |
 | `tests/test_none_designations.py` | Designations under the `none` scheme: references and terms in headings, items and paragraphs under them, ambiguity on the final designations, cycles, the depth, length and nesting limits, the lines of the Warnings, work bounds, invariants on random documents |
