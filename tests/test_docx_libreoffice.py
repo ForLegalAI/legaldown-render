@@ -14,6 +14,7 @@ from conftest import DOCUMENTS
 from docx_support import Exported, libreoffice_export, parts, require_libreoffice, texts
 
 from legaldown_render import render
+from legaldown_render.resolve.docx_plan import plan_docx
 
 pytestmark = pytest.mark.libreoffice
 
@@ -61,6 +62,16 @@ def docx(source: str, **settings: object) -> bytes:
     return result.binary
 
 
+def without_number(line: str, labels: list[str]) -> str:
+    """*line* without the number LibreOffice drew before the text of a numbered paragraph (one of *labels*,
+    the numbers Word draws, with any indent of a nested item)."""
+    text = line.lstrip()
+    for label in labels:
+        if text.startswith(f"{label} "):
+            return text.removeprefix(f"{label} ")
+    return line
+
+
 def expected_lines(data: bytes) -> list[str]:
     """What the paragraphs of the document part say, one line per line, without blank ones."""
     lines = []
@@ -86,16 +97,21 @@ def shown() -> dict[str, Exported]:
 
 
 def test_the_words_come_back_in_order(shown: dict[str, Exported]) -> None:
+    # the numbers are drawn by LibreOffice from the numbering definitions (test_docx_roundtrip.py compares them)
     assert shown["round_trip"].lines == [
-        "Round Trip", "Sub", "Preamble ž€.", "First", "Body with emphasis, strong and code.", "Second line.",
-        "Second", "item one", "item two", "A quote", "code line 1", "  code line 2", "H1", "H2", "a", "b", ""]
+        "Round Trip", "Sub", "Preamble ž€.", "1. First", "Body with emphasis, strong and code.", "Second line.",
+        "1.1 Second", "    (a) item one", "    (b) item two", "A quote", "code line 1", "  code line 2", "H1", "H2",
+        "a", "b", ""]
 
 
 @pytest.mark.parametrize("name", ["features", "template"])
 def test_the_test_documents_read_as_their_paragraphs(shown: dict[str, Exported], name: str) -> None:
-    data = docx((DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8"), **({"style": "continental"}
-                                                                          if name == "template" else {}))
-    assert [line for line in shown[name].lines if line] == expected_lines(data)
+    settings = {"style": "continental"} if name == "template" else {}
+    source = (DOCUMENTS / f"{name}.lgd").read_text(encoding="utf-8")
+    labels = sorted({unit.label for unit in plan_docx(render(source, format="text", **settings).tree)[0].units.values()
+                     if unit.label}, key=len, reverse=True)
+    words = [without_number(line, labels) for line in shown[name].lines if line]
+    assert words == expected_lines(docx(source, **settings))
 
 
 def test_the_header_shows_the_templates_and_the_page_field(shown: dict[str, Exported]) -> None:
@@ -130,5 +146,5 @@ def test_a_landscape_page_with_a_right_aligned_page_number_opens(shown: dict[str
 def test_hostile_text_opens_with_the_unwritable_characters_dropped(shown: dict[str, Exported]) -> None:
     lines = shown["hostile"].lines
     assert lines[0] == "ab"
-    assert lines[1] == "Hx"
+    assert lines[1] == "1. Hx"
     assert lines[2] == "body <&> ]]>"

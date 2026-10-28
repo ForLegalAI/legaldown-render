@@ -13,21 +13,19 @@ Layout of this package:
 * :mod:`.styles`, :mod:`.settings`, :mod:`.headers`, :mod:`.properties` -- the parts that come from the style template;
 * :mod:`.numbering` -- ``numbering.xml``, from the plan's numbering definitions;
 * :mod:`.body` and :mod:`.runs` -- the body of the document and its inlines, laid out as the plan says (interim
-  for the title block, contents, attachments and signatures, see there);
-* :mod:`.interim_plan` -- the plan with no numbering that stands in until the planner is wired.
+  for the title block, contents, attachments and signatures, see there).
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ...resolve.docx_plan import DocxPlan
+from ...resolve.docx_plan import DocxPlan, plan_docx
 from ...style import Style
 from ...style.docx import DocxSettings, docx_settings
 from ...tree import RenderTree
 from . import package as pkg
 from .body import BodyWriter, document_title
 from .headers import build_footer, build_header
-from .interim_plan import _unnumbered_plan
 from .numbering import numbering_part
 from .ooxml import Bookmarks, el, serialize
 from .properties import build_app, build_core
@@ -58,10 +56,10 @@ class DocxWriter:
 
     def write(self, tree: RenderTree, plan: DocxPlan | None = None) -> bytes:
         """The ``.docx`` file for *tree*, numbered, bookmarked and cross-referenced as *plan* says. Without
-        one the document has no numbering (:func:`~.interim_plan._unnumbered_plan`): temporary, until the
-        planner is wired in."""
+        one the tree is planned here (:func:`~legaldown_render.resolve.docx_plan.plan_docx`), whose diagnostics
+        are then lost: :func:`~legaldown_render.render` plans first and reports them."""
         if plan is None:
-            plan = _unnumbered_plan(tree)
+            plan = plan_docx(tree)[0]
         settings = self.settings
         language = language_tag(tree.language, self.style.locale)
         title = document_title(tree)

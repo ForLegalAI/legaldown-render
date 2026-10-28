@@ -141,18 +141,23 @@ computed as their cached results, so a lawyer who inserts a clause gets the numb
 updated by Word
 ([ADR 0008](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/decisions/0008-docx-word-native.md)).
 
-**What is there today** is the package and the body writer, not yet the numbering: a valid `.docx` (checked
-against the ISO/IEC 29500 schemas, and opened in LibreOffice in CI) with styles generated from the style template
-(`Normal`, `heading 1` to `heading 5`, `Title`, `Quote`, `toc 1` to `toc 5`, `Hyperlink`, ...), the page size
-and margins, a running header and footer from `page.header` and `page.footer` (the default footer is "3 / 12"
-as live page fields), the document's title and language, `w:updateFields` so Word refreshes fields when it
-opens the file (`docx.update_fields_on_open`), and deterministic output. The body writer lays out headings,
-paragraphs, lists (with the numbering definitions, bookmarks and `REF` fields a plan names), quotes, drafting
-notes, code, tables with a repeated header row, rules, links, defined terms and the template view's labels and
-choices. **The file is still interim:** until the planner that decides the numbering is wired in, it carries
-**no numbers, no cross-reference fields, and no title block, contents, attachments or signature blocks**, and
-every render reports the Warning `render-docx-interim` to say so. Do not send such a file as a contract. Settings Word
-cannot express (a `%` length, say) are an error for DOCX only. See
+**What is there today:** a valid `.docx` (checked against the ISO/IEC 29500 schemas, and opened in LibreOffice in CI)
+with styles generated from the style template (`Normal`, `heading 1` to `heading 5`, `Title`, `Quote`, `toc 1` to
+`toc 5`, `Hyperlink`, ...), the page size and margins, a running header and footer from `page.header` and
+`page.footer` (the default footer is "3 / 12" as live page fields), the document's title and language,
+`w:updateFields` so Word refreshes fields when it opens the file (`docx.update_fields_on_open`), and deterministic
+output. **Numbering and cross-references are live:** headings, list items and numbered paragraphs are numbered by Word
+numbering definitions (headings by the heading styles, nested lists restarting by structure), and a
+`{{ref: clause}}` is `REF` fields on bookmarks whose cached results are the text the plain-text writer prints, so
+"1(b)(ii)" or "I.A.1" stays right when a lawyer inserts a clause and updates fields. A defined term or an attachment
+reference is an internal link. A reference that Word's fields cannot reproduce is written as its text (it will not follow edits) and reported. Where Word cannot draw what the renderer does (letters past 26, a label that shows the
+section's number in a list item, alternatives that share a number, a list restarted by a fixed setting), the render
+reports it as a `render-docx-*` Warning or Info with the line, see
+[the conformance notes](https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md). The body writer also
+lays out paragraphs, quotes, drafting notes, code, tables with a repeated header row, rules, links, blanks and
+choices. **The file is still interim:** it has **no title block, table of contents, attachments or signature
+blocks**, and every render reports the Warning `render-docx-interim` to say so. Do not send such a file as a
+contract. Settings Word cannot express (a `%` length, say) are an error for DOCX only. See
 [Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#docx)
 and the [roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md).
 

@@ -176,7 +176,9 @@ class BodyWriter:
         1-5) and its blocks. The condition label (§15.8) is a run inside the heading, after the title,
         so that Word's table of contents keeps it."""
         level = min(max(section.level, 1), 5)
-        heading = self._unit(section.unit, self.inlines.runs(section.title), style=heading_style(level),
+        unit = self.plan.units.get(section.unit or "")
+        title = self.inlines.title_runs(section.title, unit.literal_refs if unit is not None else ())
+        heading = self._unit(section.unit, title, style=heading_style(level),
                              context=Context(), conditions=(section.condition_label,), after=True)
         return [heading, *self.blocks(section.blocks, Context())]
 
@@ -275,11 +277,13 @@ class BodyWriter:
               conditions: Sequence[str | None], after: bool = False) -> ET.Element:
         """The paragraph of the unit *unit_id* (None, or a unit the plan does not know, has no numbering) with
         *content*, the title or first paragraph's runs. The condition labels lead the paragraph, or follow the
-        content with *after* (a heading); the unit's bookmarks wrap the content alone."""
+        content with *after* (a heading); the unit's bookmarks wrap the content alone, or, where the plan says they are
+        collapsed, stand as points at the start of the paragraph."""
         unit = self.plan.units.get(unit_id) if unit_id else None
         props: list[ET.Element | None] = []
         number: list[ET.Element] = []
         names: list[str] = []
+        points: list[str] = []
         if unit is not None:
             if unit.explicit or unit.alt is not None:
                 props.append(self._numbering(unit))
@@ -290,10 +294,11 @@ class BodyWriter:
                 props.append(el("ind", {"left": left, "hanging": hanging or None}))
             if unit.alt is not None:
                 number = self._alternative(unit.alt)
-            names = [*unit.bookmarks, *([unit.toc_bookmark] if unit.toc_bookmark else [])]
+            (points if unit.collapsed else names).extend(unit.bookmarks)
+            names.extend([unit.toc_bookmark] if unit.toc_bookmark else [])
         else:
             props.append(self._plain_indent(context))
-        wrapped = self.inlines.wrap(names, content) if names else list(content)
+        wrapped = [*self.inlines.points(points), *(self.inlines.wrap(names, content) if names else content)]
         labels = self._conditions(conditions, content, after=after)
         return p(number, wrapped + labels if after else [*labels, *wrapped], style=style, props=props)
 

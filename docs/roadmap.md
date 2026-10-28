@@ -101,7 +101,7 @@ values appear only as the cached results of fields. Decided in
   `[docx]` extra): the OOXML parts, styles generated from the style template, settings (compatibility
   mode 15, `w:updateFields`), page setup, running headers and footers with `PAGE`/`NUMPAGES` fields,
   document properties, deterministic output. `RenderResult.binary`, `-o x.docx`, `-o -`. The body is
-  an interim one: the title, `heading N` paragraphs and plain-text paragraphs, with no numbers yet
+  an interim one at that point: the title, `heading N` paragraphs and plain-text paragraphs, with no numbers yet
 - **Behaviour changes this brings.** `-o -` now writes to standard output for every format (it used to
   create a file named `-`); `.docx` is a writable extension, and a DOCX with no `-o` goes to standard output
   when that is not a terminal; `--fragment` with DOCX is a usage error; `RenderTree` gains `version` and
@@ -112,13 +112,17 @@ values appear only as the cached results of fields. Decided in
 - **Verification (done).** Every part validated against the ISO/IEC 29500 schemas (fetched in CI, not
   stored), well-formedness fuzzing, a determinism test, and LibreOffice opening the documents through
   UNO as the oracle (a `docx` CI job)
-- **Body writer (done, awaiting the planner).** `numbering.xml`, numbered paragraphs, bookmarks, `REF`
-  fields with cached results, term hyperlinks, and every block and inline, written from a `DocxPlan`
-  (`resolve/docx_plan.py`); a plan with no numbering stands in until the planner is wired
-- **Next.** The planner that maps the tree to Word (lists, levels, bookmarks, cross-references composed
-  of `REF` fields, cached values from a model of Word's numbering); the table of contents, title block,
-  attachments and signature blocks; a corpus checked against the plain-text oracle, also after edits made through UNO; a manual
-  Word checklist for releases
+- **Body writer (done).** `numbering.xml`, numbered paragraphs, bookmarks, `REF` fields with cached results,
+  term hyperlinks, and every block and inline, written from a `DocxPlan` (`resolve/docx_plan.py`)
+- **Planner: numbering, cross-references and contents plan (done).** The tree is mapped to Word numbering
+  (heading list, list families, paragraphs) and checked against the resolver with a model of Word's counters;
+  every `{{ref:}}` is covered by `REF` fields and delimiters (the designation cover), every anchor has a bookmark,
+  and the table of contents is planned from Word's numbers; `render` runs the planner and reports its
+  `render-docx-*` diagnostics. A LibreOffice round trip with wrong cached results checks the numbers and references
+  against the plain-text oracle
+- **Next.** Qualified labels (the continental `5.1`) on the heading list, alternatives that share a number,
+  restarts Word would otherwise get wrong; the table of contents field, title block, attachments and signature
+  blocks; the corpus checked also after edits made through UNO; a manual Word checklist for releases
 
 ### v0.6 — PDF
 

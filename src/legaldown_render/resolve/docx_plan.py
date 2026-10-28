@@ -7,9 +7,13 @@ tree: the numbering structure the resolver put on every section, list item and t
 and, for each unit, the (numId, ilvl) of its paragraph, and every placement is checked against the number the
 resolver gave the unit, by simulating Word's counters (:mod:`.docx_numbering`).
 
-What a plan holds so far: the numbering definitions and the numbering of every unit. ``UnitPlan.ind`` is never
-set, and the reference fields, bookmarks and table of contents (``refs``, ``anchors``, ``toc``, ``bookmarks``) are
-empty. :func:`docx_style_errors` is the part that runs on every DOCX render, before it (ADR 0006).
+A plan holds the numbering definitions and the numbering of every unit, the bookmark of every anchor of the tree
+(``anchors``, ``UnitPlan.bookmarks``; :mod:`.docx_bookmarks`), the fields of every cross-reference (``refs``: the
+renderer's designation of the target covered by ``REF`` fields and the delimiters between them, with Word's value as
+each field's cached result; :mod:`.docx_cover`) and the entries of the table of contents (``toc``,
+``UnitPlan.toc_bookmark``), with the diagnostics for what Word will not show as the renderer does.
+``UnitPlan.ind`` is never set. :func:`docx_style_errors` is the part that runs on every DOCX render, before it
+(ADR 0006).
 
 **Data model.** Frozen data only; the planner assigns bookmark *names*, never ids (the writer allocates those);
 names are valid Word bookmark names of at most 40 characters and unique ignoring case. All sequences are tuples, all
@@ -19,7 +23,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal, NamedTuple
 
 from legaldown import Diagnostic
@@ -27,8 +31,18 @@ from legaldown import Diagnostic
 from ..diagnostics import by_line
 from ..style.model import LevelFormat, Style
 from ..tree import (
+    Blank,
+    Choice,
+    Code,
+    CrossRef,
+    DefinedTerm,
     DraftingNote,
+    Emphasis,
+    FailureMarker,
+    HardBreak,
+    Image,
     Inline,
+    Link,
     List,
     ListItem,
     NumberingFormats,
@@ -36,16 +50,31 @@ from ..tree import (
     Quote,
     RenderTree,
     Section,
+    SoftBreak,
+    Strong,
+    TermRef,
+    Text,
+    Value,
+    has_visible_content,
+    iter_inlines,
+    iter_located_body_inlines,
+    iter_tree_inlines,
+    plain_text,
 )
-from ..urls import printable
+from ..urls import displayed_url, printable
+from .docx_bookmarks import ATTACHMENTS_HEADING, BookmarkNames
+from .docx_cover import Field, Shown, Title, atoms, cover, suppressed, text_of, uncovered
 from .docx_numbering import (
     NUM_FMT,
     SAMPLE_COUNTER,
     Count,
     Ghost,
     LevelParts,
+    Lit,
     Step,
     WordNumbering,
+    extend_tokens,
+    fill_tokens,
     level_text,
     level_text_problem,
     lvl_text,
@@ -162,11 +191,17 @@ class UnitPlan:
     #: Why the unit is not on the plain path: ``resync``, ``alternative``, ``reserved-level``, ``restart-family``,
     #: ``restart-section``, ``restart-alternative``, ``label-fallback``, ``clamped``, ``skipped-level``.
     cause: tuple[str, ...]
-    #: Names to wrap around the paragraph's title/first paragraph content: the anchor bookmark first (when the
-    #: unit has an anchor), then the helper bookmark a cover needs.
+    #: Names to wrap around the paragraph's title/first paragraph content: the bookmark of the unit's anchor when it
+    #: has one, else a hidden one when a reference field points at it, else none.
     bookmarks: tuple[str, ...]
     #: ``_Toc`` name of a heading listed in the contents.
     toc_bookmark: str | None
+    #: True: *bookmarks* are points at the start of the paragraph, not around its text (no field returns that
+    #: text, and a field must never stand inside the bookmark it points at).
+    collapsed: bool = False
+    #: Targets of the ``{{ref:}}`` in this heading's title that are written as their text, not as fields, because
+    #: their fields would lead back into the title (see :meth:`_Planner.cyclic_titles`).
+    literal_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +212,9 @@ class RefPlan:
     segments: tuple[Segment, ...]
     #: ``concat(cached) == CrossRef.text``.
     exact: bool
+    #: No cover exists, so the reference is the renderer's text with no field: right when the file is opened, but
+    #: fixed (an edit in Word does not change it). The plan reports each (``render-docx-reference``).
+    fixed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +385,33 @@ def _reads(level: LevelDef, levels: Sequence[LevelDef]) -> str:
 # The planner
 # ---------------------------------------------------------------------------
 
+
+def _shown(inlines: tuple[Inline, ...]) -> str:
+    """What the runs of *inlines* show in the document (``writers/docx/runs.py``): the text of each, a hard break as a
+    line break, a blank with its prompt. A heading's bookmark returns this, which is not always the heading's
+    designation (white space is collapsed in that)."""
+    out: list[str] = []
+    for inline in inlines:
+        match inline:
+            case Text(text=text) | Code(text=text) | CrossRef(text=text) | TermRef(text=text) | Value(text=text) \
+                    | FailureMarker(text=text):
+                out.append(text)
+            case SoftBreak():
+                out.append(" ")
+            case HardBreak():
+                out.append("\n")
+            case Blank(text=text, prompt=prompt):
+                out.append(text + (f" ({prompt})" if prompt else ""))
+            case Choice(options=options, separator=separator):
+                out.append("[" + separator.join(options) + "]")
+            case Image(children=children):
+                out.append(plain_text(children))
+            case Link(href=href, children=children):
+                out.append(_shown(children) if has_visible_content(children) else displayed_url(href))
+            case Emphasis(children=children) | Strong(children=children) | DefinedTerm(children=children):
+                out.append(_shown(children))
+    return "".join(out)
+
 _Unit = Section | ListItem | Paragraph
 
 
@@ -362,6 +427,36 @@ class _Placed(NamedTuple):
 
     num: Num
     abstract: _Abstract
+
+
+class _Reference(NamedTuple):
+    """The ``{{ref:}}`` to one unit that the plan builds fields for: the unit, its section, what the renderer shows and
+    the first line it stands at (None outside the body)."""
+
+    target: str
+    section: str | None
+    text: str
+    line: int | None
+
+
+class _Built(NamedTuple):
+    """What the plan makes of one reference: its pieces (literal text and fields), whether they read exactly as the
+    renderer's text, what LibreOffice shows for them when that is not what Word shows (a field with ``\\t``), else
+    None, and whether it is fixed text for want of a cover."""
+
+    pieces: list[str | Field]
+    exact: bool
+    lo_text: str | None
+    fixed: bool
+
+
+class _Finding(NamedTuple):
+    """A reference that is fixed text (*kind* ``fixed``, *reason* why) or reads differently in Word (``differs``)."""
+
+    kind: str
+    reason: str
+    found: _Reference
+    shown: str
 
 
 class _Drift:
@@ -395,6 +490,17 @@ class _Planner:
         self.depth_reported = False
         self.definitions = _definitions(self.formats)
         self.by_kind: dict[str, _Abstract] = {}
+        #: Every unit's node, in document order; what Word numbers each as (:class:`Step`); and its designation as
+        #: the resolver wrote it, as tokens (§13.1-§13.3), each counter with the unit that holds it.
+        self.nodes: dict[str, _Unit] = {}
+        self.steps: dict[str, Step] = {}
+        self.desig: dict[str, list[Shown]] = {}
+        #: The parts of the number of the open section, one per level: the unit that holds it (a skipped level has a
+        #: :class:`Ghost`) and its value.
+        self.owners: list[tuple[object, int]] = []
+        #: What a heading's bookmark returns (``REF bookmark \\h``): its title as the runs show it.
+        self.heading_text: dict[str, str] = {}
+        self.unreferable: list[_Finding] = []
 
     # -- registry -------------------------------------------------------------------
 
@@ -431,6 +537,250 @@ class _Planner:
             if line is not None and (known.line is None or line < known.line):
                 self.diagnostics[index] = found
 
+    # -- references, bookmarks and the table of contents -----------------------------
+
+    def words(self, unit: str) -> tuple[Shown, ...]:
+        """What ``REF <unit> \\n`` returns, as tokens: the number Word draws for the unit without its trailing periods
+        (:attr:`Step.word_ref` with the unit that holds each counter)."""
+        tokens = list(self.steps[unit].tokens)
+        while tokens and isinstance(tokens[-1], Lit):
+            stripped = tokens[-1].text.rstrip(".")
+            if stripped == tokens[-1].text:
+                break
+            if stripped:
+                tokens[-1] = Lit(stripped)
+                break
+            tokens.pop()
+        return tuple(tokens)
+
+    def fields(self, designation: Sequence[Shown]) -> list[Field]:
+        """The fields that can stand for parts of *designation*: for each unit that holds a counter of it, ``REF \\n``
+        of its bookmark, and ``REF \\n \\t`` where that leaves the counters bare (:func:`.docx_cover.suppressed`); for a
+        heading under the ``none`` scheme the bookmarked text. A later alternative takes its number from the unit that
+        holds it and is never a field's target (§15.8)."""
+        fields: list[Field] = []
+        seen: set[str] = set()
+        for token in designation:
+            owner = None if isinstance(token, Lit) else token.owner
+            if not isinstance(owner, str) or owner in seen or owner not in self.units:
+                continue
+            seen.add(owner)
+            if self.units[owner].num_id == 0 or self.units[owner].alt is not None:
+                continue
+            if isinstance(token, Title):
+                fields.append(Field(owner, False, False, (Title(owner, self.heading_text.get(owner, token.text)),)))
+            elif owner in self.steps:
+                words = self.words(owner)
+                fields.append(Field(owner, True, False, words))
+                bare = suppressed(words)
+                if bare is not None and atoms(bare) != atoms(words):
+                    fields.append(Field(owner, True, True, bare))
+        return fields
+
+    def why_uncovered(self, designation: Sequence[Shown], fields: Sequence[Field]) -> str:
+        """Why no combination of *fields* and delimiters reads like *designation* (§13.1)."""
+        wanted = atoms(designation)
+        kind, owner = wanted[uncovered(designation, fields) or 0]
+        if kind == "c" and isinstance(owner, Ghost):
+            return "a heading level is skipped before it, and no field stands for the level that is missing"
+        for candidate in fields:
+            if candidate.number and any(isinstance(t, Count) and t.owner == owner for t in candidate.tokens):
+                return (f"Word draws its number as '{printable(text_of(candidate.tokens))}', with text or punctuation "
+                        f"around the counter that the designation does not have and that Word's \\t switch cannot "
+                        f"leave out")
+        return "no combination of Word's fields reads like it"
+
+    def reference(self, found: _Reference) -> _Built | None:
+        """The fields of the reference *found*: its designation covered by fields and delimiters, inside the text of
+        ``references.format``; None for a target the plan knows nothing of. A designation that cannot be covered is
+        written as the renderer's text, which is right at open and not a field (``fixed``), and noted for the
+        report, as is a cover that reads differently in Word for a reason no diagnostic of a unit already gives."""
+        node = self.nodes.get(found.target)
+        if node is None or found.target not in self.units:
+            return None
+        numbered = isinstance(node, Section) or node.number is not None
+        designation = self.desig[found.target] if numbered else self.desig.get(found.section or "", [])
+        fields = self.fields(designation)
+        covered = cover(designation, fields)
+        if covered is None:
+            self.unreferable.append(_Finding("fixed", self.why_uncovered(designation, fields), found, found.text))
+            return _Built([found.text] if found.text else [], True, None, True)
+        pieces: list[str | Field] = []
+        parts = self.formats.reference.split("{designation}")
+        for index, literal in enumerate(parts):
+            for piece in ([literal] if literal else []) + (covered if index < len(parts) - 1 else []):
+                if pieces and isinstance(piece, str) and isinstance(pieces[-1], str):
+                    pieces[-1] += piece
+                else:
+                    pieces.append(piece)
+        shown = "".join(piece if isinstance(piece, str) else text_of(piece.tokens) for piece in pieces)
+        if shown != found.text:
+            chain = {t.owner for t in designation if not isinstance(t, Lit) and isinstance(t.owner, str)}
+            if not chain & self.flagged and found.target not in self.flagged:
+                self.unreferable.append(_Finding("differs", "", found, shown))
+        lo_text = None
+        if any(isinstance(piece, Field) and piece.suppress_text for piece in pieces):
+            lo_text = "".join(piece if isinstance(piece, str) else text_of(self.words(piece.owner) if piece.number
+                                                                           else piece.tokens) for piece in pieces)
+        return _Built(pieces, shown == found.text, lo_text, False)
+
+    def report_references(self) -> None:
+        """One finding for the references that fail in the same way (the first, by line, and how many more), as
+        for a run of units counted off by the same amount."""
+        groups: dict[tuple[str, str], list[_Finding]] = {}
+        for finding in self.unreferable:
+            groups.setdefault((finding.kind, finding.reason), []).append(finding)
+        for (kind, reason), members in groups.items():
+            members.sort(key=lambda m: (m.found.line is None, m.found.line or 0))
+            first = members[0]
+            text, shown = printable(first.found.text), printable(first.shown)
+            more = f" {len(members) - 1} more cross-references fail in the same way." if len(members) > 1 else ""
+            if kind == "fixed":
+                message = (f"The cross-reference '{text}' cannot be built from Word's numbering fields: {reason}. It is "
+                           f"written as the text '{text}', which is right now but is not a field: it will not follow "
+                           f"edits made in Word.{more}")
+            else:
+                message = (f"The cross-reference '{text}' will read '{shown}' in Word: a part of it is numbered or "
+                           f"written differently there.{more}")
+            self.report("render-docx-reference", "warning", message, first.found.line)
+
+    def cyclic_titles(self, built: dict[str, _Built]) -> dict[str, tuple[str, ...]]:
+        """The cross-references in a heading's title that must be text, by heading unit. Under the ``none`` scheme a
+        heading is designated by its text, and a field for it (``REF bookmark \\h``) returns what its bookmark holds;
+        a reference in the title that leads back to the heading (directly, or through the titles of other headings)
+        would be a field inside the bookmark it points at, which Word cannot show (a self-reference) and
+        LibreOffice expands without end. Such a reference is written as its text and reported."""
+        if not any(not p.number for made in built.values() for p in made.pieces if isinstance(p, Field)):
+            return {}  # no field returns the text of a heading: nothing can lead back into one
+        inside: dict[str, list[str]] = {}
+        for section in self.tree.sections:
+            if section.unit is not None:
+                targets = [i.target_unit for i in iter_inlines(section.title)
+                           if isinstance(i, CrossRef) and i.target_unit in built]
+                inside[section.unit] = list(dict.fromkeys(t for t in targets if t is not None))
+        owners = {target: {p.owner for p in made.pieces if isinstance(p, Field) and not p.number}
+                  for target, made in built.items()}
+
+        def leads_to(start: str, goal: str) -> bool:
+            seen, pending = set(), [start]
+            while pending:
+                heading = pending.pop()
+                if heading == goal:
+                    return True
+                if heading not in seen:
+                    seen.add(heading)
+                    pending += [t for target in inside.get(heading, ()) for t in owners[target]]
+            return False
+
+        found: dict[str, tuple[str, ...]] = {}
+        for heading, targets in inside.items():
+            cyclic = tuple(t for t in targets if any(leads_to(owner, heading) for owner in owners[t]))
+            if cyclic:
+                found[heading] = cyclic
+        return found
+
+    def finish(self) -> tuple[dict[str, UnitPlan], dict[str, str], dict[str, RefPlan], tuple[TocEntryPlan, ...]]:
+        """The bookmarks, the cross-reference fields and the table of contents, which need the numbering of every
+        unit: the bookmark of every anchor (:class:`.docx_bookmarks.BookmarkNames`, given out in the order of the
+        document so that the names are the same on every run), a hidden one for a unit a field needs that has no
+        anchor, the fields of every ``{{ref:}}`` target, and the table of contents entries."""
+        found: dict[str, _Reference] = {}
+        for inline in iter_tree_inlines(self.tree):
+            if isinstance(inline, CrossRef) and inline.target_unit is not None:
+                found.setdefault(inline.target_unit, _Reference(inline.target_unit, inline.section_unit,
+                                                                inline.text, None))
+        if found:
+            for inline, line in iter_located_body_inlines(self.tree):
+                if isinstance(inline, CrossRef) and inline.target_unit in found and line is not None:
+                    known = found[inline.target_unit]
+                    if known.line is None or line < known.line:
+                        found[inline.target_unit] = known._replace(line=line)
+        built: dict[str, _Built] = {}
+        for target, reference in found.items():
+            made = self.reference(reference)
+            if made is not None:
+                built[target] = made
+        self.report_references()
+        needed = {piece.owner for made in built.values() for piece in made.pieces if isinstance(piece, Field)}
+        #: A bookmark holds its paragraph's text only if a field returns that text; any other is a point at the start
+        #: of the paragraph, so that no field ever stands inside the bookmark it points at.
+        enclosing = {piece.owner for made in built.values() for piece in made.pieces
+                     if isinstance(piece, Field) and not piece.number}
+        cyclic = self.cyclic_titles(built)
+        word_only = [(found[target].text, made.lo_text) for target, made in built.items() if made.lo_text is not None]
+        if word_only:
+            first, lo = word_only[0]
+            more = f"; so do {len(word_only) - 1} more" if len(word_only) > 1 else ""
+            self.report("render-docx-reference-word-only", "info",
+                        f"The cross-reference '{printable(first)}' leaves out the words of a number with Word's \\t "
+                        f"switch, which LibreOffice ignores: there it reads '{printable(lo)}'{more}.", None)
+        for section in self.tree.sections:
+            if section.unit in cyclic:
+                self.report("render-docx-reference-cycle", "warning",
+                            f"The heading '{printable(plain_text(section.title)[:40])}' holds a cross-reference that "
+                            f"leads back to the heading itself, which a field cannot show (the heading's text is what "
+                            f"the reference returns): it is written as text, so it will not follow edits made in Word.",
+                            section.line)
+
+        names = BookmarkNames()
+        anchors: dict[str, str] = {}
+        bookmark: dict[str, str] = {}
+        units = dict(self.units)
+        for unit, node in self.nodes.items():
+            anchor = node.anchor
+            if anchor:
+                name = names.anchor("ld_", anchor)
+                anchors.setdefault(anchor, name)
+            elif unit in needed:
+                name = names.hidden()
+            else:
+                continue
+            bookmark[unit] = name
+            units[unit] = replace(units[unit], bookmarks=(name,), collapsed=unit not in enclosing)
+        for unit, targets in cyclic.items():
+            units[unit] = replace(units[unit], literal_refs=targets)
+        for inline in iter_tree_inlines(self.tree):
+            if isinstance(inline, DefinedTerm) and inline.defining and inline.anchor and inline.anchor not in anchors:
+                anchors[inline.anchor] = names.anchor("lddef_", inline.anchor.removeprefix("def:"))
+        for attachment in self.tree.attachments:
+            if attachment.anchor and attachment.anchor not in anchors:
+                anchors[attachment.anchor] = names.anchor("ldatt_", attachment.anchor)
+        if self.tree.attachments_anchor and self.tree.attachments_anchor not in anchors:
+            anchors[self.tree.attachments_anchor] = names.fixed(ATTACHMENTS_HEADING)
+
+        refs: dict[str, RefPlan] = {}
+        for target, made in built.items():
+            segments: list[Segment] = []
+            for piece in made.pieces:
+                if isinstance(piece, str):
+                    segments.append(Literal_(piece))
+                    continue
+                cached = text_of(piece.tokens)
+                plain = text_of(self.words(piece.owner)) if piece.number else cached
+                segments.append(FieldSeg(bookmark[piece.owner], piece.number, piece.suppress_text, True, cached,
+                                         plain if piece.suppress_text else cached))
+            refs[target] = RefPlan(tuple(segments), made.exact, made.fixed)
+
+        toc: list[TocEntryPlan] = []
+        for entry in self.tree.contents:
+            name = names.toc()
+            number = ""
+            sep: Literal["\t", " ", ""] = ""
+            mine = units.get(entry.unit) if entry.unit is not None else None
+            if mine is not None:
+                mine = units[mine.unit] = replace(mine, toc_bookmark=name)
+                suff: str | None = None
+                if mine.alt is not None:
+                    number = "".join(piece.text if isinstance(piece, Literal_) else piece.cached
+                                     for piece in mine.alt.segments)
+                    suff = mine.alt.suff
+                elif mine.ilvl is not None:
+                    number, suff = mine.label, self.definitions["headings"][mine.ilvl].suff
+                if number:
+                    sep = "\t" if suff == "tab" else " "
+            toc.append(TocEntryPlan(entry.unit, entry.level, number, sep, entry.title, entry.condition_label, name))
+        return units, anchors, refs, tuple(toc)
+
     # -- the pass -------------------------------------------------------------------
 
     def run(self) -> tuple[DocxPlan, list[Diagnostic]]:
@@ -444,12 +794,14 @@ class _Planner:
                 self.block(block, section)
         for drift in self.drifts:
             self.report_drift(drift)
+        units, anchors, refs, toc = self.finish()
         abstracts = tuple(
             AbstractNum(a.id, a.kind, f"{0x4C440000 + a.id:08X}",  # type: ignore[arg-type]
                         "multilevel" if a.kind == "headings" else "hybridMultilevel", tuple(a.levels))
             for a in self.abstracts)
         heading_id = self.heading_num.id if self.heading_num else None
-        return DocxPlan(abstracts, tuple(self.nums), heading_id, units=self.units), by_line(self.diagnostics)
+        return (DocxPlan(abstracts, tuple(self.nums), heading_id, units=units, anchors=anchors, refs=refs, toc=toc),
+                by_line(self.diagnostics))
 
     def block(self, block: object, section: Section | None) -> None:
         match block:
@@ -466,6 +818,9 @@ class _Planner:
     def add(self, node: _Unit, kind: Literal["section", "item", "paragraph"], num: Num | None, ilvl: int | None, *,
             explicit: bool, cause: tuple[str, ...] = (), step: Step | None = None) -> None:
         assert node.unit is not None
+        self.nodes[node.unit] = node
+        if step is not None:
+            self.steps[node.unit] = step
         self.units[node.unit] = UnitPlan(
             node.unit, kind, num.id if num else None, ilvl, explicit, None, None,
             step.label if step else "", step.word_ref if step else "", step.count if step else None,
@@ -548,11 +903,34 @@ class _Planner:
 
     # -- units ----------------------------------------------------------------------
 
+    def section_designation(self, section: Section) -> list[Shown]:
+        """The designation of *section* as tokens, written as the resolver writes it (§13.1): the ``ref`` of every part
+        of its number after the one before; a part the document skipped is a :class:`Ghost` that no unit holds. Under
+        the ``none`` scheme it is the heading's text (§13.3), and empty when that is."""
+        assert section.unit is not None
+        if self.textual:
+            text = section.designation or ""
+            return [Title(section.unit, text)] if text else []
+        assert section.number is not None
+        del self.owners[section.level - 1:]
+        while len(self.owners) < section.level - 1:
+            self.owners.append((Ghost(section.unit, len(self.owners)), 1))
+        self.owners.append((section.unit, section.number))
+        designation: list[Shown] = []
+        for part, (owner, value) in enumerate(self.owners):
+            level = self.formats.headings[min(part, len(self.formats.headings) - 1)]
+            designation = extend_tokens(
+                designation, fill_tokens(level.ref, n=[Count(owner, format_counter(value, level.counter))]),
+                textual=False)
+        return designation
+
     def section(self, section: Section) -> None:
         unit = section.unit
         assert unit is not None
         self.parent[unit] = section.parent_unit
         self.section_level[unit] = section.level
+        self.desig[unit] = self.section_designation(section)
+        self.heading_text[unit] = _shown(section.title)
         if self.heading_num is None or section.number is None:
             self.add(section, "section", None, None, explicit=False)
             return
@@ -570,9 +948,14 @@ class _Planner:
         assert paragraph.unit is not None and section.unit is not None
         self.parent[paragraph.unit] = paragraph.parent_unit
         fmt = self.formats.paragraphs
+        base = self.desig[section.unit]
         if paragraph.number is None or fmt is None:
+            self.desig[paragraph.unit] = base
             self.add(paragraph, "paragraph", None, None, explicit=False)
             return
+        piece = fill_tokens(fmt.ref, n=[Count(paragraph.unit, format_counter(paragraph.number, fmt.counter))],
+                            section=base)
+        self.desig[paragraph.unit] = extend_tokens(base, piece, textual=self.textual)
         abstract = self.abstract("paragraphs")
         num = self.paragraph_nums.get(section.unit)
         if num is None:
@@ -634,9 +1017,14 @@ class _Planner:
         qualified = section is not None and shows_section(fmt.label, refs, lst.depth, textual=self.textual)
         if qualified:
             self.fallback_label(fmt, lst.family, ilvl, "list item", first.line)
+        parent_des = self.desig.get(parent, []) if parent is not None else []
+        section_des = self.desig[section.unit] if section is not None and section.unit is not None else []
         for index, item in enumerate(lst.items):
-            assert item.unit is not None
+            assert item.unit is not None and item.number is not None
             self.parent[item.unit] = item.parent_unit
+            piece = fill_tokens(fmt.ref, n=[Count(item.unit, format_counter(item.number, fmt.counter))],
+                                section=section_des)
+            self.desig[item.unit] = extend_tokens(parent_des, piece, textual=self.textual)
             item_cause = cause if index == 0 else ()
             if lst.depth > 8 and "clamped" not in item_cause:
                 item_cause += ("clamped",)
@@ -671,9 +1059,12 @@ class _Planner:
         if self.bullet_num is None:
             self.bullet_num = self.new_num(abstract)
         ilvl = min(lst.depth, 8)
+        parent = lst.items[0].parent_unit
         for item in lst.items:
             assert item.unit is not None
             self.parent[item.unit] = item.parent_unit
+            self.nodes[item.unit] = item
+            self.desig[item.unit] = self.desig.get(parent, []) if parent is not None else []
             cause = ("clamped",) if lst.depth > 8 else ()
             self.units[item.unit] = UnitPlan(item.unit, "item", self.bullet_num.id, ilvl, True, None, None, "", "",
                                              None, cause, (), None)

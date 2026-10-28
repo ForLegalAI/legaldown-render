@@ -88,9 +88,11 @@ def section(title: str, *blocks: Block, unit: str | None = None, level: int = 1,
 
 def unit(unit_id: str, kind: str = "paragraph", *, num_id: int | None = None, ilvl: int | None = None,
          explicit: bool = False, ind: tuple[int, int] | None = None, alt: AltNumber | None = None,
-         bookmarks: tuple[str, ...] = (), toc: str | None = None) -> UnitPlan:
+         bookmarks: tuple[str, ...] = (), toc: str | None = None, collapsed: bool = False,
+         literal_refs: tuple[str, ...] = ()) -> UnitPlan:
     return UnitPlan(unit=unit_id, kind=kind, num_id=num_id, ilvl=ilvl, explicit=explicit, ind=ind, alt=alt,  # type: ignore[arg-type]
-                    label="", word_ref="", count=None, cause=(), bookmarks=bookmarks, toc_bookmark=toc)
+                    label="", word_ref="", count=None, cause=(), bookmarks=bookmarks, toc_bookmark=toc,
+                    collapsed=collapsed, literal_refs=literal_refs)
 
 
 def level(ilvl: int, fmt: str = "decimal", text: str | None = None, **fields: Any) -> LevelDef:
@@ -350,6 +352,25 @@ def test_bookmarks_wrap_the_content_nested_with_the_first_outermost_and_the_toc_
     document = tree(sections=[section("Heading", unit="s1")])
     (heading,) = body(document, plan(unit("s1", "section", bookmarks=("ld_h", "_Ld1"), toc="_Toc100000001")))
     assert flow(heading) == "<ld_h><_Ld1><_Toc100000001>Heading</_Toc100000001></_Ld1></ld_h>"
+
+
+def test_a_collapsed_bookmark_is_a_point_at_the_start_of_the_paragraph_and_the_toc_bookmark_still_wraps() -> None:
+    document = tree(sections=[section("Heading", unit="s1")])
+    (heading,) = body(document, plan(unit("s1", "section", bookmarks=("ld_h",), toc="_Toc1", collapsed=True)))
+    assert flow(heading) == "<ld_h></ld_h><_Toc1>Heading</_Toc1>"
+
+
+def test_a_cross_reference_in_a_title_that_the_plan_makes_literal_is_its_text_and_elsewhere_a_field() -> None:
+    reference = CrossRef("See B", "t", "s2")
+    other = CrossRef("C", "t", "s3")
+    document = tree(sections=[Section(1, (Text("A "), reference, Text(" and "), other), "", "", (), unit="s1"),
+                              section("B", unit="s2"), section("C", unit="s3")])
+    refs = {"s2": (field("b", "B", number=False),), "s3": (field("c", "C"),)}
+    units_ = (unit("s2", "section", bookmarks=("b",)), unit("s3", "section", bookmarks=("c",)))
+    literal = plan(unit("s1", "section", bookmarks=("a",), literal_refs=("s2",)), *units_, refs=refs)
+    assert flow(body(document, literal)[0]) == "<a>A See B and {REF c \\n \\h|C}</a>"
+    fields = plan(unit("s1", "section", bookmarks=("a",)), *units_, refs=refs)
+    assert flow(body(document, fields)[0]) == "<a>A {REF b \\h|B} and {REF c \\n \\h|C}</a>"
 
 
 def test_bookmark_ids_are_unique_and_pair_each_start_with_its_end() -> None:
@@ -870,12 +891,13 @@ def test_a_table_beside_an_indent_keeps_at_least_a_column_width_per_column() -> 
         assert min(widths) >= 1134 and sum(widths) <= TEXT_WIDTH
 
 
-def test_a_deeply_nested_list_without_a_plan_stays_on_the_page() -> None:
+def test_a_deeply_indented_list_stays_on_the_page() -> None:
     inner: Block = bullets(item("deepest", unit="u70"), depth=70)
     for depth in range(69, -1, -1):
         inner = bullets(item(f"d{depth}", inner, unit=f"u{depth}"), depth=depth)
     document = tree(inner)
-    data = DocxWriter(load_style("default")).write(document)
+    indents = [unit(f"u{depth}", "item", ind=((depth + 1) * 567, 0)) for depth in range(71)]
+    data = DocxWriter(load_style("default")).write(document, plan(*indents))
     root = ET.fromstring(parts(data)["word/document.xml"])
     assert max(lefts(root)) <= min(31680, TEXT_WIDTH - 2268)
 
@@ -892,14 +914,15 @@ def test_the_title_and_the_subtitle_come_first_and_the_section_properties_last()
     assert local(children[-1]) == "sectPr"
 
 
-def test_without_a_plan_the_document_has_no_numbering_and_the_indent_of_each_list_depth() -> None:
-    result = render("---\ntitle: T\n---\n\n# A\n\n- a\n  - b\n\nSee {{ref: a}}.\n", format="docx")
+def test_a_rendered_document_is_numbered_cross_referenced_and_bookmarked_as_the_planner_says() -> None:
+    result = render("---\ntitle: T\n---\n\n# A\n\n- a {#x}\n  - b\n\nSee {{ref: x}}.\n", format="docx")
     contents = parts(result.binary)  # type: ignore[arg-type]
-    assert list(ET.fromstring(contents["word/numbering.xml"])) == []
+    assert [child.tag.removeprefix(W) for child in ET.fromstring(contents["word/numbering.xml"])] == [
+        "abstractNum", "abstractNum", "num", "num"]
     root = ET.fromstring(contents["word/document.xml"])
-    assert [flow(p) for p in root.iter(f"{W}p")] == ["T", "A", "a", "b", "See 1."]
-    assert [indent(p) for p in root.iter(f"{W}p")] == [None, None, {"left": 567}, {"left": 1134}, None]
-    assert not list(root.iter(f"{W}fldChar"))
+    assert [flow(p) for p in root.iter(f"{W}p")] == [
+        "T", "<ld_a></ld_a>A", "<ld_x></ld_x>a", "b", "See {REF ld_a \\n \\h|1}{REF ld_x \\n \\h|(a)}."]
+    assert [indent(p) for p in root.iter(f"{W}p")] == [None] * 5
 
 
 def test_the_same_plan_and_tree_are_the_same_bytes() -> None:

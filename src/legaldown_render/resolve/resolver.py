@@ -575,7 +575,7 @@ class Resolver:
             return ()
         entries = [
             ContentsEntry(section.level, section.label, unlinked(section.title), section.anchor,
-                          section.condition_label)
+                          section.condition_label, section.unit)
             for section in sections
             if section.level <= settings.depth
         ]
