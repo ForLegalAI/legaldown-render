@@ -92,6 +92,13 @@ def _border(side: str, color: str, size: int = 4, space: int = 0) -> ET.Element:
     return el(side, {"val": "single", "sz": size, "space": space, "color": color})
 
 
+def container_bar(style_id: str) -> ET.Element | None:
+    """The left border that ``Quote`` and ``DraftingNote`` draw, for the paragraphs inside them that are not
+    in that style (code, rules), so that the bar runs unbroken; None for any other style."""
+    return {QUOTE: lambda: _border("left", _RULE, 18, 10),
+            DRAFTING_NOTE: lambda: _border("left", _NOTE_RULE, 24, 8)}.get(style_id, lambda: None)()
+
+
 def _style(style_id: str, name: str, *, kind: str = "paragraph", based_on: str | None = None,
            next_style: str | None = None, priority: int | None = None, quick: bool = False, custom: bool = False,
            hidden_until_used: bool = False, default: bool = False, props: Iterable[Any] = (),

@@ -84,8 +84,8 @@ class DocxWriter:
         if page.footer:
             footer_id = rels.add(pkg.REL_FOOTER, "footer1.xml")
 
-        body = BodyWriter(tree, plan, Bookmarks(), rels, text_width).body(settings.page, header_id=header_id,
-                                                                         footer_id=footer_id)
+        body = BodyWriter(tree, plan, Bookmarks(), rels, text_width, settings.link_color).body(
+            settings.page, header_id=header_id, footer_id=footer_id)
         document = el("document", None, body)
         package.add("docProps/core.xml", pkg.CT_CORE_PROPERTIES, build_core(title, language))
         package.add("docProps/app.xml", pkg.CT_EXTENDED_PROPERTIES, build_app(self.generator))

@@ -32,7 +32,6 @@ from ...style.docx import PageGeometry
 from ...tree import (
     Block,
     CodeBlock,
-    DefinedTerm,
     DraftingNote,
     Inline,
     List,
@@ -43,7 +42,6 @@ from ...tree import (
     Rule,
     Section,
     Table,
-    iter_located_body_inlines,
     plain_text,
 )
 from .ooxml import Bookmarks, el, p, tbl_pr, tc_pr, text_run, tr_pr, val
@@ -61,11 +59,18 @@ from .styles import (
     SUBTITLE,
     TABLE_GRID,
     TITLE,
+    container_bar,
     heading_style,
 )
 
 #: The left indent the paragraph styles set, in twips: what a paragraph in that style has without an indent of its own.
 _STYLE_LEFT = {QUOTE: QUOTE_INDENT, DRAFTING_NOTE: NOTE_INDENT}
+
+#: Limits on what a plan's indents can do to the page, in twips: Word does not take a left indent past 31680
+#: (22 inches), and a paragraph needs room to be read in; a column needs room for a word.
+_MAX_INDENT = 31680
+_MIN_TEXT = 2268
+_MIN_COLUMN = 1134
 
 _RULE_COLOR = "C8C8C8"
 #: The space above and below the text of a table cell, in twips.
@@ -115,32 +120,42 @@ class BodyWriter:
     twips, which tables take."""
 
     def __init__(self, tree: RenderTree, plan: DocxPlan, bookmarks: Bookmarks, relationships: Relationships,
-                 text_width: int) -> None:
+                 text_width: int, link_color: str) -> None:
         self.tree = tree
         self.plan = plan
         self.bookmarks = bookmarks
+        self.relationships = relationships
         self.text_width = text_width
+        self.link_color = link_color
         abstracts = {abstract.id: abstract for abstract in plan.abstract_nums}
         self._levels = {num.id: abstracts[num.abstract_id].levels for num in plan.nums if num.abstract_id in abstracts}
         attachment_titles = {a.anchor: plain_text(a.title) for a in tree.attachments if a.anchor}
-        self.inlines = InlineWriter(plan, relationships, bookmarks, self._placed(), attachment_titles)
+        #: Not known until a first, dry run has written the document: see :meth:`body`.
+        self.inlines = InlineWriter(plan, relationships, bookmarks, None, attachment_titles, link_color)
 
-    def _placed(self) -> set[str]:
-        """The names of the bookmarks the body writes: the plan's for every unit, and the definitions'
-        (a defined term's bookmark is placed where the term is). A field or link to any other name would
-        point at nothing."""
-        names = {name for unit in self.plan.units.values() for name in (*unit.bookmarks, unit.toc_bookmark) if name}
-        for inline, _ in iter_located_body_inlines(self.tree):
-            if isinstance(inline, DefinedTerm) and inline.defining and inline.anchor:
-                name = self.plan.anchors.get(inline.anchor)
-                if name:
-                    names.add(name)
-        return names
+    def _left(self, left: int) -> int:
+        """*left* twips of indent, kept where a paragraph can still be read: not past Word's limit, and leaving
+        :data:`_MIN_TEXT` of the text width (a deeply nested list, or a plan's wide indent, cannot push it off the page)."""
+        return max(0, min(left, self.text_width - _MIN_TEXT, _MAX_INDENT))
 
     # -- the document ---------------------------------------------------------------------
 
     def body(self, page: PageGeometry, *, header_id: str | None = None, footer_id: str | None = None) -> ET.Element:
-        """``w:body`` for the tree, closed by the section properties of *page*."""
+        """``w:body`` for the tree, closed by the section properties of *page*.
+
+        The document is written twice. The first, dry run learns which bookmarks it writes (a name in the plan
+        is not enough: a defined term inside alt text or a link title is never written), and the second writes
+        it for real: a ``REF`` field to a name the document does not hold is then a bug in the plan
+        (:class:`~legaldown_render.errors.InternalError`), and a link or a term reference to one shows its text
+        without the link. Whatever :meth:`content` writes counts, so the attachments' bookmarks need no list of
+        their own."""
+        dry = BodyWriter(self.tree, self.plan, Bookmarks(), Relationships(), self.text_width, self.link_color)
+        dry.content()
+        self.inlines.placed = dry.bookmarks.names
+        return el("body", None, self.content(), section_properties(page, header_id=header_id, footer_id=footer_id))
+
+    def content(self) -> list[ET.Element]:
+        """The block-level content of the body: the title and the subtitle, the preamble and the sections."""
         tree = self.tree
         content: list[ET.Element] = []
         title = document_title(tree)
@@ -154,7 +169,7 @@ class BodyWriter:
             content += self.section(section)
         if content and content[-1].tag.endswith("}tbl"):
             content.append(p())  # a table cannot be the last thing before the section properties
-        return el("body", None, content, section_properties(page, header_id=header_id, footer_id=footer_id))
+        return content
 
     def section(self, section: Section) -> list[ET.Element]:
         """The heading paragraph of *section* (``heading N``: the resolver has clamped the level to
@@ -197,19 +212,28 @@ class BodyWriter:
                 yield from self.blocks(blocks, inner)
             case CodeBlock(text=text):
                 # One paragraph per line: Word shades and keeps them together as one block.
+                # Inside a quote or a note the paragraph stays at the container's indent and keeps its bar.
+                bar = container_bar(context.style) if context.style else None
+                left = self._left(context.left if bar is not None else context.left + CODE_INDENT)
                 for line in text.rstrip("\n").split("\n"):
                     yield p(text_run(line), style=CODE,
-                            props=[el("ind", {"left": context.left + CODE_INDENT}) if context.left else None])
+                            props=[el("ind", {"left": left}) if context.left else None,
+                                   bar is not None and el("pBdr", None, bar)])
             case Table():
                 yield from self._table(block, context)
             case Rule():
+                bar = container_bar(context.style) if context.style else None
                 yield p(style=context.style, props=[
-                    el("pBdr", None, el("bottom", {"val": "single", "sz": 4, "space": 1, "color": _RULE_COLOR})),
+                    el("pBdr", None, bar, el("bottom", {"val": "single", "sz": 4, "space": 1, "color": _RULE_COLOR})),
                     self._plain_indent(context)])
+            case _:
+                raise InternalError(f"a {type(block).__name__} reached the DOCX writer, which does not write it "
+                                    "(a bug in the DOCX writer)")
 
     def _plain_indent(self, context: Context) -> ET.Element | None:
         """``w:ind`` for a plain paragraph in *context*, unless its style already indents so far."""
-        return el("ind", {"left": context.left}) if context.left != _STYLE_LEFT.get(context.style or "", 0) else None
+        left = self._left(context.left)
+        return el("ind", {"left": left}) if left != _STYLE_LEFT.get(context.style or "", 0) else None
 
     def _paragraph(self, block: Paragraph, context: Context) -> ET.Element:
         content = self.inlines.runs(block.inlines)
@@ -245,7 +269,7 @@ class BodyWriter:
     def _text_left(self, unit: UnitPlan | None, context: Context) -> int:
         """Where the text of a unit's paragraph starts: what its continuation blocks are indented to."""
         indent = self._indent(unit) if unit is not None else None
-        return context.left if indent is None else indent[0] + context.extra
+        return self._left(context.left if indent is None else indent[0] + context.extra)
 
     def _unit(self, unit_id: str | None, content: Sequence[ET.Element], *, style: str | None, context: Context,
               conditions: Sequence[str | None], after: bool = False) -> ET.Element:
@@ -257,12 +281,13 @@ class BodyWriter:
         number: list[ET.Element] = []
         names: list[str] = []
         if unit is not None:
-            if unit.explicit:
+            if unit.explicit or unit.alt is not None:
                 props.append(self._numbering(unit))
             indent = self._indent(unit)
             if indent is not None and (unit.ind is not None or context.extra):
-                left, hanging = indent
-                props.append(el("ind", {"left": left + context.extra, "hanging": hanging or None}))
+                left = self._left(indent[0] + context.extra)
+                hanging = min(indent[1], left)
+                props.append(el("ind", {"left": left, "hanging": hanging or None}))
             if unit.alt is not None:
                 number = self._alternative(unit.alt)
             names = [*unit.bookmarks, *([unit.toc_bookmark] if unit.toc_bookmark else [])]
@@ -307,7 +332,10 @@ class BodyWriter:
         columns = max(len(table.header), *(len(row) for row in table.rows), 0)
         if not columns:
             return
-        width = max(self.text_width - context.left, columns)
+        left = self._left(context.left)
+        width = self.text_width - left
+        if width < columns * _MIN_COLUMN:  # no room to indent: the columns come first
+            left, width = 0, self.text_width
         grid = [width // columns] * columns
         grid[-1] += width - sum(grid)
         align = (*table.align, *[""] * columns)[:columns]
@@ -323,10 +351,10 @@ class BodyWriter:
         yield el(
             "tbl", None,
             tbl_pr(val("tblStyle", TABLE_GRID), el("tblW", {"w": width, "type": "dxa"}),
-                   context.left > 0 and el("tblInd", {"w": context.left, "type": "dxa"}),
+                   left > 0 and el("tblInd", {"w": left, "type": "dxa"}),
                    el("tblCellMar", None, el("top", {"w": _CELL_PADDING, "type": "dxa"}),
                       el("bottom", {"w": _CELL_PADDING, "type": "dxa"})),
-                   el("tblLook", {"val": "0420", "firstRow": 1, "lastRow": 0, "firstColumn": 0, "lastColumn": 0,
+                   el("tblLook", {"val": "0620", "firstRow": 1, "lastRow": 0, "firstColumn": 0, "lastColumn": 0,
                                   "noHBand": 1, "noVBand": 1})),
             el("tblGrid", None, [el("gridCol", {"w": size}) for size in grid]),
             row(table.header, header=True) if table.header else None,

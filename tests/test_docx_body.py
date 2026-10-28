@@ -747,6 +747,139 @@ def test_a_condition_label_leads_a_paragraph_and_an_item_and_follows_a_heading_t
     assert flow(heading) == "H if C@ConditionLabel"
 
 
+# -- Bookmarks the document does not write, indents and widths, links with no text ----------------------------
+
+
+def test_a_bookmark_that_is_only_in_text_the_document_never_writes_is_not_a_target() -> None:
+    """A defined term inside alt text or a link's title is plan, not document: a reference to it has no target."""
+    term = DefinedTerm((Text("Term"),), "def:t", "bold")
+    document = tree(para(Image("i.png", (Text("alt "), term)), TermRef("Term", "def:t", "bold"),
+                         Link("https://e.com/", (Text("l"),), (Text("tip "), term)), TermRef("Term", "def:t", "bold")))
+    (paragraph,) = body(document, plan(anchors={"def:t": "lddef_t"}))
+    assert flow(paragraph) == "alt TermTerm@TermReference(link rId5: l@Hyperlink)Term@TermReference"
+    assert not list(paragraph.iter(f"{W}bookmarkStart"))
+    with pytest.raises(InternalError, match="lddef_t"):
+        body(tree(para(Image("i.png", (term,)), CrossRef("x", "t", "u9"))),
+             plan(anchors={"def:t": "lddef_t"}, refs={"u9": (field("lddef_t"),)}))
+
+
+def test_a_term_reference_before_its_definition_still_links_and_a_reference_after_it_too() -> None:
+    document = tree(para(TermRef("T", "def:t", "bold"), DefinedTerm((Text("Term"),), "def:t", "bold"),
+                         CrossRef("x", "t", "u9")))
+    (paragraph,) = body(document, plan(anchors={"def:t": "lddef_t"}, refs={"u9": (field("lddef_t", number=False),)}))
+    assert flow(paragraph) == "(link lddef_t: T@TermReference)<lddef_t>Term@DefinedTerm</lddef_t>{REF lddef_t \\h|1}"
+
+
+def test_a_field_may_not_name_what_is_not_a_bookmark() -> None:
+    for name in ("bad name", "1x", "a" * 41, "a\\n"):
+        with pytest.raises(InternalError, match="valid"):
+            body(tree(para(CrossRef("x", "t", "u9"))), plan(refs={"u9": (field(name),)}))
+
+
+def test_every_hyperlink_has_content_and_a_link_that_is_not_made_still_shows_what_html_shows() -> None:
+    nothing = Link("https://e.com/", (Image("p.png", ()),))
+    document = tree(para(Link("docs/a.pdf", ()), " ", Link("#nope", ()), " ", nothing, " ",
+                         Link("javascript:x", (Text("bad"),)), Link("javascript:x", ())))
+    (paragraph,) = body(document, plan())
+    assert flow(paragraph) == "docs/a.pdf #nope (link rId5: https://e.com/@Hyperlink) bad"
+    assert all(len(link) for link in paragraph.iter(f"{W}hyperlink"))
+
+
+def test_a_tooltip_is_cut_to_255_characters() -> None:
+    (paragraph,) = body(tree(para(Link("https://e.com/", (Text("l"),), (Text("t" * 300),)))), plan())
+    assert len(paragraph.find(f"{W}hyperlink").get(f"{W}tooltip")) == 255  # type: ignore[union-attr, arg-type]
+
+
+def test_runs_in_a_link_that_take_another_style_keep_the_links_colour_and_underline() -> None:
+    link = Link("https://e.com/", (Code("c"), TermRef("t", None, "bold"), Blank("b", "__"), Text("x")))
+    (paragraph,) = body(tree(para(link)), plan())
+    runs = paragraph.find(f"{W}hyperlink").findall(f"{W}r")  # type: ignore[union-attr]
+    styles = [r.find(f"{W}rPr/{W}rStyle").get(f"{W}val") for r in runs]  # type: ignore[union-attr]
+    assert styles == ["InlineCode", "TermReference", "Blank", "Hyperlink"]
+    for run in runs[:3]:
+        assert run.find(f"{W}rPr/{W}u").get(f"{W}val") == "single"  # type: ignore[union-attr]
+        assert run.find(f"{W}rPr/{W}color") is not None
+    assert runs[3].find(f"{W}rPr/{W}u") is None  # the Hyperlink style has them
+
+
+def test_an_alternative_is_never_numbered_by_a_heading_style() -> None:
+    """The plan sets numId 0 for an alternative; a heading that names an alternative but is not marked explicit still
+    gets it, or the heading style's own numbering would count it."""
+    alt = AltNumber((field("a", "1"),), "tab")
+    document = tree(bullets(item("x", unit="u1")), sections=[section("H", unit="s1")])
+    the_plan = plan(unit("u1", bookmarks=("a",)), unit("s1", "section", alt=alt, ind=(567, 567)))
+    _, heading = body(document, the_plan)
+    assert numbering(heading) == (None, 0)
+
+
+def test_an_inline_or_block_the_writer_does_not_know_is_a_bug() -> None:
+    from legaldown_render.tree import DirectiveSource
+
+    with pytest.raises(InternalError, match="DirectiveSource"):
+        body(tree(para(DirectiveSource(None))), plan())  # type: ignore[arg-type]
+    with pytest.raises(InternalError, match="int"):
+        body(tree(42), plan())  # type: ignore[arg-type]
+
+
+def test_code_and_rules_in_a_quote_or_a_note_keep_the_bar_of_the_container() -> None:
+    document = tree(Quote((para("q"), CodeBlock("c"), Rule())), DraftingNote((CodeBlock("n"), Rule()), None), Rule())
+    q, code, rule, note_code, note_rule, plain_rule = body(document, plan())
+    assert code.find(f"{W}pPr/{W}pBdr/{W}left").get(f"{W}color") == "C8C8C8"  # type: ignore[union-attr]
+    assert indent(code) == {"left": 567}
+    assert [local(c) for c in rule.find(f"{W}pPr/{W}pBdr")] == ["left", "bottom"]  # type: ignore[arg-type, union-attr]
+    assert note_code.find(f"{W}pPr/{W}pBdr/{W}left").get(f"{W}color") == "D9A400"  # type: ignore[union-attr]
+    assert [local(c) for c in note_rule.find(f"{W}pPr/{W}pBdr")] == ["left", "bottom"]  # type: ignore[arg-type, union-attr]
+    assert [local(c) for c in plain_rule.find(f"{W}pPr/{W}pBdr")] == ["bottom"]  # type: ignore[arg-type, union-attr]
+
+
+def test_the_table_look_says_what_its_flags_say() -> None:
+    (tbl, _) = body(tree(table()), plan())
+    look = tbl.find(f"{W}tblPr/{W}tblLook")
+    flags = {"firstRow": 0x20, "lastRow": 0x40, "firstColumn": 0x80, "noHBand": 0x200, "noVBand": 0x400}
+    assert int(look.get(f"{W}val"), 16) == sum(bit for name, bit in flags.items() if look.get(f"{W}{name}") == "1")  # type: ignore[union-attr, arg-type]
+
+
+TEXT_WIDTH = 9072  # the default style's page: A4 with 2.5 cm margins
+
+
+def lefts(root: ET.Element) -> list[int]:
+    return [int(e.get(f"{W}left")) for e in root.iter(f"{W}ind") if e.get(f"{W}left")]  # type: ignore[arg-type]
+
+
+def test_a_wide_indent_in_the_plan_cannot_push_the_text_off_the_page_or_squeeze_a_table() -> None:
+    document = tree(bullets(item("a", table(header=("x", "y", "z")), unit="u1"), item("b", "c", unit="u2")))
+    the_plan = plan(unit("u1", "item", ind=(9000, 567)), unit("u2", "item", ind=(99999, 99999)))
+    result = body(document, the_plan)
+    root = ET.Element("x")
+    root.extend(result)
+    assert all(left <= TEXT_WIDTH - 2268 for left in lefts(root))
+    assert max(lefts(root)) == TEXT_WIDTH - 2268
+    assert all(int(h.get(f"{W}hanging")) <= int(h.get(f"{W}left")) for h in root.iter(f"{W}ind") if h.get(f"{W}hanging"))  # type: ignore[arg-type]
+    tbl = next(c for c in result if local(c) == "tbl")
+    assert tbl.find(f"{W}tblPr/{W}tblInd") is None  # three columns do not fit beside it: the indent goes
+    widths = [int(g.get(f"{W}w")) for g in tbl.findall(f"{W}tblGrid/{W}gridCol")]  # type: ignore[arg-type]
+    assert min(widths) >= 1134 or sum(widths) == TEXT_WIDTH
+
+
+def test_a_table_beside_an_indent_keeps_at_least_a_column_width_per_column() -> None:
+    wide = Table(tuple((Text(c),) for c in "abc"), (), ())
+    for left in (0, 1000, 5000, 8000):
+        document = tree(bullets(item("a", wide, unit="u1")))
+        tbl = next(c for c in body(document, plan(unit("u1", "item", ind=(left, 0)))) if local(c) == "tbl")
+        widths = [int(g.get(f"{W}w")) for g in tbl.findall(f"{W}tblGrid/{W}gridCol")]  # type: ignore[arg-type]
+        assert min(widths) >= 1134 and sum(widths) <= TEXT_WIDTH
+
+
+def test_a_deeply_nested_list_without_a_plan_stays_on_the_page() -> None:
+    inner: Block = bullets(item("deepest", unit="u70"), depth=70)
+    for depth in range(69, -1, -1):
+        inner = bullets(item(f"d{depth}", inner, unit=f"u{depth}"), depth=depth)
+    document = tree(inner)
+    data = DocxWriter(load_style("default")).write(document)
+    root = ET.fromstring(parts(data)["word/document.xml"])
+    assert max(lefts(root)) <= min(31680, TEXT_WIDTH - 2268)
+
+
 # -- Whole documents --------------------------------------------------------------------------------------------
 
 
@@ -802,7 +935,8 @@ def test_hostile_text_in_every_inline_and_block_is_dropped_by_the_sanitiser_and_
         assert dropped not in text
     root = ET.fromstring(contents["word/document.xml"])
     assert CLEAN in "".join(t.text or "" for t in root.iter(f"{W}t"))
-    assert all(CLEAN in (i.text or "") or "REF" in (i.text or "") for i in root.iter(f"{W}instrText"))
+    # A field's instruction is the bookmark name and the switches, whatever the text around it says.
+    assert {(i.text or "").strip() for i in root.iter(f"{W}instrText")} == {"REF a \\n \\h"}
 
 
 # -- Validity ---------------------------------------------------------------------------------------------------
@@ -935,3 +1069,36 @@ def test_libreoffice_numbers_the_hand_planned_document_and_updates_every_referen
         "2. Gamma",
         "Last, see Section 1.",
     ]
+
+
+def alternative_data() -> bytes:
+    """A heading, a later alternative that shares its number (numId 0 and the number as a REF field, cached wrong), a
+    paragraph with a hyperlink, a table and a closing paragraph."""
+    link = Link("https://example.com/", (Text("site"),))
+    document = tree(sections=[
+        section("One", unit="s1"),
+        section("Two", para("See ", link, "."), table(("a", "b"), ("c", "d")), para("End"), unit="s2")])
+    the_plan = plan(
+        unit("s1", "section", bookmarks=("ld_one",)),
+        unit("s2", "section", num_id=0, ilvl=0, explicit=True, ind=(567, 567),
+             alt=AltNumber((field("ld_one", "XXX"), Literal_(".")), "tab")),
+        abstracts=[abstract(0, "headings", [level(0, text="%1.", p_style="Heading1", left=567, hanging=567)])],
+        nums=[Num(1, 0)], heading=1)
+    return DocxWriter(load_style("default"), generator="test").write(document, the_plan)
+
+
+@pytest.mark.ooxml_schema
+def test_the_alternative_document_validates() -> None:
+    from docx_support import require_schemas
+
+    require_schemas()
+    assert validation_errors(alternative_data()) == []
+
+
+@pytest.mark.libreoffice
+def test_libreoffice_shows_an_alternatives_number_as_its_holders_a_table_and_a_hyperlinks_text() -> None:
+    require_libreoffice()
+    shown = libreoffice_export({"alt": alternative_data()})["alt"]
+    lines = [" ".join(line.split()) for line in shown.lines if line.strip()]
+    # "Two" is not counted: it shows the number of "One" as a field, not a counter of its own.
+    assert lines == ["T", "1. One", "1. Two", "See site.", "H1", "H2", "a", "b", "c", "d", "End"]

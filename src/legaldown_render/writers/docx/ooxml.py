@@ -353,6 +353,11 @@ class Bookmarks:
         self._next = 1
         self._names: set[str] = set()
 
+    @property
+    def names(self) -> frozenset[str]:
+        """The names allocated so far, lower-cased (Word compares names without regard to case)."""
+        return frozenset(self._names)
+
     def pair(self, name: str) -> tuple[ET.Element, ET.Element]:
         """The ``w:bookmarkStart`` and ``w:bookmarkEnd`` of a new bookmark *name*."""
         if not _BOOKMARK_RE.fullmatch(name):

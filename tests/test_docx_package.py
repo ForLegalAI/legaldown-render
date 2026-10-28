@@ -815,7 +815,7 @@ GOLDEN = {
     '_rels/.rels': 'd6f21829c0081670bdb417d3e3f644b81134a121e074fb153c7686faaa8b167b',
     'docProps/core.xml': '159ed0e537106ab29739fd357a5f6d89a2c0b0154daefd4c13d878bd16dff47e',
     'docProps/app.xml': 'b285204d159fd58da80b6a0242cef523448f9c3a598b357b15faf4627160dcc3',
-    'word/document.xml': '973a83b30f439e08a3238504ff0d6c8df6ea9259244e7ee82e1f81a3d274bb19',
+    'word/document.xml': '58f0081f76a6a2092397770d50ae151e38f7aacdadf3525379b8112f964e0b8a',
     'word/_rels/document.xml.rels': 'ada136c2e7d05a317579c9503c1f0dd8dfaa8f0cce687df86fe59e36d5fa5d57',
     'word/styles.xml': '83adf799de91eac3e9bf1e658b8c2f53586c700be35df179e1b2f1765f189dfc',
     'word/numbering.xml': '8d1f7769c35af16db98942ba09882646b45ba404e83686d4ce7a376c6a911f0f',
