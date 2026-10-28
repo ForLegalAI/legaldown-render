@@ -107,7 +107,7 @@ from ..tree import (
     unlinked,
 )
 from ..urls import file_reference_problem, is_empty_path, is_link_target, printable
-from .numbering import RENUMBERED, extend, fill, format_counter, heading_levels
+from .numbering import RENUMBERED, extend, fill, format_counter, formats_of, heading_levels
 from .values import DURATION_UNITS, Formatter
 
 #: Definition anchors are prefixed with a character no identifier can hold,
@@ -410,16 +410,7 @@ class Resolver:
         """The numbering formats in effect (``RenderTree.formats``): those the
         labels and designations were made with (:meth:`_number_sections`,
         :meth:`_structure_list`, :meth:`_number_paragraph`)."""
-        style = self.style
-        enumeration = style.enumeration
-        return NumberingFormats(
-            scheme=style.numbering.scheme,
-            headings=() if self.textual else heading_levels(style.numbering),
-            enumerated=tuple(enumeration.levels) if enumeration.enabled or enumeration.ordered == "enumerate" else (),
-            renumber=RENUMBERED if enumeration.ordered == "renumber" else None,
-            paragraphs=style.paragraphs.format if style.paragraphs.numbered else None,
-            reference=style.references.format,
-        )
+        return formats_of(self.style)
 
     def _unit(self) -> str:
         """The unit id of the next item or paragraph, in document order."""
