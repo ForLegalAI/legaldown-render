@@ -1,14 +1,16 @@
 #!/usr/bin/python3
 """Edit DOCX files in headless LibreOffice through UNO the way a lawyer does, update the fields, and write what
 the document says: for each job, a paragraph is inserted before the first paragraph that holds some text (so that
-it takes that paragraph's numbering and style, as pressing Enter at its start does), then every field and index is
-updated (the indexes too, so a table of contents lists what was inserted) and the body is exported as plain text (``JOB.txt``, UTF-8).
+it takes that paragraph's numbering and style, as pressing Enter at its start does), or that paragraph is deleted,
+then every field and index is updated (the indexes too, so a table of contents lists what was inserted) and the body
+is exported as plain text (``JOB.txt``, UTF-8).
 
 Run it with the system Python that has the ``uno`` module, **not** with the project's virtual environment:
 
     /usr/bin/python3 tests/lo/uno_edit.py OUTDIR JOBS.json
 
-``JOBS.json`` is a list of ``{"name": "job", "file": "/path/doc.docx", "edits": [["text of a paragraph", "new"], ...]}``.
+``JOBS.json`` is a list of ``{"name": "job", "file": "/path/doc.docx", "edits": [["text of a paragraph", "new"], ...]}``;
+an edit whose new text is ``null`` deletes the paragraph whose text is exactly that instead.
 One LibreOffice instance serves every job. Exit status 0 when every job was exported.
 """
 from __future__ import annotations
@@ -47,20 +49,35 @@ def _connect(pipe: str, process: subprocess.Popen[bytes]) -> object:
     raise SystemExit("soffice did not accept a connection in time")
 
 
-def _insert_before(document: object, match: str, new: str) -> None:
+def _edit(document: object, match: str, new: str | None) -> None:
+    """Insert a paragraph with the text *new* before the first paragraph that holds *match*, or, when *new* is None,
+    delete the first paragraph whose text is exactly *match* (with its break, as Delete at its end does; the last
+    paragraph of the document with the break before it, so that no empty paragraph is left)."""
     text = document.getText()
     paragraphs = text.createEnumeration()
     while paragraphs.hasMoreElements():
         paragraph = paragraphs.nextElement()
         # A line of a table of contents holds the heading's words too: only the document's own paragraphs count.
-        if (paragraph.supportsService("com.sun.star.text.Paragraph") and match in paragraph.getString()
-                and not paragraph.ParaStyleName.startswith("Contents")):
+        if not paragraph.supportsService("com.sun.star.text.Paragraph") or paragraph.ParaStyleName.startswith("Contents"):
+            continue
+        if new is None:
+            if paragraph.getString() != match:
+                continue
+            cursor = text.createTextCursorByRange(paragraph.getStart())
+            cursor.gotoEndOfParagraph(True)
+            if not cursor.goRight(1, True):  # the last paragraph: take the break before it instead
+                cursor = text.createTextCursorByRange(paragraph.getStart())
+                cursor.goLeft(1, False)
+                cursor.gotoEnd(True)
+            cursor.setString("")
+            return
+        if match in paragraph.getString():
             cursor = text.createTextCursorByRange(paragraph.getStart())
             text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
             cursor.goLeft(1, False)
             cursor.setString(new)
             return
-    raise SystemExit(f"no paragraph holds {match!r}")
+    raise SystemExit(f"no paragraph {'is' if new is None else 'holds'} {match!r}")
 
 
 def edit(out_dir: str, jobs: list[dict]) -> None:
@@ -81,7 +98,7 @@ def edit(out_dir: str, jobs: list[dict]) -> None:
                 raise SystemExit(f"LibreOffice could not open {job['file']}")
             try:
                 for match, new in job["edits"]:
-                    _insert_before(document, match, new)
+                    _edit(document, match, new)
                 for _ in range(2):  # page numbers and indexes settle after the first layout
                     indexes = document.getDocumentIndexes()
                     for position in range(indexes.getCount()):

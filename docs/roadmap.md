@@ -125,8 +125,13 @@ values appear only as the cached results of fields. Decided in
   signature blocks; the `render-docx-interim` Warning is gone. A LibreOffice round trip checks the contents against the
   HTML's entries, also after a heading is inserted in the editor; a manual Word checklist for releases is in
   `.github/PUBLISHING.md`
-- **Next.** Qualified labels (the continental `5.1`) on the heading list, alternatives that share a number,
-  restarts Word would otherwise get wrong; the corpus checked also after edits made through UNO
+- **Planner: qualified labels, alternatives and resynchronised numbers (done).** The continental `5.1` items and the
+  numbered paragraphs ride the heading list's level after their section's, and lists nested in them its reserved
+  levels, so they restart by structure; alternatives that share a number (§15.8) are `numId 0` paragraphs whose
+  number is a `REF` field of the first, with the units under them on a num of their own; a unit Word would count
+  off the resolver's is restarted at a fixed value and reported. Clauses and nested items inserted through UNO are
+  numbered as the renderer numbers them
+- **Next.** Running the manual Word checklist, which finds what only Word shows
 
 ### v0.6 — PDF
 

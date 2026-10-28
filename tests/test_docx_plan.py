@@ -8,6 +8,7 @@ from __future__ import annotations
 import functools
 import random
 import re
+import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -18,12 +19,14 @@ from legaldown_render import DocumentError, render
 from legaldown_render.errors import StyleError
 from legaldown_render.resolve.docx_bookmarks import BookmarkNames
 from legaldown_render.resolve.docx_cover import Field, Title, cover, suppressed, uncovered
-from legaldown_render.resolve.docx_numbering import NUM_FMT, Count, Ghost, Lit, word_counter
+from legaldown_render.resolve.docx_numbering import NUM_FMT, Count, Ghost, Lit, Step, word_counter
 from legaldown_render.resolve.docx_plan import (
     DocxPlan,
     FieldSeg,
     Literal_,
     Segment,
+    _components,
+    _Planner,
     docx_style_errors,
     plan_docx,
 )
@@ -45,7 +48,11 @@ from legaldown_render.tree import (
 NONE = {"numbering.scheme": "none"}
 PARAGRAPHS = {"paragraphs.numbered": True}
 ALTERNATIVES = FRONT.replace("title: T", (
-    "title: T\nquestions:\n  forum:\n    type: choice\n    choices:\n      courts: Courts\n      arb: Arbitration"))
+    "title: T\nquestions:\n  forum:\n    type: choice\n    choices:\n      courts: Courts\n      arb: Arbitration\n"
+    "      expert: Expert"))
+#: The answers of the question of :data:`ALTERNATIVES`: any two exclude each other, so units that have the same
+#: identifier and one answer each are alternatives (§15.4), up to three ways.
+FORUMS = ("courts", "arb", "expert")
 
 #: The styles every document is planned under: the built-in ones, and the overrides that change which lists exist
 #: and which labels need the section.
@@ -426,21 +433,261 @@ def test_paragraphs_are_not_numbered_unless_the_style_numbers_them() -> None:
 # -- Labels that need the section -----------------------------------------------------
 
 
-def test_a_label_that_needs_the_sections_number_is_written_without_it_and_reported() -> None:
-    body = "# A\n\n- x\n- y\n\n## B\n\n- z\n"
+# -- Labels that need the section: on the heading list (§13.2) --------------------------------------------------
+
+CONTINENTAL_ITEMS = "# A\n\n- x\n  - y\n  - z\n    - w\n- v\n\n## B\n\n- u\n"
+
+
+def test_an_item_whose_label_needs_the_section_rides_the_heading_list_one_level_below_the_section() -> None:
+    tree, plan, diagnostics = planned(CONTINENTAL_ITEMS, style="continental")
+    x, y, z, w, v, u = items(tree)
+    # the heading num, at the level after the section's (%1.%2 after "1."), one num for the list with an override
+    assert shown(plan, x, v) == [(2, 1, "1.1"), (2, 1, "1.2")]
+    assert plan.nums[1].abstract_id == plan.heading_num_id - 1 == 0 and plan.nums[1].start_overrides == ((1, 1),)
+    assert [a.kind for a in plan.abstract_nums] == ["headings"]  # no abstractNum of the items' own is made
+    assert plan.units[x.unit].cause == () and not plan.units[x.unit].alt
+    assert [x.label, v.label, u.label] == ["1.1", "1.2", "1.1.1"]
+    # an item under a level-2 section is on the level after that: %1.%2.%3
+    assert shown(plan, u) == [(4, 2, "1.1.1")]
+    assert plan.abstract_nums[0].levels[2].lvl_text == "%1.%2.%3"
+    # the items are no headings: no heading style and a name of their own for their indent
+    assert plan.units[x.unit].ind == (plan.abstract_nums[0].levels[1].left,) * 2
+
+
+def test_the_heading_levels_an_item_stands_on_are_not_changed_by_it() -> None:
+    _, plain, _ = planned("# A\n\n## B\n\n### C\n", style="continental")
+    _, with_items, _ = planned(CONTINENTAL_ITEMS, style="continental")
+    assert plain.abstract_nums[0].levels[:5] == with_items.abstract_nums[0].levels[:5]
+
+
+def test_a_sub_heading_after_the_items_of_its_section_is_restarted_where_the_resolver_is() -> None:
+    tree, plan, diagnostics = planned(CONTINENTAL_ITEMS, style="continental")
+    b = tree.sections[1]
+    # Word's counter of the level is shared by the sub-heading and the items: 1.3 where the resolver has 1.1 again
+    assert (b.label, plan.units[b.unit].label, plan.units[b.unit].cause) == ("1.1", "1.1", ("resync",))
+    assert plan.units[b.unit].explicit  # a num of its own: the paragraph has to carry it
+    assert plan.units[b.unit].explicit  # a num of its own: the paragraph must carry it
+    assert plan.nums[plan.units[b.unit].num_id - 1].start_overrides == ((1, 1),)
+    [found] = [d for d in diagnostics if d.rule == "render-docx-shared-counter"]
+    assert found.level == "warning" and found.line == b.line
+    assert "every output format" in found.message and "designation 1.1" in found.message
+    assert "render-docx-number-mismatch" not in rules(diagnostics) and "render-docx-section-label" not in rules(diagnostics)
+
+
+def test_a_resync_is_reported_once_with_the_number_of_places_that_do_the_same() -> None:
+    body = "".join(f"# S{i}\n\n- a\n\n## T{i}\n\n" for i in range(5))
+    _, _, diagnostics = planned(body, style="continental")
+    [found] = [d for d in diagnostics if d.rule == "render-docx-shared-counter"]
+    assert found.message.endswith("4 more units do the same.")
+
+
+def test_a_list_nested_in_an_item_on_the_heading_list_rides_the_levels_reserved_for_it() -> None:
+    tree, plan, diagnostics = planned(CONTINENTAL_ITEMS, style="continental")
+    x, y, z, w, v, u = items(tree)
+    # depth 1 and 2: levels 6 and 7 of the heading abstractNum, the num of the parent and no override
+    assert shown(plan, y, z, w) == [(2, 5, "a)"), (2, 5, "b)"), (2, 6, "i)")]
+    assert [plan.units[i.unit].cause for i in (y, w)] == [("reserved-level",), ("reserved-level",)]
+    levels = plan.abstract_nums[0].levels
+    assert [(levels[i].num_fmt, levels[i].lvl_text) for i in (5, 6)] == [("lowerLetter", "%6)"), ("lowerRoman", "%7)")]
+    assert [(levels[i].num_fmt, levels[i].lvl_text) for i in (7, 8)] == [("decimal", "%8"), ("decimal", "%9")]  # unused
+    assert len(plan.nums) == 4 and plan.nums[1].start_overrides == ((1, 1),)
+    # one step in from the text of the item it is nested in, as the items of any list are
+    assert plan.units[y.unit].ind == (plan.units[x.unit].ind[0] + 567, 567)
+    assert plan.units[w.unit].ind == (plan.units[x.unit].ind[0] + 1134, 567)
+    # the item after the nested ones goes on, and a new item's list restarts by structure
+    assert plan.units[v.unit].count == 2 and diagnostics[0].rule == "render-docx-shared-counter"
+
+
+def test_a_nested_list_under_a_new_item_on_the_heading_list_restarts_by_structure() -> None:
+    tree, plan, diagnostics = planned("# A\n\n- a\n  - x\n- b\n  - y\n  - z\n", style="continental")
+    _, x, _, y, z = items(tree)
+    assert shown(plan, x, y, z) == [(2, 5, "a)"), (2, 5, "a)"), (2, 5, "b)")] and diagnostics == []
+    assert len(plan.nums) == 2 and plan.units[y.unit].cause == ("reserved-level",)
+
+
+def test_siblings_nested_in_one_item_on_the_heading_list_go_on_counting() -> None:
+    body = "# A\n\n- a\n  - x\n  - y\n\n  Between.\n\n  - z\n"
     tree, plan, diagnostics = planned(body, style="continental")
-    assert [plan.units[i.unit].label for i in items(tree)] == ["1", "2", "1"]  # the resolver wrote 1.1, 1.2, 1.1.1
-    assert [u.label for u in units(tree) if isinstance(u, ListItem)] == ["1.1", "1.2", "1.1.1"]
-    assert plan.units[items(tree)[0].unit].cause == ("label-fallback",)
-    [found] = [d for d in diagnostics if d.rule == "render-docx-section-label"]
-    assert found.level == "warning" and "{section}.{n}" in found.message and "'1'" in found.message
-    assert found.line == tree.sections[0].blocks[0].items[0].line
+    assert [(plan.units[i.unit].label, plan.units[i.unit].num_id) for i in items(tree)[1:]] == [
+        ("a)", 2), ("b)", 2), ("c)", 2)]
+    assert len(plan.nums) == 2 and diagnostics == []
 
 
-def test_paragraph_numbers_that_need_the_section_are_reported_too() -> None:
-    tree, plan, diagnostics = planned("# A\n\nOne.\n", overrides=PARAGRAPHS)
+def test_a_reserved_level_is_defined_on_first_use_and_only_when_it_is_used() -> None:
+    _, plain, _ = planned("# A\n\n- x\n", style="continental")
+    assert [(level.lvl_text, level.num_fmt) for level in plain.abstract_nums[0].levels[5:]] == [
+        (f"%{k}", "decimal") for k in range(6, 10)]
+    _, nested, _ = planned("# A\n\n- x\n  - y\n    - z\n", style="continental")
+    assert [level.lvl_text for level in nested.abstract_nums[0].levels[5:]] == ["%6)", "%7)", "%8", "%9"]
+
+
+def test_a_reserved_level_is_shared_by_every_list_that_reads_as_it_does() -> None:
+    tree, plan, diagnostics = planned("# A\n\n- x\n  - y\n\n# B\n\n- z\n  - w\n", style="continental")
+    _, y, _, w = items(tree)
+    assert (plan.units[y.unit].ilvl, plan.units[w.unit].ilvl) == (5, 5) and diagnostics == []
+    assert [level.lvl_text for level in plan.abstract_nums[0].levels[5:7]] == ["%6)", "%7"]
+
+
+def test_a_nested_label_that_shows_the_section_does_not_ride_the_reserved_levels() -> None:
+    # depth 3 of the continental style is the first level's label again, {section}.{n}
+    body = "# A\n\n- x\n  - y\n    - z\n      - w\n        - v\n"
+    tree, plan, diagnostics = planned(body, style="continental")
+    x, y, z, w, v = items(tree)
+    assert [plan.units[i.unit].ilvl for i in (x, y, z)] == [1, 5, 6]
+    assert plan.units[w.unit].ilvl == 3 and plan.units[w.unit].cause == ("restart-section", "label-fallback")
+    assert plan.units[w.unit].label == "1" and w.label == "1.1"
+    # it is one step in from the item it is nested in, on whatever list it is
+    assert plan.units[w.unit].ind == (plan.units[z.unit].ind[0] + 567, 567)
+    # the list after it is on the family's abstractNum too, under a parent that is not on the heading list
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "enumerated"]
+    assert plan.units[v.unit].ilvl == 4 and plan.units[v.unit].cause == ()
+    assert [(d.rule, d.level) for d in diagnostics] == [
+        ("render-docx-static-restart", "info"), ("render-docx-section-label", "warning")]
+
+
+FIVE_LEVELS = {"enumeration.levels": [
+    {"counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"},
+    {"counter": "lower-alpha", "label": "{n})", "ref": "({n})"},
+    {"counter": "lower-roman", "label": "{n})", "ref": "({n})"},
+    {"counter": "upper-alpha", "label": "({n})", "ref": "({n})"},
+    {"counter": "decimal", "label": "[{n}]", "ref": "[{n}]"},
+    {"counter": "lower-alpha", "label": "{n}.", "ref": "{n}"}]}
+
+
+def test_a_chain_of_four_lists_in_a_clause_rides_all_four_reserved_levels_and_the_fifth_falls_back() -> None:
+    body = "# A\n\n" + "".join("  " * i + f"- level {i}\n" for i in range(6))
+    tree, plan, diagnostics = planned(body, style="continental", overrides=FIVE_LEVELS)
+    found = items(tree)
+    assert [plan.units[i.unit].ilvl for i in found[:5]] == [1, 5, 6, 7, 8]
+    assert [plan.units[i.unit].label for i in found[:5]] == ["1.1", "a)", "i)", "(A)", "[1]"]
+    assert [i.label for i in found[:5]] == ["1.1", "a)", "i)", "(A)", "[1]"]
+    assert len({plan.units[i.unit].num_id for i in found[:5]}) == 1  # the clause's num, no override of their own
+    assert [level.lvl_text for level in plan.abstract_nums[0].levels[5:]] == ["%6)", "%7)", "(%8)", "[%9]"]
+    assert [plan.units[i.unit].cause for i in found[1:5]] == [("reserved-level",)] * 4
+    # depth 5 is past the reserved levels: the family's own abstractNum, restarted by a fixed setting
+    assert plan.units[found[5].unit].cause == ("restart-section",) and plan.units[found[5].unit].ilvl == 5
+    assert rules(diagnostics) == {"render-docx-static-restart"}
+
+
+def test_a_nested_list_before_a_level_5_section_falls_back_without_a_section_label_finding() -> None:
+    # The level after the fifth heading level is kept for the units of the level-5 section, so the nested list of an
+    # earlier section cannot have it: it keeps the family's abstractNum, restarted by a fixed setting (information),
+    # and its label, which has no section in it, is not reported.
+    body = "# A\n\n- x\n  - y\n    - z\n\n## B\n\n### C\n\n#### D\n\n##### E\n\n- five\n"
+    tree, plan, diagnostics = planned(body, style="continental")
+    x, y, z, five = items(tree)
+    assert plan.units[x.unit].ilvl == 1 and plan.units[five.unit].ilvl == 5
+    assert plan.units[y.unit].cause == ("restart-section",) and plan.units[y.unit].ilvl == 1
+    assert plan.units[z.unit].cause == () and plan.units[z.unit].ilvl == 2
+    assert rules(diagnostics) == {"render-docx-static-restart", "render-docx-shared-counter"}  # B follows the clause
+    assert plan.abstract_nums[0].levels[5].lvl_text == "%1.%2.%3.%4.%5.%6"
+    # without the level-5 section the same lists ride the reserved levels
+    tree, plan, diagnostics = planned("# A\n\n- x\n  - y\n    - z\n", style="continental")
+    assert [plan.units[i.unit].ilvl for i in items(tree)] == [1, 5, 6] and diagnostics == []
+
+
+
+def test_an_ordered_list_nested_in_an_item_on_the_heading_list_keeps_its_own_numbering() -> None:
+    tree, plan, diagnostics = planned("# A\n\n- x\n  1. y\n  1. z\n", style="continental")
+    x, y, z = items(tree)
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "renumber"]
+    assert shown(plan, y, z) == [(3, 1, "1."), (3, 1, "2.")] and plan.units[y.unit].cause == ("restart-section",)
+    assert plan.units[y.unit].ind == (plan.units[x.unit].ind[0] + 567, 567)
+    [found] = diagnostics
+    assert (found.rule, found.level) == ("render-docx-static-restart", "info") and "carries the section" in found.message
+
+
+def test_the_level_after_the_fifth_is_kept_for_level_5_sections_when_the_document_has_one() -> None:
+    body = "# A\n\n## B\n\n### C\n\n#### D\n\n##### E\n\n- five\n  - nested\n- six\n"
+    tree, plan, diagnostics = planned(body, style="continental")
+    five, nested, six = items(tree)
+    assert shown(plan, five, six) == [(2, 5, "1.1.1.1.1.1"), (2, 5, "1.1.1.1.1.2")]
+    assert plan.abstract_nums[0].levels[5].lvl_text == "%1.%2.%3.%4.%5.%6"
+    # the nested list falls back: its slot is the level-5 section's
+    assert plan.units[nested.unit].cause == ("restart-section",) and plan.units[nested.unit].ilvl == 1
+    # a document without a level-5 section lets the nested list have it
+    _, other, _ = planned("# A\n\n- x\n  - y\n", style="continental")
+    assert other.abstract_nums[0].levels[5].lvl_text == "%6)"
+
+
+def test_a_level_a_different_label_has_taken_is_not_shared() -> None:
+    # the numbered paragraphs under a level-5 section need another text on the level after the section's than the
+    # items: the second kind falls back, and says so
+    body = "# A\n\n## B\n\n### C\n\n#### D\n\n##### E\n\n- five\n\nPara.\n"
+    levels = {"paragraphs.numbered": True, "paragraphs.format": {"counter": "decimal", "label": "{section}-{n}",
+                                                                 "ref": "-{n}"}}
+    tree, plan, diagnostics = planned(body, style="continental", overrides=levels)
     [paragraph] = [u for u in units(tree) if isinstance(u, Paragraph)]
-    assert plan.units[paragraph.unit].label == "1" and plan.units[paragraph.unit].cause == ("label-fallback",)
+    assert plan.units[paragraph.unit].cause == ("label-fallback",) and plan.units[paragraph.unit].label == "-1"
+    assert plan.units[items(tree)[0].unit].ilvl == 5
+    assert rules(diagnostics) == {"render-docx-section-label"}
+
+
+def test_a_label_the_heading_list_cannot_show_is_written_without_the_section_and_reported() -> None:
+    levels = [{"counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"},
+              {"counter": "lower-alpha", "label": "{n})", "ref": "({n})"}]
+    tree, plan, diagnostics = planned("# A\n\n- x\n  - y\n", style="outline", overrides={"enumeration.levels": levels})
+    x, y = items(tree)
+    assert (x.label, plan.units[x.unit].label, plan.units[x.unit].cause) == ("I.1", "1", ("label-fallback",))
+    assert [a.kind for a in plan.abstract_nums] == ["headings", "enumerated"] and plan.units[x.unit].ind is None
+    [found] = diagnostics
+    assert found.rule == "render-docx-section-label" and found.level == "warning" and "'1'" in found.message
+    assert found.line == x.line
+
+
+def test_under_the_none_scheme_the_label_that_needs_the_section_is_written_without_it() -> None:
+    tree, plan, diagnostics = planned("# A\n\n- x\n", style="continental", overrides=NONE)
+    [x] = items(tree)
+    assert (x.label, plan.units[x.unit].label, plan.units[x.unit].cause) == ("A.1", "1", ("label-fallback",))
+    assert rules(diagnostics) == {"render-docx-section-label"}
+
+
+def test_the_items_of_a_quote_do_not_ride_the_heading_list() -> None:
+    tree, plan, diagnostics = planned("# A\n\n> - quoted\n\n- real\n", style="continental")
+    quoted, real = items(tree)
+    assert plan.units[quoted.unit].cause == ("label-fallback",) and plan.units[quoted.unit].label == "1"
+    assert shown(plan, real)[0][1:] == (1, "1.1")
+    assert rules(diagnostics) == {"render-docx-section-label"}
+
+
+def test_numbered_paragraphs_whose_label_needs_the_section_ride_the_heading_list_too() -> None:
+    tree, plan, diagnostics = planned("# A\n\nOne.\n\nTwo.\n\n## B\n\nThree.\n", overrides=PARAGRAPHS)
+    one, two, three = [u for u in units(tree) if isinstance(u, Paragraph)]
+    assert [(plan.units[p.unit].num_id, plan.units[p.unit].ilvl, plan.units[p.unit].label) for p in (one, two, three)] \
+        == [(2, 1, "1.1"), (2, 1, "1.2"), (4, 2, "1.1.1")]
+    assert [a.kind for a in plan.abstract_nums] == ["headings"]
+    # B's own number goes on from Word's counter of the level unless restarted
+    assert plan.units["s2"].cause == ("resync",) and rules(diagnostics) == {"render-docx-shared-counter"}
+
+
+def test_items_in_the_middle_of_numbered_paragraphs_share_their_counter_and_the_paragraph_after_is_restarted() -> None:
+    # continental's paragraphs are (1), a list of their own; made {section}.{n} they share the level with the items
+    levels = {"paragraphs.numbered": True, "paragraphs.format": {"counter": "decimal", "label": "{section}.{n}",
+                                                                 "ref": ".{n}"}}
+    tree, plan, diagnostics = planned("# A\n\nOne.\n\n- x\n- y\n\nTwo.\n", style="continental", overrides=levels)
+    one, x, y, two = units(tree)[1:]
+    assert [(plan.units[u.unit].label, plan.units[u.unit].cause) for u in (one, x, y, two)] == [
+        ("1.1", ()), ("1.1", ()), ("1.2", ()), ("1.2", ("resync",))]  # the renderer counts them apart
+    assert plan.nums[plan.units[two.unit].num_id - 1].start_overrides == ((1, 2),)
+    assert rules(diagnostics) == {"render-docx-shared-counter"}
+
+
+def test_an_item_nested_under_a_foreign_parent_reports_a_section_label_once() -> None:
+    levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+              {"counter": "decimal", "label": "{path}", "ref": "({n})"}]
+    tree, plan, diagnostics = planned("# A\n\n1. a\n   - x\n", overrides={"enumeration.levels": levels})
+    _, nested = items(tree)
+    assert plan.units[nested.unit].cause == ("restart-family", "label-fallback")
+    assert [d.rule for d in diagnostics].count("render-docx-section-label") == 1
+
+
+def test_a_quote_inside_a_preamble_item_with_a_path_label_is_reported_not_left_unexplained() -> None:
+    levels = [{"counter": "lower-alpha", "label": "({n})", "ref": "({n})"},
+              {"counter": "decimal", "label": "{path}", "ref": "({n})"}]
+    tree, plan, diagnostics = planned("- a\n\n  > - quoted\n\n# A\n", overrides={"enumeration.levels": levels})
+    _, quoted = items(tree)
+    assert quoted.parent_unit is None
+    assert plan.units[quoted.unit].cause == ("label-fallback",) and plan.units[quoted.unit].label == "(a)(1)"
     assert rules(diagnostics) == {"render-docx-section-label"}
 
 
@@ -488,18 +735,255 @@ def test_roman_numerals_from_4000_are_reported() -> None:
     assert found.line == items[3999].line and "'4000'" in found.message and "'mmmm'" in found.message
 
 
-# -- Alternatives: planned in a later step; today Word's numbers differ and the finding says so ---------
+# -- Alternatives that share a number (§15.8) -------------------------------------------------------------------
+
+SECTIONS = ("# Intro\n\n# D {#d when=forum:courts}\n\n## Sub {#s1}\n\n## Sub two {#s2}\n\n# D {#d when=forum:arb}\n\n"
+            "## Sub alt\n\n- q\n\n# D {#d when=forum:expert}\n\n## Sub exp\n\n## Sub exp two\n\n## Sub exp three\n\n"
+            "# Last\n\n## L1\n")
 
 
-def test_an_alternative_that_shares_a_number_is_reported_while_it_is_numbered_in_sequence() -> None:
+def segments_of(plan: DocxPlan, unit: str) -> str:
+    alt = plan.units[unit].alt
+    assert alt is not None
+    return show(plan, alt.segments)
+
+
+def test_a_later_alternative_section_has_no_number_of_its_own_and_shows_the_holders_as_a_field() -> None:
     body = "# Disputes {#d when=forum:courts}\n\n# Disputes {#d when=forum:arb}\n\n# Last\n"
     tree, plan, diagnostics = planned(body, ALTERNATIVES)
     assert tree.sections[1].shares_number_with == "s1"
-    assert [plan.units[s].label for s in ("s1", "s2", "s3")] == ["1.", "2.", "3."]
-    # the second section and the one after it are off by the same amount: one finding
-    [found] = diagnostics
-    assert (found.rule, found.line) == ("render-docx-number-mismatch", tree.sections[1].line)
-    assert "'1.'" in found.message and "'2.'" in found.message and "the following 1" in found.message
+    first, second, last = (plan.units[s] for s in ("s1", "s2", "s3"))
+    assert (second.num_id, second.ilvl, second.explicit, second.count, second.cause) == (0, 0, True, None, ("alternative",))
+    assert (second.label, second.word_ref, second.ind) == ("1.", "1", (567, 567))
+    assert (first.label, last.label, last.count) == ("1.", "2.", 2) and last.num_id == first.num_id
+    assert segments_of(plan, "s2") == 'REF d + "."' and second.alt.suff == "tab"
+    segment, period = second.alt.segments
+    assert (segment.number, segment.hyperlink, segment.suppress_text, segment.cached) == (True, True, False, "1")
+    assert period == Literal_(".") and segment.bookmark == plan.units["s1"].bookmarks[0]
+    assert rules(diagnostics) == {"render-docx-alternative"}
+
+
+def test_the_text_after_the_number_of_a_later_alternative_is_the_label_beyond_what_the_field_returns() -> None:
+    body = "# D {#d when=forum:courts}\n\n# D {#d when=forum:arb}\n"
+    _, plan, _ = planned(body, ALTERNATIVES, overrides={"numbering.scheme": "legal-outline"})
+    assert (show(plan, plan.units["s2"].alt.segments), plan.units["s2"].label) == ('REF d + "."', "I.")
+    # REF \n drops periods only: a label that ends otherwise is all the field's
+    _, plan, _ = planned(body, ALTERNATIVES, overrides={"numbering.scheme": "mixed"})
+    assert (show(plan, plan.units["s2"].alt.segments), plan.units["s2"].label) == ('REF d + "."', "1.")
+    _, plan, _ = planned("# A\n\n- a {#i when=forum:courts}\n- b {#i when=forum:arb}\n", ALTERNATIVES)
+    assert (show(plan, plan.units["u2"].alt.segments), plan.units["u2"].label) == ("REF i", "(a)")
+
+
+def test_a_reference_to_the_shared_identifier_is_the_first_alternatives() -> None:
+    body = "# D {#d when=forum:courts}\n\n# D {#d when=forum:arb}\n\nSee {{ref: d}}.\n"
+    tree, plan, _ = planned(body, ALTERNATIVES)
+    assert list(plan.refs) == ["s1"] and show(plan, plan.refs["s1"].segments) == "REF d"
+    assert plan.units["s2"].bookmarks == ()  # the holder carries the bookmark, the alternative has none of its own
+
+
+def test_the_holder_of_an_alternatives_number_has_a_bookmark_even_when_nothing_refers_to_it() -> None:
+    _, plan, _ = planned("# D\n\n- a {#i when=forum:courts}\n- b {#i when=forum:arb}\n", ALTERNATIVES)
+    [segment] = plan.units["u2"].alt.segments
+    assert plan.units["u1"].bookmarks == (segment.bookmark,) and segment.bookmark.startswith("ld_")
+    _, plan, _ = planned("# D\n\n- a {when=forum:courts}\n- b {when=forum:arb}\n", ALTERNATIVES)
+    assert plan.units["u2"].alt is None  # no identifier: no alternative
+    _, plan, _ = planned("# D {when=forum:courts}\n\n# D2 {when=forum:arb}\n", ALTERNATIVES)
+    assert plan.units["s2"].alt is None
+
+
+def test_the_sections_under_a_later_alternative_start_in_a_num_of_their_own() -> None:
+    tree, plan, diagnostics = planned(SECTIONS, ALTERNATIVES)
+    sub, sub_two, alt, sub_alt, alt_three, exp, exp_two, exp_three, last, l1 = (
+        plan.units[s] for s in ("s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12"))
+    assert [s.label for s in (sub, sub_two, sub_alt, exp, exp_two, exp_three, last, l1)] == [
+        "2.1", "2.2", "2.1", "2.1", "2.2", "2.3", "3.", "3.1"]
+    assert (alt.num_id, alt_three.num_id) == (0, 0) and alt.label == alt_three.label == "2."
+    # both holders' numbers are the first alternative's, the field points at it
+    assert segments_of(plan, "s5") == segments_of(plan, "s7") == 'REF d + "."'
+    # the first alternative's children are on the headings' num; each later one's on a fresh num that starts at its level
+    assert {sub.num_id, sub_two.num_id, last.num_id} == {1} and sub_alt.num_id != 1 and exp.num_id not in (1, sub_alt.num_id)
+    assert (sub_alt.explicit, exp.explicit, sub.explicit) == (True, True, False)
+    assert [plan.nums[n - 1].start_overrides for n in (sub_alt.num_id, exp.num_id)] == [((1, 1),), ((1, 1),)]
+    assert exp.num_id == exp_two.num_id == exp_three.num_id
+    # the section after the alternatives goes back to the headings' num: it goes on from the holder's counter
+    assert (last.count, l1.count) == (3, 1) and l1.num_id == 1 and last.explicit is False
+    assert all(d.level == "info" for d in diagnostics)
+
+
+def test_an_alternative_that_is_not_the_first_to_be_numbered_takes_no_num_for_its_children_until_they_come() -> None:
+    _, plan, _ = planned("# D {#d when=forum:courts}\n\n# D {#d when=forum:arb}\n\n# E\n", ALTERNATIVES)
+    assert [n.id for n in plan.nums] == [1]  # no num made for sections that never come
+
+
+def test_an_alternative_below_a_later_alternative_whose_number_is_live_there_is_numbered_by_word() -> None:
+    body = ("# D {#d when=forum:courts}\n\n## E {#e when=forum:courts}\n\n### F {#f}\n\n"
+            "# D {#d when=forum:arb}\n\n## E {#e when=forum:arb}\n\n### F2\n\n## G\n\n### H\n")
+    tree, plan, _ = planned(body, ALTERNATIVES)
+    assert [(plan.units[s.unit].label, plan.units[s.unit].num_id, bool(plan.units[s.unit].alt)) for s in tree.sections] == [
+        ("1.", 1, False), ("1.1", 1, False), ("1.1.1", 1, False), ("1.", 0, True), ("1.1", 2, False),
+        ("1.1.1", 2, False), ("1.2", 2, False), ("1.2.1", 2, False)]
+    # the alternative's first section starts the fresh num with the number it shares: no field is needed for it
+    assert plan.units["s5"].explicit and plan.nums[1].start_overrides == ((1, 1),)
+
+
+def test_an_item_that_repeats_the_number_of_the_one_before_is_numbered_by_a_field() -> None:
+    body = "# S\n\n- a {#i when=forum:courts}\n- b {#i when=forum:arb}\n- c\n"
+    tree, plan, diagnostics = planned(body, ALTERNATIVES)
+    a, b, c = items(tree)
+    assert (b.shares_number_with, plan.units[b.unit].num_id, plan.units[b.unit].label) == (a.unit, 0, "(a)")
+    assert (plan.units[b.unit].ilvl, plan.units[b.unit].ind, plan.units[b.unit].cause) == (0, (567, 567), ("alternative",))
+    assert shown(plan, a, c) == [(2, 0, "(a)"), (2, 0, "(b)")] and plan.units[c.unit].count == 2
+    assert segments_of(plan, b.unit) == "REF i" and rules(diagnostics) == {"render-docx-alternative"}
+
+
+def test_the_children_of_a_later_alternative_item_get_a_num_of_their_own_and_it_is_reported_as_information() -> None:
+    body = "# S\n\n- a {#i when=forum:courts}\n  - x\n- b {#i when=forum:arb}\n  - y\n  - z\n- c\n"
+    tree, plan, diagnostics = planned(body, ALTERNATIVES)
+    _, x, _, y, z, _ = items(tree)
+    assert shown(plan, x, y, z) == [(2, 1, "(i)"), (3, 1, "(i)"), (3, 1, "(ii)")]
+    assert plan.units[y.unit].cause == ("restart-alternative",) and plan.units[z.unit].cause == ()
+    assert plan.nums[2].start_overrides == ((1, 1),)
+    found = [d for d in diagnostics if d.rule == "render-docx-static-restart"][0]
+    assert (found.rule, found.level, found.line) == ("render-docx-static-restart", "info", y.line)
+    assert "alternative" in found.message and rules(diagnostics) == {"render-docx-static-restart", "render-docx-alternative"}
+
+
+def test_a_paragraph_that_repeats_the_number_of_the_one_before_is_numbered_by_a_field() -> None:
+    body = "# S\n\nOne. {#p when=forum:courts}\n\nOne arb. {#p when=forum:arb}\n\nTwo.\n"
+    tree, plan, diagnostics = planned(body, ALTERNATIVES, overrides=PARAGRAPHS)
+    one, arb, two = [u for u in units(tree) if isinstance(u, Paragraph)]
+    assert [(plan.units[u.unit].num_id, plan.units[u.unit].label) for u in (one, arb, two)] == [
+        (2, "1.1"), (0, "1.1"), (2, "1.2")]
+    assert plan.units[arb.unit].ilvl == 1 and plan.units[two.unit].count == 2
+    assert rules(diagnostics) == {"render-docx-alternative"}
+
+
+def test_alternatives_on_the_heading_list_carry_the_indent_of_the_unit_not_of_the_heading() -> None:
+    body = "# S\n\n- a {#i when=forum:courts}\n  - n\n- b {#i when=forum:arb}\n  - m\n"
+    tree, plan, diagnostics = planned(body, ALTERNATIVES, style="continental")
+    a, n, b, m = items(tree)
+    heading_level = plan.abstract_nums[0].levels[1]
+    assert plan.units[b.unit].num_id == 0 and plan.units[b.unit].ilvl == 1
+    assert plan.units[b.unit].ind == (heading_level.left, heading_level.hanging) == plan.units[a.unit].ind
+    # the children of the alternative restart on a fresh num of the heading list's reserved level
+    assert (plan.units[m.unit].ilvl, plan.units[m.unit].cause) == (5, ("restart-alternative", "reserved-level"))
+    assert plan.units[m.unit].num_id not in (plan.units[n.unit].num_id, 1)
+    assert plan.nums[plan.units[m.unit].num_id - 1].start_overrides == ((5, 1),)
+
+
+def test_a_designation_below_an_alternative_is_made_of_the_holders_counters() -> None:
+    body = ("# D {#d when=forum:courts}\n\n- a {#a when=forum:courts}\n- b {#a when=forum:arb}\n  - deep {#deep}\n\n"
+            "# D {#d when=forum:arb}\n\n- z {#z}\n\nSee {{ref: deep}} {{ref: z}}.\n")
+    tree, plan, diagnostics = planned(body, ALTERNATIVES, style="continental")
+    texts = {i.target_unit: i.text for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)}
+    assert [(texts[t], show(plan, plan.refs[t].segments)) for t in plan.refs] == [
+        ("1.1(a)", 'REF a + "(" + REF deep'), ("1.1", "REF z")]
+    assert all(r.exact and not r.fixed for r in plan.refs.values())
+    assert "render-docx-reference" not in rules(diagnostics)
+
+
+def test_a_unit_that_shares_a_number_but_finds_another_count_in_the_level_is_restarted_not_made_an_alternative() -> None:
+    # Two clauses of the later alternative's sub-section counted the level of the heading list between: the number the
+    # sub-sub-section shares is not the one the level holds, so Word's counter is restarted at it instead of a field
+    # standing for a unit that is not where it is.
+    body = ("# D {#d when=forum:courts}\n\n## Sub {#s}\n\n### Deeper {#t}\n\n# D {#d when=forum:arb}\n\n"
+            "## Sub alt\n\n- clause one\n- clause two\n\n### Deeper alt\n")
+    tree, plan, diagnostics = planned(body, ALTERNATIVES, style="continental")
+    deeper = tree.sections[5]
+    assert deeper.shares_number_with == "s3"
+    mine = plan.units[deeper.unit]
+    assert (mine.alt, mine.cause, mine.label, mine.count, mine.explicit) == (None, ("resync",), "1.1.1", 1, True)
+    assert mine.num_id not in (0, None) and plan.nums[mine.num_id - 1].start_overrides == ((2, 1),)
+    assert "render-docx-shared-counter" in rules(diagnostics)
+
+
+def test_the_holder_is_the_unit_that_holds_the_level_now_not_always_the_first_alternative() -> None:
+    # A clause on the same level of the heading list counted between the two paragraphs that share a number: the level
+    # holds the clause's 1.1 now, and the later alternative shows that (the designations below it are made of the
+    # counters the level holds), so it refers to the clause. Nothing is off: the text is the same.
+    levels = {"paragraphs.numbered": True, "paragraphs.format": {"counter": "decimal", "label": "{section}.{n}",
+                                                                 "ref": ".{n}"}}
+    body = "# S\n\nPara. {#p when=forum:courts}\n\n- clause {#i}\n\nPara arb. {#p when=forum:arb}\n\nAfter.\n"
+    tree, plan, diagnostics = planned(body, ALTERNATIVES, style="continental", overrides=levels)
+    first, clause, later, after = [u for u in units(tree)][1:]
+    assert plan.units[later.unit].num_id == 0 and plan.units[later.unit].label == "1.1"
+    assert plan.units[later.unit].alt.segments[0].bookmark == plan.units[clause.unit].bookmarks[0]
+    assert plan.units[first.unit].bookmarks == ("ld_p",) and plan.units[after.unit].label == "1.2"
+    assert "render-docx-number-mismatch" not in rules(diagnostics)
+
+
+def test_the_alternatives_of_a_document_are_one_information_naming_the_first() -> None:
+    body = ("# D {#d when=forum:courts}\n\n# D {#d when=forum:arb}\n\n# E {#e when=forum:courts}\n\n"
+            "# E {#e when=forum:arb}\n\n# E {#e when=forum:expert}\n")
+    tree, plan, diagnostics = planned(body, ALTERNATIVES)
+    [found] = [d for d in diagnostics if d.rule == "render-docx-alternative"]
+    assert found.level == "info" and found.line == tree.sections[0].line
+    assert "3 alternative(s)" in found.message and "'1.'" in found.message and "deleting that paragraph" in found.message
+    assert f"line {tree.sections[0].line}" in found.message and "condition values" in found.message
+    _, _, diagnostics = planned("# A\n\n# B\n", ALTERNATIVES)
+    assert "render-docx-alternative" not in rules(diagnostics)
+
+
+def test_the_message_about_a_restarted_unit_says_what_an_edit_does_to_it() -> None:
+    _, _, diagnostics = planned(CONTINENTAL_ITEMS, style="continental")
+    [heading] = [d for d in diagnostics if d.rule == "render-docx-shared-counter"]
+    assert "if it is deleted in Word the headings after it read higher" in heading.message
+    levels = {"paragraphs.numbered": True, "paragraphs.format": {"counter": "decimal", "label": "{section}.{n}",
+                                                                 "ref": ".{n}"}}
+    _, _, diagnostics = planned("# A\n\nOne.\n\n- x\n- y\n\nTwo.\n", style="continental", overrides=levels)
+    [paragraph] = [d for d in diagnostics if d.rule == "render-docx-shared-counter"]
+    assert "inserted or deleted before it in Word does not move it" in paragraph.message
+
+
+def test_the_contents_show_the_number_the_alternative_shares() -> None:
+    body = "# D {#d when=forum:courts}\n\n## S\n\n# D {#d when=forum:arb}\n\n## S2\n\n# Last\n"
+    _, plan, _ = planned(body, ALTERNATIVES, overrides={"contents.enabled": True, "contents.depth": 2})
+    assert [(e.unit, e.number, e.sep) for e in plan.toc] == [
+        ("s1", "1.", "\t"), ("s2", "1.1", "\t"), ("s3", "1.", "\t"), ("s4", "1.1", "\t"), ("s5", "2.", "\t")]
+    assert plan.units["s3"].toc_bookmark == plan.toc[2].bookmark
+
+
+def test_the_items_on_the_heading_list_are_not_in_the_contents() -> None:
+    body = "# A\n\n- x\n  - y\n\n## B\n\n- z\n"
+    tree, plan, _ = planned(body, style="continental", overrides={"contents.enabled": True, "contents.depth": 5})
+    assert [e.unit for e in plan.toc] == ["s1", "s2"]
+    assert all(plan.units[i.unit].toc_bookmark is None for i in items(tree))
+
+
+def test_an_alternative_that_starts_a_section_with_its_own_shared_number_repeats_it_by_a_live_counter() -> None:
+    # the children of a later alternative section repeat the numbers of the earlier one's: they are numbered by Word
+    # (on the fresh num) and are not alternatives themselves
+    tree, plan, _ = planned(SECTIONS, ALTERNATIVES)
+    for unit in ("s6", "s8", "s9"):
+        assert tree.sections[int(unit[1:]) - 1].shares_number_with in ("s3", "s4", None)
+        assert plan.units[unit].count is not None and not plan.units[unit].alt
+
+
+def test_drift_is_reported_once_for_a_run_of_units_counted_off_by_the_same_amount() -> None:
+    # not a finding the planner makes for a document it can place (a unit Word would number differently is restarted
+    # or made a field), but the catch-all that tells of a bug in the placement: it groups runs
+    tree, _, _ = planned("# A\n\n" + "".join(f"- i{n}\n" for n in range(6)))
+    planner = _Planner(tree, None)
+    nodes = items(tree)
+    for node in nodes:
+        step = Step(node.number + 1, "", "", "", ())
+        planner.check(node, "list item", step, "decimal", ("list", "u1"), (), (0, 0))
+    for drift in planner.drifts:
+        planner.report_drift(drift)
+    [found] = planner.diagnostics
+    assert found.rule == "render-docx-number-mismatch" and found.line == nodes[0].line
+    assert "1 later than the renderer" in found.message and "the following 5" in found.message
+
+
+def test_a_different_drift_is_a_finding_of_its_own() -> None:
+    tree, _, _ = planned("# A\n\n" + "".join(f"- i{n}\n" for n in range(4)))
+    planner = _Planner(tree, None)
+    for node, delta in zip(items(tree), (1, 1, 2, 2), strict=True):
+        planner.check(node, "list item", Step(node.number + delta, "", "", "", ()), "decimal", ("list", "u1"), (), (0, 0))
+    for drift in planner.drifts:
+        planner.report_drift(drift)
+    assert len(planner.diagnostics) == 2 and "1 later" in planner.diagnostics[0].message
+    assert "2 later" in planner.diagnostics[1].message
 
 
 # -- Diagnostics: lines, files, order, repeats --------------------------------------------
@@ -649,25 +1133,6 @@ def test_a_label_that_needs_a_level_nothing_numbers_is_not_left_to_word() -> Non
     assert {d.rule for d in diagnostics} == {"render-docx-static-restart", "render-docx-section-label"}
 
 
-def test_a_run_of_units_counted_off_by_the_same_amount_is_one_finding() -> None:
-    body = "".join(f"# S{i}\n\n- a\n- b\n\n" for i in range(4))
-    body += "# D {#d when=forum:courts}\n\n- x\n\n# D {#d when=forum:arb}\n\n- y\n\n"
-    body += "".join(f"# T{i}\n\n- a\n\n## sub\n\n- q\n\n" for i in range(10))
-    tree, plan, diagnostics = planned(body, ALTERNATIVES)
-    [found] = diagnostics
-    assert found.rule == "render-docx-number-mismatch" and found.line == tree.sections[5].line
-    assert "1 later than the renderer" in found.message and "the following 10" in found.message
-
-
-def test_a_different_difference_is_a_finding_of_its_own() -> None:
-    body = ("# D {#d when=forum:courts}\n\n# D {#d when=forum:arb}\n\n# Mid\n\n"
-            "# E {#e when=forum:courts}\n\n# E {#e when=forum:arb}\n\n# End\n")
-    tree, _, diagnostics = planned(body, ALTERNATIVES)
-    assert [(d.rule, d.line) for d in diagnostics] == [
-        ("render-docx-number-mismatch", tree.sections[1].line), ("render-docx-number-mismatch", tree.sections[4].line)]
-    assert "1 later" in diagnostics[0].message and "2 later" in diagnostics[1].message
-
-
 # -- Word's counters against LibreOffice's, observed -----------------------------------------------------
 
 #: What LibreOffice 24.2 writes for these values, from a document with one list per value (it follows the OOXML
@@ -729,50 +1194,72 @@ def assert_planned_as_resolved(result, plan, diagnostics) -> None:  # noqa: ANN0
     """The property, unit by unit: Word's count is the resolver's number, and Word's label is the resolver's label,
     unless that unit's own counter reads differently in Word (a letter past 26, a Roman numeral from 4000: its label
     and those of its descendants may differ), its label cannot show what the resolver's does (the plan says so on the
-    unit), or its depth is past Word's. A document without alternatives has no other exception; a diagnostic is
-    reported exactly where there is an exception."""
+    unit), or its depth is past Word's. A later alternative that shares a number has no counter of its own (``numId`` 0,
+    its number the holder's, as fields) and reads as the resolver's label. There is no other exception, and a
+    diagnostic is reported exactly where there is one."""
     tree = result.tree
     found = rules(diagnostics)
-    shares = any(unit.shares_number_with for unit in units(tree))
+    # A document that skips a heading level (a Core Error, which the renderer still draws) is the one exception: Word
+    # is expected to read the level that was skipped as 0 where the renderer and LibreOffice count it as 1, and the
+    # catch-all ``render-docx-number-mismatch`` may then report units Word counts off.
+    skips = any("skipped-level" in unit.cause for unit in plan.units.values())
     overflows: dict[str, str] = {}  # unit -> the rule its counter reads differently under (itself or an ancestor)
     parents = {unit.unit: unit.parent_unit for unit in units(tree)}
-    count_differs = False
     own_rules: set[str] = set()
     for node, counter in numbered(tree):
         mine = plan.units[node.unit]
         clamped = "clamped" in mine.cause
-        if not shares:
+        alternative = node.shares_number_with is not None and mine.num_id == 0
+        if alternative:
+            assert mine.count is None and "alternative" in mine.cause and mine.explicit and mine.ind is not None
+            assert mine.ilvl is not None and mine.label.rstrip(".") == mine.word_ref
+        elif not skips:
             assert mine.count == node.number, (node.unit, mine.count, node.number)
-        count_differs = count_differs or mine.count != node.number
         own = ""
         if not clamped and word_counter(node.number, NUM_FMT[counter]) != format_counter(node.number, counter):
             own = "render-docx-roman-overflow" if counter.endswith("roman") else "render-docx-letter-overflow"
         inherited = overflows.get(parents[node.unit] or "", "") or ""
         overflows[node.unit] = own or inherited
-        if not shares and not (own or inherited or clamped or "label-fallback" in mine.cause):
+        if not (own or inherited or clamped or "label-fallback" in mine.cause):
             assert mine.label == node.label, (node.unit, mine.label, node.label)
-        for cause, rule in (("label-fallback", "render-docx-section-label"), ("clamped", "render-docx-list-depth")):
+        assert mine.cause.count("label-fallback") <= 1, (node.unit, mine.cause)
+        for cause, rule in (("label-fallback", "render-docx-section-label"), ("clamped", "render-docx-list-depth"),
+                            ("resync", "render-docx-shared-counter")):
             if cause in mine.cause:
                 assert rule in found, (node.unit, cause)
         own_rules.update([own] if own else [])
     assert found & {"render-docx-roman-overflow", "render-docx-letter-overflow"} == own_rules
-    if shares:
-        assert count_differs <= ("render-docx-number-mismatch" in found)
-    else:
-        assert "render-docx-number-mismatch" not in found, "a placement is wrong: " + "; ".join(
-            d.message for d in diagnostics if d.rule == "render-docx-number-mismatch")
+    assert skips or "render-docx-number-mismatch" not in found, "a placement is wrong: " + "; ".join(
+        d.message for d in diagnostics if d.rule == "render-docx-number-mismatch")
+    assert ("render-docx-alternative" in found) == any(u.alt is not None for u in plan.units.values())
     assert all(d.rule.startswith("render-docx-") for d in diagnostics)
     assert {u.unit for u in units(tree)} == set(plan.units)
     # Every num with an override is used, by a unit whose level the override names.
     first: dict[int, str] = {}
     for unit in units(tree):
         mine = plan.units[unit.unit]
-        if mine.num_id is not None:
+        if mine.num_id:
             first.setdefault(mine.num_id, unit.unit)
     for num in plan.nums:
         assert num.id in first, f"num {num.id} is never used"
         if num.start_overrides:
             assert plan.units[first[num.id]].ilvl == num.start_overrides[0][0]
+    # A unit carries an indent of its own where its level's serves another (a unit that is no heading on the heading
+    # list), where it has no level to take it from (a later alternative), and where it is nested in a unit that does
+    # (one step in from it, whatever list it is on).
+    headings = next((a.id for a in plan.abstract_nums if a.kind == "headings"), None)
+    nums = {n.id: n.abstract_id for n in plan.nums}
+    by_bookmark = {name: u.unit for u in plan.units.values() for name in u.bookmarks}
+    indented: set[str] = set()  # the units that stand where an indent of their own is the one their text starts at
+    for unit in units(tree):
+        mine = plan.units[unit.unit]
+        on_headings = mine.num_id is not None and nums.get(mine.num_id) == headings and not isinstance(unit, Section)
+        if mine.alt is not None:  # a later alternative stands where the unit it repeats does
+            on_headings = by_bookmark[mine.alt.segments[0].bookmark] in indented
+        if not isinstance(unit, Section) and (on_headings or unit.parent_unit in indented):
+            indented.add(unit.unit)
+        assert (mine.ind is not None) == (unit.unit in indented or mine.num_id == 0), (unit.unit, mine.ind, mine.num_id)
+        assert (mine.alt is not None) == (mine.num_id == 0)
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -850,48 +1337,85 @@ def _random_document(rng: random.Random) -> str:
     return "\n".join(out)
 
 
+def _alternative_list(rng: random.Random, index: int, indent: str, depth: int) -> list[str]:
+    """A list whose first item has two or three alternatives, some with lists of their own (children that differ in
+    number between the alternatives), among other items."""
+    lines: list[str] = []
+    for way in range(rng.choice([2, 3])):
+        lines.append(f"{indent}- item {way} {{#i{index}d{depth} when=forum:{FORUMS[way]}}}")
+        if depth < 3 and rng.random() < 0.6:
+            lines.extend(_random_list(rng, depth + 1, indent + "  ", 2))
+        if depth < 2 and rng.random() < 0.3:
+            lines.extend(_alternative_list(rng, index, indent + "  ", depth + 1))
+    lines.append(f"{indent}- after")
+    if depth < 3 and rng.random() < 0.5:
+        lines.extend(_random_list(rng, depth + 1, indent + "  ", 2))
+    return lines + [""]
+
+
 def _random_alternatives(rng: random.Random) -> str:
-    """Sections, items and paragraphs that share a number, among others."""
+    """Sections, items and paragraphs that share a number, in twos and threes, with children of their own and with
+    other units around them."""
     out: list[str] = []
     for index in range(rng.randint(2, 6)):
-        out.append(f"# Section {index}\n")
+        out.append(f"# Section {index} {{#h{index}}}\n")
         if rng.random() < 0.5:
-            out.append(f"Para. {{#p{index} when=forum:courts}}\n\nPara arb. {{#p{index} when=forum:arb}}\n")
+            ways = rng.choice([2, 3])
+            out.append("\n\n".join(f"Para {way}. {{#p{index} when=forum:{FORUMS[way]}}}" for way in range(ways))
+                       + "\n\nAfter.\n")
+        if rng.random() < 0.6:
+            out.append("\n".join(_alternative_list(rng, index, "", 0)))
         if rng.random() < 0.5:
-            out.append(f"- item {{#i{index} when=forum:courts}}\n- item arb {{#i{index} when=forum:arb}}\n  - nested\n"
-                       f"- after\n")
-        if rng.random() < 0.4:
-            out.append(f"# Disputes {{#d{index} when=forum:courts}}\n\n## Sub\n\n"
-                       f"# Disputes {{#d{index} when=forum:arb}}\n\n## Sub alt\n")
+            for way in range(rng.choice([2, 3])):
+                out.append(f"# Disputes {{#d{index} when=forum:{FORUMS[way]}}}\n")
+                for sub in range(rng.randint(0, 3)):
+                    out.append(f"## Sub {way}.{sub} {{#s{index}w{way}n{sub}}}\n")
+                    if rng.random() < 0.4:
+                        out.extend(_random_list(rng, 0, "", 2))
+                    if rng.random() < 0.3:
+                        out.append(f"### Deeper {{#t{index}w{way}n{sub}}}\n")
+                if rng.random() < 0.4:
+                    out.append("Text.\n\n- an item\n")
     return "\n".join(out)
 
 
 #: The random documents: one set for the numbering and the references. Each has an anchor on every unit and a
-#: paragraph that refers to up to 40 of them, and is planned under every fourth variant (rotating, so that each variant
-#: sees a different quarter), once.
+#: paragraph that refers to up to 40 of them (a different part of them in each document, so that every unit is
+#: referred to by some document), and each variant plans its own sample of them, once.
 RANDOM_DOCUMENTS = 36
-ROTATION = 4
+ALTERNATIVE_DOCUMENTS = 24
+PER_VARIANT = 9
 
 
 @functools.cache
 def _random_sources() -> tuple[str, ...]:
     rng = random.Random(20261028)
-    return tuple(with_references(with_anchors(_random_document(rng))) for _ in range(RANDOM_DOCUMENTS))
+    return tuple(with_references(with_anchors(_random_document(rng)), shift=index) for index in range(RANDOM_DOCUMENTS))
+
+
+@functools.cache
+def _alternative_sources() -> tuple[str, ...]:
+    rng = random.Random(7)
+    return tuple(ALTERNATIVES + with_references(_random_alternatives(rng), shift=index)
+                 for index in range(ALTERNATIVE_DOCUMENTS))
+
+
+def sample(variant: str, count: int, sources: tuple[str, ...]) -> list[str]:
+    """*count* of *sources*, a different choice for each variant."""
+    return [sources[i] for i in sorted(random.Random(variant).sample(range(len(sources)), count))]
 
 
 @functools.cache
 def random_runs(variant: str) -> tuple:
     """(source, result, plan, diagnostics) of the random documents planned under *variant*."""
-    offset = list(VARIANTS).index(variant)
     return tuple((source, *planned_run(FRONT + source, variant))
-                 for index, source in enumerate(_random_sources()) if (index + offset) % ROTATION == 0)
+                 for source in sample(variant, PER_VARIANT, _random_sources()))
 
 
 @functools.cache
 def alternative_runs(variant: str) -> tuple:
-    rng = random.Random(7)
-    sources = [ALTERNATIVES + with_references(_random_alternatives(rng)) for _ in range(15)]
-    return tuple((source, *planned_run(source, variant)) for source in sources)
+    return tuple((source, *planned_run(source, variant))
+                 for source in sample(variant, PER_VARIANT, _alternative_sources()))
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -903,10 +1427,13 @@ def test_random_documents_are_planned_as_resolved(variant: str) -> None:
             raise AssertionError(f"{error}\n--- document ---\n{source}") from error
 
 
-@pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "none"])
-def test_random_alternatives_are_planned_and_reported(variant: str) -> None:
-    for _, result, plan, diagnostics in alternative_runs(variant):
-        assert_planned_as_resolved(result, plan, diagnostics)
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_random_alternatives_are_planned_as_resolved(variant: str) -> None:
+    for source, result, plan, diagnostics in alternative_runs(variant):
+        try:
+            assert_planned_as_resolved(result, plan, diagnostics)
+        except AssertionError as error:
+            raise AssertionError(f"{error}\n--- document ---\n{source}") from error
 
 
 def test_planning_twice_gives_the_same_plan() -> None:
@@ -924,10 +1451,42 @@ def test_the_random_documents_reach_every_case_the_property_is_about() -> None:
             seen_rules |= rules(diagnostics)
             seen_causes |= {cause for unit in plan.units.values() for cause in unit.cause}
             depth = max(depth, max((lst.depth for lst in lists(result.tree)), default=0))
+    for variant in VARIANTS:
+        for _, _, plan, diagnostics in alternative_runs(variant):
+            seen_rules |= rules(diagnostics)
+            seen_causes |= {cause for unit in plan.units.values() for cause in unit.cause}
     assert {"render-docx-letter-overflow", "render-docx-section-label", "render-docx-static-restart",
             "render-docx-list-depth", "render-docx-shared-counter"} <= seen_rules
-    assert {"restart-family", "resync", "label-fallback", "skipped-level", "clamped"} <= seen_causes
+    assert {"restart-family", "restart-section", "restart-alternative", "resync", "label-fallback", "skipped-level",
+            "clamped", "alternative", "reserved-level"} <= seen_causes
     assert depth >= 10
+
+
+def test_documents_of_one_size_refer_to_different_units_so_that_more_of_them_are_referred_to() -> None:
+    groups: dict[int, list[set[str]]] = {}
+    for source in _random_sources():
+        stride = -(-len(re.findall(r"\{#([a-z][a-z0-9-]*)", source)) // 40) or 1
+        groups.setdefault(stride, []).append(set(re.findall(r"\{\{ref: ([a-z][a-z0-9-]*)", source)))
+    spread = [members for stride, members in groups.items() if stride > 1 and len(members) > 1]
+    assert spread
+    for members in spread:
+        assert len(set().union(*members)) > max(len(refs) for refs in members)
+
+
+@pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "mixed", "article"])
+def test_a_reference_is_fixed_text_only_where_a_heading_level_is_skipped_or_the_depth_is_past_word_s(variant: str) -> None:
+    """The cover of every reference exists for a document without errors and a list within Word's nine levels: what
+    cannot be covered are the references below a skipped heading level (a Core Error: the number of the level the
+    heading skips has no unit to be a field of) and below a list nested past nine levels."""
+    for source, result, plan, _ in (*random_runs(variant), *alternative_runs(variant)):
+        skipped = any("skipped-level" in unit.cause for unit in plan.units.values())
+        if not skipped and max((lst.depth for lst in lists(result.tree)), default=0) <= 8:
+            assert not [t for t, r in plan.refs.items() if r.fixed], source
+
+
+def test_each_variant_plans_its_own_sample_of_the_random_documents() -> None:
+    samples = {tuple(sample(variant, PER_VARIANT, _random_sources())) for variant in VARIANTS}
+    assert len(samples) == len(VARIANTS)
 
 
 # =====================================================================================================
@@ -1026,10 +1585,11 @@ COVERS = [
     ("mixed", {"overrides": {"numbering.scheme": "mixed"}}, "gamma", "1(a)(i)", "REF alpha + REF beta + REF gamma"),
     ("mixed", {"overrides": {"numbering.scheme": "mixed"}}, "o2", "1(a)(i)(2)",
      'REF alpha + REF beta + REF gamma + "(" + REF o2 + ")"'),
-    # continental: 1.1 for an item (the number of the section is not part of the item's own level in Word yet),
-    # a(n) item nested in an item written "b)" and referred to as "(b)"
-    ("continental", {"style": "continental"}, "i1", "1.1", 'REF alpha + "." + REF i1'),
-    ("continental", {"style": "continental"}, "n2", "1.2(b)", 'REF alpha + "." + REF i2 + "(" + REF n2'),
+    # continental: an item rides the heading list's next level (%1.%2), so one field is its whole number; an item
+    # nested in an item is written "b)" and referred to as "(b)"
+    ("continental", {"style": "continental"}, "i1", "1.1", "REF i1"),
+    ("continental", {"style": "continental"}, "n2", "1.2(b)", 'REF i2 + "(" + REF n2'),
+    ("continental", {"style": "continental"}, "d1", "1.2(b)(i)", 'REF i2 + "(" + REF n2 + "(" + REF d1'),
     ("continental", {"style": "continental"}, "p1", "1(1)", "REF alpha + REF p1"),
     ("continental", {"style": "continental"}, "gamma", "1.1.1", "REF gamma"),
     # the none scheme: the text of the heading, then the pieces after a space
@@ -1238,6 +1798,104 @@ def test_a_reference_in_a_heading_to_a_unit_inside_another_heading_is_still_a_fi
     _, plan, diagnostics = planned(body, overrides=NONE)
     assert not any(u.literal_refs for u in plan.units.values())
     assert "render-docx-reference-cycle" not in rules(diagnostics)
+
+
+def test_two_cyclic_headings_with_the_same_text_are_both_reported() -> None:
+    body = "# Same {{ref: a}} {#a}\n\n# Same {{ref: b}} {#b}\n\n# Same {{ref: c}} {#c}\n"
+    tree, plan, diagnostics = planned(body, overrides=NONE)
+    found = [d for d in diagnostics if d.rule == "render-docx-reference-cycle"]
+    assert [d.line for d in found] == [section.line for section in tree.sections]
+    assert all(f"line {d.line}" in d.message for d in found)
+
+
+def test_the_headings_that_lead_to_each_other_are_found_by_components_not_by_walking_from_each() -> None:
+    # a ring of three with a tail into it and a chain out of it: only the ring is cyclic, whatever the order
+    successors = {"a": ["b"], "b": ["c"], "c": ["a", "d"], "t": ["a"], "d": ["e"], "e": []}
+    component, order = _components(successors)
+    assert component["a"] == component["b"] == component["c"]
+    assert len({component[n] for n in "abctde"}) == 4
+    assert [sorted(members) for members in order if len(members) > 1] == [["a", "b", "c"]]
+    # each component comes after those it leads to
+    assert order.index(["e"]) < order.index(["d"]) < order.index(next(m for m in order if "a" in m))
+    assert order.index(["t"]) == len(order) - 1
+
+
+def test_the_components_of_a_graph_agree_with_what_each_node_can_reach() -> None:
+    rng = random.Random(3)
+    for _ in range(200):
+        size = rng.randint(1, 9)
+        names = [f"n{i}" for i in range(size)]
+        graph = {n: [m for m in names if rng.random() < 0.25] for n in names}
+        component, _ = _components(graph)
+
+        def reaches(start: str, goal: str, graph: dict[str, list[str]] = graph) -> bool:
+            seen, pending = set(), list(graph[start])
+            while pending:
+                node = pending.pop()
+                if node == goal:
+                    return True
+                if node not in seen:
+                    seen.add(node)
+                    pending += graph[node]
+            return False
+
+        for a in names:
+            for b in names:
+                assert (component[a] == component[b]) == (a == b or (reaches(a, b) and reaches(b, a)))
+
+
+def test_a_very_long_chain_of_components_does_not_hit_the_recursion_limit() -> None:
+    chain = {f"n{i}": [f"n{i + 1}"] for i in range(50_000)}
+    component, order = _components(chain)
+    assert len(order) == 50_001 and len(set(component.values())) == 50_001
+    ring = {f"n{i}": [f"n{(i + 1) % 50_000}"] for i in range(50_000)}
+    _, order = _components(ring)
+    assert len(order) == 1 and len(order[0]) == 50_000
+
+
+def _chain(count: int, close: bool) -> str:
+    """Headings that each refer to the one before (and the first to the last, with *close*): under the none scheme
+    each reference is a field for the heading's text."""
+    parts = [f"# H0 {{{{ref: h{count - 1}}}}} {{#h0}}\n" if close else "# H0 {#h0}\n"]
+    parts += [f"# H{i} see {{{{ref: h{i - 1}}}}} {{#h{i}}}\n" for i in range(1, count)]
+    return "\n".join(parts)
+
+
+@pytest.mark.parametrize("close", [False, True])
+def test_the_headings_of_a_long_chain_of_references_are_planned_in_linear_time(close: bool) -> None:
+    def seconds(count: int) -> float:
+        tree = render(FRONT + _chain(count, close), format="text", overrides=NONE).tree
+        best = float("inf")
+        for _ in range(2):
+            started = time.perf_counter()
+            plan_docx(tree)
+            best = min(best, time.perf_counter() - started)
+        return best
+
+    small, large = seconds(500), seconds(4000)
+    assert large < 30 * max(small, 0.01), (small, large)  # eight times the headings: a walk from each would be sixty-four
+    assert large < 2.0
+
+
+def test_a_ring_of_references_in_titles_is_all_text_and_a_chain_all_fields() -> None:
+    _, ring, _ = planned(_chain(30, True), overrides=NONE)
+    assert all(ring.units[f"s{i}"].literal_refs for i in range(1, 31))
+    _, chain, _ = planned(_chain(30, False), overrides=NONE)
+    assert not any(unit.literal_refs for unit in chain.units.values())
+
+
+def test_the_text_a_heading_field_returns_is_made_of_the_fields_in_the_title_it_stands_for() -> None:
+    # A's title refers to the item under it (written as text: the item's designation starts with A's own text); B's
+    # refers to A, a field for A's text, which includes the text A's title has for that reference.
+    body = "# A {{ref: i}} {#a}\n\n- x {#i}\n\n# B {{ref: a}} {#b}\n\nRefs {{ref: a}} {{ref: b}} {{ref: i}}\n"
+    tree, plan, _ = planned(body, overrides=NONE)
+    a, b = tree.sections
+    assert plan.units[a.unit].literal_refs == ("u1",) and plan.units[b.unit].literal_refs == ()
+    texts = {t: cached(plan.refs[t].segments) for t in plan.refs}
+    title_of_a = next(i.text for i in iter_tree_inlines(tree) if isinstance(i, CrossRef) and i.target_unit == "u1")
+    # B's heading text is "B " and what the field for A gives, which is A's text: "A " and the reference as text
+    assert texts[a.unit] == "A " + title_of_a
+    assert texts[b.unit] == "B " + texts[a.unit]
 
 
 # -- What the bookmark returns is what the runs show ---------------------------------------------------------------
@@ -1469,11 +2127,13 @@ def with_anchors(source: str) -> str:
     return "\n".join(out)
 
 
-def with_references(source: str) -> str:
-    """*source* with a paragraph at its end that refers to the anchors in it (at most 40, evenly spread: resolving
-    a reference costs more than numbering a unit)."""
+def with_references(source: str, shift: int = 0) -> str:
+    """*source* with a paragraph at its end that refers to the anchors in it (at most 40, evenly spread, starting at
+    the *shift*-th: resolving a reference costs more than numbering a unit, and documents of different shifts refer
+    to different units)."""
     anchors = list(dict.fromkeys(re.findall(r"\{#([a-z][a-z0-9-]*)", source)))
-    anchors = anchors[::-(-len(anchors) // 40) or 1]
+    stride = -(-len(anchors) // 40) or 1
+    anchors = anchors[shift % stride::stride]
     return source + "\n\nRefs: " + " ".join(f"{{{{ref: {anchor}}}}}" for anchor in anchors) + "\n"
 
 
@@ -1578,10 +2238,13 @@ def test_random_documents_references_are_planned_as_resolved(variant: str) -> No
             raise AssertionError(f"{error}\n--- document ---\n{source}") from error
 
 
-@pytest.mark.parametrize("variant", ["default", "continental", "paragraphs", "none"])
+@pytest.mark.parametrize("variant", VARIANTS)
 def test_random_alternatives_references_are_planned_as_resolved(variant: str) -> None:
-    for _, result, plan, diagnostics in alternative_runs(variant):
-        assert_references_as_resolved(result, plan, diagnostics)
+    for source, result, plan, diagnostics in alternative_runs(variant):
+        try:
+            assert_references_as_resolved(result, plan, diagnostics)
+        except AssertionError as error:
+            raise AssertionError(f"{error}\n--- document ---\n{source}") from error
 
 
 def test_the_random_documents_reach_every_kind_of_cover() -> None:

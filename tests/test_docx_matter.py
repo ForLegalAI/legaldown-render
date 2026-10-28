@@ -800,17 +800,13 @@ def test_the_contents_lists_exactly_the_html_entries(shown: dict[str, Exported])
                                                                              "contents.depth": 3})
     assert toc_lines(shown["depth1"]) == expected_entries(FRONT, overrides={"contents.enabled": True,
                                                                              "contents.depth": 1})
-    # An alternative that shares a number (§15.8) is numbered in sequence by LibreOffice until the planner keeps it
-    # on the first one's number, and the entries after it are numbered one more: the numbers are the contents' up to
-    # the first alternative, the titles are the contents' throughout.
+    # An alternative that shares a number (§15.8) shows the first one's number in the contents too, so every entry of
+    # the template, the alternatives' included, is the HTML's.
     template = (DOCUMENTS / "template.lgd").read_text(encoding="utf-8")
     settings = {"style": "continental", "overrides": {"contents.enabled": True, "contents.depth": 3}}
     result = render(template, format="text", **settings)
-    sharing = {section.unit for section in result.tree.sections if section.shares_number_with}
-    first_alternative = next(i for i, e in enumerate(result.tree.contents) if e.unit in sharing)
-    drawn, entries = toc_lines(shown["template"]), expected_entries(template, **settings)
-    assert drawn[:first_alternative] == entries[:first_alternative]
-    assert [line.split(" ", 1)[1] for line in drawn] == [line.split(" ", 1)[1] for line in entries]
+    assert any(section.shares_number_with for section in result.tree.sections)
+    assert toc_lines(shown["template"]) == expected_entries(template, **settings)
 
 
 @pytest.mark.libreoffice
@@ -896,13 +892,12 @@ def test_the_whole_document_reads_in_the_order_the_text_writer_prints_it(shown: 
 
 
 @pytest.mark.libreoffice
-def test_the_template_reads_in_the_text_writers_order_but_for_its_numbering(shown: dict[str, Exported]) -> None:
+def test_the_template_reads_in_the_text_writers_order_numbers_included(shown: dict[str, Exported]) -> None:
     source = (DOCUMENTS / "template.lgd").read_text(encoding="utf-8")
     text = render(source, format="text", style="continental", overrides={"contents.enabled": True,
                                                                          "contents.depth": 3}).output
     expected, found = words(text), lo_words(shown["template"])
-    # the numbers Word draws for an alternative that shares one are numbering details (see the plan's diagnostics)
-    assert [w for w in found if not w.isdigit()] == [w for w in expected if not w.isdigit()]
+    assert found == expected
 
 
 @pytest.mark.libreoffice

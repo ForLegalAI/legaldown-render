@@ -244,10 +244,10 @@ def libreoffice_export(documents: dict[str, bytes], *, update: bool = True) -> d
         return result
 
 
-def libreoffice_edit(jobs: dict[str, tuple[bytes, list[tuple[str, str]]]]) -> dict[str, str]:
+def libreoffice_edit(jobs: dict[str, tuple[bytes, list[tuple[str, str | None]]]]) -> dict[str, str]:
     """Open each document (name to DOCX bytes and edits) in one LibreOffice instance, insert a paragraph with the text
-    ``new`` before the first paragraph that holds ``match`` for each ``(match, new)``, update the fields and indexes,
-    and return the text of each (tests/lo/uno_edit.py)."""
+    ``new`` before the first paragraph that holds ``match`` for each ``(match, new)`` (delete that paragraph when
+    ``new`` is None), update the fields and indexes, and return the text of each (tests/lo/uno_edit.py)."""
     python = require_libreoffice()
     with tempfile.TemporaryDirectory(prefix="ld-lo-") as folder:
         out = Path(folder, "out")
