@@ -310,6 +310,22 @@ def text_run(text: str, *, style: str | None = None, props: Iterable[Any] = ()) 
     return r(content, style=style, props=props)
 
 
+def field_start(instruction: str, *, props: Iterable[Any] = (), dirty: bool = False) -> list[ET.Element]:
+    """The runs that open a complex field: ``begin``, the instruction and ``separate``. The result runs
+    follow, then :func:`field_end`; a field that spans paragraphs (the table of contents) is written in
+    these parts."""
+    def char(kind: str, **extra: Any) -> ET.Element:
+        return r(el("fldChar", {"fldCharType": kind, **extra}), props=props)
+
+    instr = r(el("instrText", {"xml:space": "preserve"}, text=f" {_t(instruction).strip()} "), props=props)
+    return [char("begin", dirty=True if dirty else None), instr, char("separate")]
+
+
+def field_end(*, props: Iterable[Any] = ()) -> ET.Element:
+    """The run that closes a complex field."""
+    return r(el("fldChar", {"fldCharType": "end"}), props=props)
+
+
 def complex_field(instruction: str, result: Iterable[ET.Element] = (), *, props: Iterable[Any] = (),
                   dirty: bool = False) -> list[ET.Element]:
     """The runs of a complex field: ``begin``, the instruction, ``separate``,
@@ -318,11 +334,7 @@ def complex_field(instruction: str, result: Iterable[ET.Element] = (), *, props:
     computed for it, shown until Word updates the field. *props* format the
     field's own runs; *dirty* asks Word to update this one field when the file
     opens."""
-    def char(kind: str, **extra: Any) -> ET.Element:
-        return r(el("fldChar", {"fldCharType": kind, **extra}), props=props)
-
-    instr = r(el("instrText", {"xml:space": "preserve"}, text=f" {_t(instruction).strip()} "), props=props)
-    return [char("begin", dirty=True if dirty else None), instr, char("separate"), *result, char("end")]
+    return [*field_start(instruction, props=props, dirty=dirty), *result, field_end(props=props)]
 
 
 def hyperlink_external(relationship_id: str, *runs: ET.Element, tooltip: str | None = None) -> ET.Element:

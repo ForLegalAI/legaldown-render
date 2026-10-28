@@ -155,9 +155,16 @@ section's number in a list item, alternatives that share a number, a list restar
 reports it as a `render-docx-*` Warning or Info with the line, see
 [the conformance notes](https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md). The body writer also
 lays out paragraphs, quotes, drafting notes, code, tables with a repeated header row, rules, links, blanks and
-choices. **The file is still interim:** it has **no title block, table of contents, attachments or signature
-blocks**, and every render reports the Warning `render-docx-interim` to say so. Do not send such a file as a
-contract. Settings Word cannot express (a `%` length, say) are an error for DOCX only. See
+choices. **Front and back matter are there too, in the order the HTML shows them:** the title and subtitle, the header
+rows and the parties (borderless tables), the **table of contents** (a live `TOC \o "1-N" \h \z \u` field whose
+cached entries are the contents the HTML shows, each a link to its heading with a `PAGEREF` page number that Word
+fills in when it updates the field; with `contents.attachments` the attachments are listed by outline level, so
+the field has no locale-dependent style list), the attachments (the heading and a titled placeholder each, bookmarked so
+that `{{attach:}}` is a `REF` field or a link, separated by a page break or a rule as `attachments.separator` says),
+and the signature blocks (borderless tables with signing lines, kept together on one page as far as one page allows). Viewers that never update
+fields (Word Online, Quick Look, Google Docs import, Outlook's preview) show the contents without page numbers. A
+reference whose form Word cannot compose from fields (a custom style's `{path}` item labels, say) is fixed text and
+is reported as `render-docx-reference`. The maintainers also check the golden documents in Word before each release ([the checklist](https://github.com/ForLegalAI/legaldown-render/blob/main/.github/PUBLISHING.md)), since CI cannot run Word. Settings Word cannot express (a `%` length, say) are an error for DOCX only. See
 [Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#docx)
 and the [roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md).
 

@@ -100,13 +100,13 @@ values appear only as the cached results of fields. Decided in
 - **Package core (done).** `docx` writer in the base package, with the standard library only (no
   `[docx]` extra): the OOXML parts, styles generated from the style template, settings (compatibility
   mode 15, `w:updateFields`), page setup, running headers and footers with `PAGE`/`NUMPAGES` fields,
-  document properties, deterministic output. `RenderResult.binary`, `-o x.docx`, `-o -`. The body is
-  an interim one at that point: the title, `heading N` paragraphs and plain-text paragraphs, with no numbers yet
+  document properties, deterministic output. `RenderResult.binary`, `-o x.docx`, `-o -`. The body at that point
+  was an interim one: the title, `heading N` paragraphs and plain-text paragraphs, with no numbers yet
 - **Behaviour changes this brings.** `-o -` now writes to standard output for every format (it used to
   create a file named `-`); `.docx` is a writable extension, and a DOCX with no `-o` goes to standard output
   when that is not a terminal; `--fragment` with DOCX is a usage error; `RenderTree` gains `version` and
-  `effective_date` (plain text), filled whether or not the title block shows them; `.docx` renders add
-  the Warning `render-docx-interim` until the body is complete
+  `effective_date` (plain text), filled whether or not the title block shows them; `.docx` renders added
+  the Warning `render-docx-interim` until the body was complete (it is gone since the front and back matter)
 - **Style settings (done).** `page.header` and `page.footer` (the HTML writer ignores them for now),
   `docx.update_fields_on_open`; settings Word cannot express are a `StyleError` for DOCX
 - **Verification (done).** Every part validated against the ISO/IEC 29500 schemas (fetched in CI, not
@@ -120,9 +120,13 @@ values appear only as the cached results of fields. Decided in
   and the table of contents is planned from Word's numbers; `render` runs the planner and reports its
   `render-docx-*` diagnostics. A LibreOffice round trip with wrong cached results checks the numbers and references
   against the plain-text oracle
+- **Front and back matter (done).** The title block (header rows and parties), the `TOC` field with its cached
+  entries and `PAGEREF` page numbers, the attachments (bookmarked, separated by a page break or a rule) and the
+  signature blocks; the `render-docx-interim` Warning is gone. A LibreOffice round trip checks the contents against the
+  HTML's entries, also after a heading is inserted in the editor; a manual Word checklist for releases is in
+  `.github/PUBLISHING.md`
 - **Next.** Qualified labels (the continental `5.1`) on the heading list, alternatives that share a number,
-  restarts Word would otherwise get wrong; the table of contents field, title block, attachments and signature
-  blocks; the corpus checked also after edits made through UNO; a manual Word checklist for releases
+  restarts Word would otherwise get wrong; the corpus checked also after edits made through UNO
 
 ### v0.6 — PDF
 

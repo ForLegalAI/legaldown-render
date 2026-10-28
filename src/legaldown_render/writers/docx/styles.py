@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from ...style import Style
-from ...style.docx import DocxSettings
+from ...style.docx import DocxSettings, HeadingFormat
 from .ooxml import el, ppr, rpr, serialize, val
 
 # Style ids. A paragraph or a run names a style by id; Word shows the name.
@@ -38,6 +38,16 @@ BLANK = "Blank"
 CHOICE = "Choice"
 FAILURE_MARKER = "FailureMarker"
 CONDITION_LABEL = "ConditionLabel"
+TITLE_BLOCK_TEXT = "TitleBlockText"
+TITLE_BLOCK_LABEL = "TitleBlockLabel"
+PARTY_SIDE = "PartySide"
+PARTY_NAME = "PartyName"
+ATTACHMENTS_HEADING = "AttachmentsHeading"
+ATTACHMENT_TITLE = "AttachmentTitle"
+ATTACHMENT_FILE = "AttachmentFile"
+SIGNATURE_SIDE = "SignatureSide"
+SIGNATURE_TEXT = "SignatureText"
+SIGNATURE_LINE = "SignatureLine"
 
 
 def heading_style(level: int) -> str:
@@ -55,6 +65,12 @@ def toc_style(level: int) -> str:
 QUOTE_INDENT = 567
 NOTE_INDENT = 227
 CODE_INDENT = 113
+#: The outline level (0-based) of the attachments heading and of an attachment's title: the levels the
+#: contents lists them at, as the HTML contents does (the heading at 1, the titles under it at 2).
+ATTACHMENTS_OUTLINE = 0
+ATTACHMENT_OUTLINE = 1
+#: The space above a signing line, in twips: room to sign in.
+SIGNATURE_SPACE = 720
 
 _MUTED = "666666"
 _RULE = "C8C8C8"
@@ -132,6 +148,15 @@ def _text_style(kind: str) -> list[ET.Element]:
     }.get(kind, [])
 
 
+def _heading_run(heading: HeadingFormat | None, settings: DocxSettings) -> list[Any]:
+    """The run properties of a heading level (None: a style that sets none: bold at the body size), for the
+    paragraph styles that look like a heading and are not one (so that no heading numbering reaches them)."""
+    if heading is None:
+        return [el("b"), el("bCs"), _size(settings.half_points)]
+    return [heading.bold and [el("b"), el("bCs")], heading.italic and [el("i"), el("iCs")],
+            heading.caps and el("caps"), heading.small_caps and el("smallCaps"), _size(heading.half_points)]
+
+
 def build_styles(style: Style, settings: DocxSettings, language: str, *, heading_num_id: int | None = None) -> bytes:
     """``word/styles.xml`` for *style*, converted to Word units as *settings*, in the
     document *language* (``w:lang``). *heading_num_id* links ``heading 1`` to ``heading 5``
@@ -187,6 +212,7 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                  heading.caps and el("caps"), heading.small_caps and el("smallCaps"), _size(heading.half_points)]))
 
     first = settings.headings.get(1)
+    second = settings.headings.get(2) or first
     styles += [
         _style(TITLE, "Title", based_on=NORMAL, next_style=NORMAL, priority=10, quick=True,
                props=[el("keepNext"), el("spacing", {"before": 0, "after": em(0.5)}), el("jc", {"val": "center"})],
@@ -203,6 +229,32 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                run=[(first is None or first.bold) and [el("b"), el("bCs")], first and first.caps and el("caps"),
                     first and first.small_caps and el("smallCaps"),
                     _size(first.half_points if first else settings.half_points)]),
+        _style(TITLE_BLOCK_TEXT, "Title Block Text", based_on=NORMAL, priority=41, custom=True,
+               props=[el("spacing", {"before": 0, "after": em(0.2)}), el("jc", {"val": "left"})]),
+        _style(PARTY_SIDE, "Party Side", based_on=NORMAL, next_style=NORMAL, priority=42, custom=True,
+               props=[el("keepNext"), el("spacing", {"before": em(1), "after": em(0.2)}), el("jc", {"val": "left"})],
+               run=[el("b"), el("bCs")]),
+        _style(PARTY_NAME, "Party Name", based_on=NORMAL, priority=43, custom=True,
+               props=[el("keepNext"), el("spacing", {"before": em(0.5), "after": em(0.2)}), el("jc", {"val": "left"})]),
+        _style(ATTACHMENTS_HEADING, "Attachments Heading", based_on=NORMAL, next_style=NORMAL, priority=44,
+               custom=True, props=[el("keepNext"), el("keepLines"), el("spacing", {"before": em(1.2), "after": em(0.4)}),
+                                   el("jc", {"val": first.align if first else "left"}),
+                                   val("outlineLvl", ATTACHMENTS_OUTLINE)],
+               run=_heading_run(first, settings)),
+        _style(ATTACHMENT_TITLE, "Attachment Title", based_on=NORMAL, next_style=NORMAL, priority=45, custom=True,
+               props=[el("keepNext"), el("keepLines"), el("spacing", {"before": em(0.9), "after": em(0.4)}),
+                      el("jc", {"val": second.align if second else "left"}), val("outlineLvl", ATTACHMENT_OUTLINE)],
+               run=_heading_run(second, settings)),
+        _style(ATTACHMENT_FILE, "Attachment File", based_on=NORMAL, priority=46, custom=True,
+               run=[el("color", {"val": _MUTED})]),
+        _style(SIGNATURE_SIDE, "Signature Side", based_on=NORMAL, priority=47, custom=True,
+               props=[el("keepLines"), el("spacing", {"before": em(1.5), "after": em(0.2)}), el("jc", {"val": "left"})],
+               run=[el("b"), el("bCs")]),
+        _style(SIGNATURE_TEXT, "Signature Text", based_on=NORMAL, priority=48, custom=True,
+               props=[el("keepLines"), el("spacing", {"before": 0, "after": em(0.2)}), el("jc", {"val": "left"})]),
+        _style(SIGNATURE_LINE, "Signature Line", based_on=NORMAL, priority=49, custom=True,
+               props=[el("keepLines"), el("pBdr", None, _border("bottom", "auto", 4, 1)),
+                      el("spacing", {"before": SIGNATURE_SPACE, "after": em(0.3)})]),
         _style(DRAFTING_NOTE, "Drafting Note", based_on=NORMAL, priority=30, custom=True,
                props=[el("keepLines"), el("pBdr", None, _border("left", _NOTE_RULE, 24, 8)), _shade(_NOTE_FILL),
                       el("spacing", {"before": em(0.4), "after": em(0.4)}), el("ind", {"left": NOTE_INDENT, "right": 113})]),
@@ -243,6 +295,8 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                run=[el("color", {"val": _FAILURE_TEXT}), _shade(_FAILURE_FILL)]),
         _style(CONDITION_LABEL, "Condition Label", kind="character", priority=38, custom=True,
                run=[el("color", {"val": _CONDITION_TEXT}), _size(half_points(0.8)), _shade(_CONDITION_FILL)]),
+        _style(TITLE_BLOCK_LABEL, "Title Block Label", kind="character", priority=41, custom=True,
+               run=[el("i"), el("iCs")]),
         _style(DRAFTING_NOTE_LABEL, "Drafting Note Label", kind="character", priority=40, custom=True,
                run=[el("b"), el("bCs"), _size(half_points(0.9))]),
     ]

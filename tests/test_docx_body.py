@@ -555,11 +555,9 @@ def attachment_tree(value: Value, titles: Sequence[str] = ("Schedule A",)) -> Re
 
 def test_an_attachment_value_is_a_field_when_it_is_the_title_else_a_link_with_its_text_and_text_when_unplaced() -> None:
     def paragraph(value: Value, *, placed: bool = True) -> str:
-        # The attachments section is not written yet: a unit stands in for the bookmark it will place.
-        the_plan = plan(unit("u1", bookmarks=("ldatt_att_0",)) if placed else unit("u1"),
-                        anchors={"att-0": "ldatt_att_0"})
-        document = tree(para("see ", value), bullets(item("x", unit="u1")),
-                        attachments=attachment_tree(value).attachments)
+        # The attachment's title is written with its bookmark; a plan that names no bookmark for it leaves the text.
+        the_plan = plan(anchors={"att-0": "ldatt_att_0"} if placed else {})
+        document = tree(para("see ", value), attachments=attachment_tree(value).attachments)
         return flow(body(document, the_plan)[0])
 
     assert paragraph(Value("attach", "Schedule A", "#att-0")) == "see {REF ldatt_att_0 \\h|Schedule A}"
@@ -1058,11 +1056,11 @@ def build_everything() -> bytes:
     the_plan = plan(
         unit("s1", "section", bookmarks=("ld_a",), toc="_Toc1"),
         unit("s2", "section", num_id=0, ilvl=0, explicit=True, ind=(567, 567), alt=alt),
-        unit("u1"), unit("u2", "item", num_id=1, ilvl=0, explicit=True, bookmarks=("ld_att",)),
+        unit("u1"), unit("u2", "item", num_id=1, ilvl=0, explicit=True),
         unit("u3", "item", num_id=1, ilvl=1, explicit=True), unit("u4", "item", num_id=1, ilvl=0, explicit=True),
         unit("u5", "paragraph", num_id=2, ilvl=0, explicit=True),
         abstracts=[abstract(0, "headings", [level(0, p_style="Heading1")]), abstract(1)], nums=[Num(1, 1), Num(2, 1, ((0, 1),))],
-        heading=None, anchors={"def:t": "lddef_t", "att-0": "ld_att"}, refs={"s1": (field("ld_a", "1"),)})
+        heading=None, anchors={"def:t": "lddef_t", "att-0": "ldatt_att_0"}, refs={"s1": (field("ld_a", "1"),)})
     return DocxWriter(load_style("default")).write(document, the_plan)
 
 
