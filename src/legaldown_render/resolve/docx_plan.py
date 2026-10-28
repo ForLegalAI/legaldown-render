@@ -702,8 +702,10 @@ class _Planner:
         return "no combination of Word's fields reads like it"
 
     def reference(self, found: _Reference) -> _Built | None:
-        """The fields of the reference *found*: its designation covered by fields and delimiters, inside the text of
-        ``references.format``; None for a target the plan knows nothing of. A designation that cannot be covered is
+        """The fields of the reference *found*: the whole text it shows (the designation inside the text of
+        ``references.format``) covered by fields and delimiters, so that a field may stand for the words of the format
+        when the number it returns holds the same words (``Article {designation}`` and a label ``Article {n}``: one
+        plain ``REF``, no ``\\t``); None for a target the plan knows nothing of. A designation that cannot be covered is
         written as the renderer's text, which is right at open and not a field (``fixed``), and noted for the
         report, as is a cover that reads differently in Word for a reason no diagnostic of a unit already gives."""
         node = self.nodes.get(found.target)
@@ -712,18 +714,17 @@ class _Planner:
         numbered = isinstance(node, Section) or node.number is not None
         designation = self.desig[found.target] if numbered else self.desig.get(found.section or "", [])
         fields = self.fields(designation)
-        covered = cover(designation, fields)
-        if covered is None:
-            self.unreferable.append(_Finding("fixed", self.why_uncovered(designation, fields), found, found.text))
-            return _Built([found.text] if found.text else [], True, None, True)
-        pieces: list[str | Field] = []
+        whole: list[Shown] = []
         parts = self.formats.reference.split("{designation}")
         for index, literal in enumerate(parts):
-            for piece in ([literal] if literal else []) + (covered if index < len(parts) - 1 else []):
-                if pieces and isinstance(piece, str) and isinstance(pieces[-1], str):
-                    pieces[-1] += piece
-                else:
-                    pieces.append(piece)
+            if literal:
+                whole.append(Lit(literal))
+            if index < len(parts) - 1:
+                whole.extend(designation)
+        pieces = cover(whole, fields)
+        if pieces is None:
+            self.unreferable.append(_Finding("fixed", self.why_uncovered(designation, fields), found, found.text))
+            return _Built([found.text] if found.text else [], True, None, True)
         shown = "".join(piece if isinstance(piece, str) else text_of(piece.tokens) for piece in pieces)
         if shown != found.text:
             chain = {t.owner for t in designation if not isinstance(t, Lit) and isinstance(t.owner, str)}

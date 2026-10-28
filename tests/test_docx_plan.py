@@ -1548,6 +1548,12 @@ REFERENCES = "\n" + " ".join(f"{{{{ref: {anchor}}}}}" for anchor in (
 ARTICLE = {"numbering.levels": [{"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"}]}
 SECTION_SIGN = {"numbering.levels": [{"counter": "decimal", "label": "§ {n}", "ref": "{n}"}],
                 "references.format": "§ {designation}"}
+CL_PERIOD = {"numbering.levels": [
+    {"counter": "decimal", "label": "Čl. {n}", "ref": "{n}"}, {"counter": "decimal", "label": "{path}", "ref": ".{n}"}],
+    "references.format": "Čl. {designation}"}
+SECTION_WORD = {"numbering.levels": [
+    {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"},
+    {"counter": "decimal", "label": "Section {path}", "ref": ".{n}"}], "references.format": "Section {designation}"}
 
 
 def covers(variant: str, **settings: object) -> dict[str, tuple[str, str]]:
@@ -1598,12 +1604,22 @@ COVERS = [
      'REF alpha \\h + " " + REF i2 + " " + REF n2 + " " + REF d1'),
     ("none", {"overrides": {"numbering.scheme": "none"}}, "o2", "Gamma (2)", 'REF gamma \\h + " (" + REF o2 + ")"'),
     # words and symbols in a label that the reference leaves out: \t drops them, the format puts them back
+    ("article", {"overrides": {**ARTICLE, "references.format": "Article {designation}"}}, "alpha", "Article I", "REF alpha"),
     ("article", {"overrides": {**ARTICLE, "references.format": "Article {designation}"}}, "i1", "Article I(a)",
-     '"Article " + REF alpha \\t + REF i1'),
+     "REF alpha + REF i1"),
     ("article", {"overrides": {**ARTICLE, "references.format": "Article {designation}"}}, "beta", "Article I.1",
      '"Article " + REF beta'),
-    ("section-sign", {"overrides": SECTION_SIGN}, "d1", "§ 1(b)(ii)(A)",
-     '"§ " + REF alpha \\t + REF i2 + REF n2 + REF d1'),
+    ("section-sign", {"overrides": SECTION_SIGN}, "d1", "§ 1(b)(ii)(A)", "REF alpha + REF i2 + REF n2 + REF d1"),
+    ("section-sign", {"overrides": SECTION_SIGN}, "gamma", "§ 1.1.1", '"§ " + REF gamma'),
+    # the words of the format are the number's own words: a field for the whole number stands for them too
+    ("cl-period", {"overrides": CL_PERIOD}, "i1", "Čl. 1(a)", "REF alpha + REF i1"),
+    ("cl-period", {"overrides": CL_PERIOD}, "beta", "Čl. 1.1", '"Čl. " + REF beta'),
+    ("section-word", {"overrides": SECTION_WORD}, "beta", "Section I.1", "REF beta"),
+    ("section-word", {"overrides": SECTION_WORD}, "gamma", "Section I.1.1", '"Section " + REF gamma'),
+    # a label that says another word than the format: the words are left out of the number with \t and the format's
+    # put back
+    ("section-word", {"overrides": SECTION_WORD}, "alpha", "Section I", '"Section " + REF alpha \\t'),
+    ("section-word", {"overrides": SECTION_WORD}, "i1", "Section I(a)", '"Section " + REF alpha \\t + REF i1'),
 ]
 
 
@@ -1739,15 +1755,29 @@ def test_a_reference_whose_text_the_renderer_cut_is_reported() -> None:
 
 def test_a_cover_with_the_switch_word_ignores_in_libreoffice_is_an_information_for_the_document() -> None:
     body = "# A {#a}\n\n# B {#b}\n\nSee {{ref: a}} {{ref: b}}.\n"
-    settings = {"overrides": {**ARTICLE, "references.format": "Article {designation}"}}
+    settings = {"overrides": {**ARTICLE, "references.format": "Art. {designation}"}}
     tree, plan, diagnostics = planned(body, **settings)
     first, second = (plan.refs[i.target_unit].segments for i in iter_tree_inlines(tree) if isinstance(i, CrossRef))
     assert [(s.suppress_text, s.cached, s.cached_lo) for s in first if isinstance(s, FieldSeg)] == [(True, "I", "Article I")]
     assert [(s.suppress_text, s.cached, s.cached_lo) for s in second if isinstance(s, FieldSeg)] == [(True, "II", "Article II")]
     [found] = [d for d in diagnostics if d.rule == "render-docx-reference-word-only"]
-    assert found.level == "info" and found.line is None and "'Article I'" in found.message
-    assert "reads 'Article Article I'" in found.message and "so do 1 more" in found.message
+    assert found.level == "info" and found.line is None and "'Art. I'" in found.message
+    assert "reads 'Art. Article I'" in found.message and "so do 1 more" in found.message
     assert all(plan.refs[i].exact for i in plan.refs)
+
+
+def test_the_words_of_the_format_that_the_number_holds_too_need_no_switch() -> None:
+    """``Article {designation}`` and a label ``Article {n}``: the plain ``REF`` returns ``Article I``, which is the
+    whole reference, so there is no ``\\t`` and nothing for LibreOffice to read differently."""
+    body = "# A {#a}\n\n# B {#b}\n\nSee {{ref: a}} {{ref: b}}.\n"
+    tree, plan, diagnostics = planned(body, overrides={**ARTICLE, "references.format": "Article {designation}"})
+    for reference in (plan.refs[i.target_unit] for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)):
+        [segment] = reference.segments
+        assert isinstance(segment, FieldSeg) and not segment.suppress_text and segment.cached == segment.cached_lo
+        assert reference.exact
+    assert [segment.cached for i in iter_tree_inlines(tree) if isinstance(i, CrossRef)
+            for segment in plan.refs[i.target_unit].segments] == ["Article I", "Article II"]
+    assert diagnostics == []
 
 
 def test_reference_findings_name_the_file_and_the_first_line_of_a_repeated_reference() -> None:
@@ -2138,10 +2168,15 @@ def with_references(source: str, shift: int = 0) -> str:
 
 
 def literal_text_of_a_cover(tree: RenderTree, segments: Sequence[Segment]) -> str:
-    """The literal text of *segments* without the text of ``references.format`` around the designation."""
+    """The literal text of *segments* without the text of ``references.format`` around the designation. A field may
+    stand for that text (a number that holds the same words: ``Article I`` for ``Article {designation}``): it is then
+    in the cached text of the fields."""
     text = "".join(s.text for s in segments if isinstance(s, Literal_))
+    fields = "".join(s.cached for s in segments if isinstance(s, FieldSeg))
     for part in tree.formats.reference.split("{designation}"):
-        assert part in text or not part, (part, text)
+        if part and part not in text:
+            assert part in fields, (part, text, fields)
+            continue
         text = text.replace(part, "", 1)
     return text
 

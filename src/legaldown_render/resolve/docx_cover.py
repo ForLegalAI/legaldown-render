@@ -7,8 +7,10 @@ returns the number Word draws for the bookmarked paragraph (its whole ``lvlText`
 nothing else Word could know may be written as literal text. This module finds, for one designation, the
 combination of such fields and literal delimiters that reads exactly like it.
 
-Everything here works on token strings (:mod:`.docx_numbering`): the designation the renderer wrote, and what each
-available field returns, are lists of :class:`~.docx_numbering.Lit` (text that is not a counter) and
+Everything here works on token strings (:mod:`.docx_numbering`): the text of a reference as the renderer wrote it (the
+designation inside the text of ``references.format``, so that a field may stand for the words of the format when the
+number it returns holds the same words: ``Article {designation}`` and the label ``Article {n}`` are one plain ``REF``),
+and what each available field returns, are lists of :class:`~.docx_numbering.Lit` (text that is not a counter) and
 :class:`~.docx_numbering.Count` (the counter of one owner, as formatted); a :class:`Title` is the text of a heading
 under the ``none`` scheme (§13.3), the one thing besides counters a designation can hold that Word keeps up to date
 (``REF <bookmark> \\h`` returns the bookmarked text). The designation is cut into **atoms** (one per character of

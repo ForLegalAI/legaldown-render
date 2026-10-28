@@ -321,12 +321,16 @@ FEW_VARIANTS: dict[str, tuple[str, ...]] = {
 #: The variants that show some stress documents only.
 ONLY_DOCS: dict[str, tuple[str, ...]] = {"five levels": ("qualified",), "shared level": ("qualified", "nested")}
 
-#: The settings that give the numbering words and symbols, which Word's ``\t`` switch drops from a reference.
+#: The settings that give the numbering words and symbols: a field that returns the same words as the reference's format
+#: stands for them, otherwise Word's ``\t`` switch drops them from the number.
 WORDS: dict[str, dict] = {
     "article": {"overrides": {"numbering.levels": [
         {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"}], "references.format": "Article {designation}"}},
     "section-sign": {"overrides": {"numbering.levels": [
         {"counter": "decimal", "label": "§ {n}", "ref": "{n}"}], "references.format": "§ {designation}"}},
+    # the format says a word the label does not: Word's \t leaves the label's out and the format's is put back
+    "article-short": {"overrides": {"numbering.levels": [
+        {"counter": "upper-roman", "label": "Article {n}", "ref": "{n}"}], "references.format": "Art. {designation}"}},
     "paragraphs": {"overrides": {"paragraphs.numbered": True}},
     # the items and the paragraphs of a section share the heading list's level: the numbers are restarted where the
     # resolver counts them apart
