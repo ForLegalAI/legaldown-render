@@ -870,12 +870,13 @@ def test_a_table_beside_an_indent_keeps_at_least_a_column_width_per_column() -> 
         assert min(widths) >= 1134 and sum(widths) <= TEXT_WIDTH
 
 
-def test_a_deeply_nested_list_without_a_plan_stays_on_the_page() -> None:
+def test_a_deeply_indented_list_stays_on_the_page() -> None:
     inner: Block = bullets(item("deepest", unit="u70"), depth=70)
     for depth in range(69, -1, -1):
         inner = bullets(item(f"d{depth}", inner, unit=f"u{depth}"), depth=depth)
     document = tree(inner)
-    data = DocxWriter(load_style("default")).write(document)
+    indents = [unit(f"u{depth}", "item", ind=((depth + 1) * 567, 0)) for depth in range(71)]
+    data = DocxWriter(load_style("default")).write(document, plan(*indents))
     root = ET.fromstring(parts(data)["word/document.xml"])
     assert max(lefts(root)) <= min(31680, TEXT_WIDTH - 2268)
 
@@ -892,14 +893,15 @@ def test_the_title_and_the_subtitle_come_first_and_the_section_properties_last()
     assert local(children[-1]) == "sectPr"
 
 
-def test_without_a_plan_the_document_has_no_numbering_and_the_indent_of_each_list_depth() -> None:
-    result = render("---\ntitle: T\n---\n\n# A\n\n- a\n  - b\n\nSee {{ref: a}}.\n", format="docx")
+def test_a_rendered_document_is_numbered_cross_referenced_and_bookmarked_as_the_planner_says() -> None:
+    result = render("---\ntitle: T\n---\n\n# A\n\n- a {#x}\n  - b\n\nSee {{ref: x}}.\n", format="docx")
     contents = parts(result.binary)  # type: ignore[arg-type]
-    assert list(ET.fromstring(contents["word/numbering.xml"])) == []
+    assert [child.tag.removeprefix(W) for child in ET.fromstring(contents["word/numbering.xml"])] == [
+        "abstractNum", "abstractNum", "num", "num"]
     root = ET.fromstring(contents["word/document.xml"])
-    assert [flow(p) for p in root.iter(f"{W}p")] == ["T", "A", "a", "b", "See 1."]
-    assert [indent(p) for p in root.iter(f"{W}p")] == [None, None, {"left": 567}, {"left": 1134}, None]
-    assert not list(root.iter(f"{W}fldChar"))
+    assert [flow(p) for p in root.iter(f"{W}p")] == [
+        "T", "<ld_a>A</ld_a>", "<ld_x>a</ld_x>", "b", "See {REF ld_a \\n \\h|1}{REF ld_x \\n \\h|(a)}."]
+    assert [indent(p) for p in root.iter(f"{W}p")] == [None] * 5
 
 
 def test_the_same_plan_and_tree_are_the_same_bytes() -> None:

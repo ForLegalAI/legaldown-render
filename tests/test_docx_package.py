@@ -128,8 +128,9 @@ def test_update_fields_on_open_can_be_turned_off() -> None:
     assert settings.find(f"{W}compat") is not None
 
 
-def test_the_numbering_part_is_an_empty_stub_that_later_work_fills() -> None:
-    assert list(xml(docx()["word/numbering.xml"])) == []
+def test_the_numbering_part_holds_the_plans_definitions() -> None:
+    assert [child.tag.removeprefix(W) for child in xml(docx()["word/numbering.xml"])] == [
+        "abstractNum", "abstractNum", "num", "num"]
     from legaldown_render.writers.docx.settings import build_numbering
 
     filled = xml(build_numbering([ooxml.el("abstractNum", {"abstractNumId": 0})], [ooxml.el("num", {"numId": 1})]))
@@ -163,13 +164,16 @@ def test_the_styles_the_body_and_word_need_exist_under_the_names_word_knows() ->
     assert by_id["Heading1"].get(f"{W}customStyle") is None
 
 
-def test_headings_are_outline_levels_zero_to_four_and_not_numbered_yet() -> None:
+def test_headings_are_outline_levels_zero_to_four_numbered_by_the_heading_list() -> None:
     by_id = style_map(docx())
     for level in range(1, 6):
         heading = by_id[f"Heading{level}"]
         assert heading.find(f"{W}pPr/{W}outlineLvl").get(f"{W}val") == str(level - 1)
         assert heading.find(f"{W}basedOn").get(f"{W}val") == "Normal"
-        assert heading.find(f"{W}pPr/{W}numPr") is None
+        numbering = heading.find(f"{W}pPr/{W}numPr")
+        assert (numbering.find(f"{W}ilvl").get(f"{W}val"), numbering.find(f"{W}numId").get(f"{W}val")) == (
+            str(level - 1), "1")
+    assert all(style.find(f"{W}pPr/{W}numPr") is None for key, style in by_id.items() if not key.startswith("Heading"))
     assert by_id["ContentsHeading"].find(f"{W}pPr/{W}outlineLvl") is None  # in no table of contents
 
 
@@ -628,6 +632,32 @@ def test_the_interim_warning_is_one_warning_that_does_not_refuse_under_strict() 
     assert not [d for d in render(FRONT + "# A\n", format="html").diagnostics if d.rule == "render-docx-interim"]
 
 
+def test_the_planners_findings_follow_the_renderers_in_the_order_of_their_lines_with_the_documents_file() -> None:
+    source = FRONT + "# A {#a}\n\n- x {#x}\n\nSee {{ref: nowhere}}.\n\n" + "- r\n" * 30
+    result = render(source, format="docx", filename="deal.lgd")
+    text = render(source, format="text", filename="deal.lgd").diagnostics
+    assert [d.rule for d in result.diagnostics] == [
+        *(d.rule for d in text), "render-docx-letter-overflow", "render-docx-interim"]
+    assert result.diagnostics[:len(text)] == text and {d.file for d in result.diagnostics} == {"deal.lgd"}
+    assert "ref-broken" in {d.rule for d in text}
+
+
+def test_the_interim_warning_names_what_is_still_missing() -> None:
+    warning = render(FRONT + "# A\n", format="docx").diagnostics[-1]
+    assert warning.rule == "render-docx-interim"
+    for missing in ("title block", "table of contents", "attachments", "signature blocks"):
+        assert missing in warning.message
+    assert "carry no numbers" not in warning.message
+
+
+def test_the_writer_gets_the_plan_the_render_reported_on() -> None:
+    result = render(FRONT + "# A {#a}\n\n- x {#x}\n\nSee {{ref: x}}.\n", format="docx")
+    assert result.binary is not None
+    document = parts(result.binary)["word/document.xml"].decode("utf-8")
+    assert document.count("REF ld_a \\n \\h") == 1 and document.count("REF ld_x \\n \\h") == 1
+    assert 'w:name="ld_x"' in document
+
+
 def test_the_docx_writer_can_be_used_directly() -> None:
     from legaldown_render.style import load_style
 
@@ -815,10 +845,10 @@ GOLDEN = {
     '_rels/.rels': 'd6f21829c0081670bdb417d3e3f644b81134a121e074fb153c7686faaa8b167b',
     'docProps/core.xml': '159ed0e537106ab29739fd357a5f6d89a2c0b0154daefd4c13d878bd16dff47e',
     'docProps/app.xml': 'b285204d159fd58da80b6a0242cef523448f9c3a598b357b15faf4627160dcc3',
-    'word/document.xml': '58f0081f76a6a2092397770d50ae151e38f7aacdadf3525379b8112f964e0b8a',
+    'word/document.xml': '79fb3712f0b4bef4a7139fa2b1049339381e98bb7f2114441638145daece15a8',
     'word/_rels/document.xml.rels': 'ada136c2e7d05a317579c9503c1f0dd8dfaa8f0cce687df86fe59e36d5fa5d57',
-    'word/styles.xml': '83adf799de91eac3e9bf1e658b8c2f53586c700be35df179e1b2f1765f189dfc',
-    'word/numbering.xml': '8d1f7769c35af16db98942ba09882646b45ba404e83686d4ce7a376c6a911f0f',
+    'word/styles.xml': 'cdb4ca1d3be44bd27761763c040ee637516ed7aa7cf995e2cc0b60cc80d7f8ac',
+    'word/numbering.xml': '368f179b5e26a34c1f23db597966dfd96b43dc96801a9a7ded728c379db07f59',
     'word/settings.xml': 'b3c72bc5720862c1a9c1449d89903673777f30df6ff38ceb23da73e21cad22e1',
     'word/footer1.xml': 'e693781f92e5a7ccf747fd2ed3facb627e448f389b021882cac589d746aa709b',
 }

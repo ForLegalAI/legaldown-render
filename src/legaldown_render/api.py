@@ -25,6 +25,7 @@ from .build import build_tree, normalize_source
 from .diagnostics import by_line, key_line, repeats
 from .errors import DocumentError, OptionsError, RenderRefused, StyleError
 from .resolve import Formatter, parse_locale, resolve_tree
+from .resolve.docx_plan import plan_docx
 from .style import Style, load_style
 from .style.docx import DocxSettings, docx_settings
 from .tree import RenderTree, assert_resolved
@@ -121,14 +122,13 @@ class RenderResult:
 
 
 def _interim_warning(filename: str) -> Diagnostic:
-    """The Warning that DOCX output is not complete yet: the writer's body is interim (no numbers,
-    references, contents, title block, attachments or signature blocks). It goes when the body is
-    complete."""
+    """The Warning that DOCX output is not complete yet: the writer does not yet write the title block, the
+    table of contents, the attachments or the signature blocks. It goes when the body is complete."""
     return Diagnostic(
         rule="render-docx-interim", level="warning", file=filename,
-        message="DOCX output is incomplete in this version: headings and list items carry no numbers, and "
-                "cross-references, the table of contents, the title block, attachments and signature blocks are "
-                "not written yet. Do not use the file as the finished document.")
+        message="DOCX output is incomplete in this version: the title block, the table of contents, the "
+                "attachments and the signature blocks are not written yet (the numbering and the "
+                "cross-references are). Do not use the file as the finished document.")
 
 
 def render(source: str, options: RenderOptions | None = None, /, **settings: Any) -> RenderResult:
@@ -186,10 +186,17 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
-    if options.format == "docx":
-        diagnostics.append(_interim_warning(document.filename))
     assert_resolved(tree)
-    written = _writer(options, style, docx).write(tree)
+    writer = _writer(options, style, docx)
+    if isinstance(writer, DocxWriter):
+        # What Word will draw differently from the other formats (docs/decisions/0008): the planner's findings follow
+        # the renderer's, in the order of their lines, none repeating one the document has already.
+        plan, planned = plan_docx(tree, file=document.filename)
+        diagnostics += [d for d in planned if not repeats(d, diagnostics)]
+        diagnostics.append(_interim_warning(document.filename))
+        written: str | bytes = writer.write(tree, plan)
+    else:
+        written = writer.write(tree)
     if isinstance(written, bytes):
         return RenderResult("", diagnostics, options.format, tree, style, binary=written)
     return RenderResult(written, diagnostics, options.format, tree, style)
