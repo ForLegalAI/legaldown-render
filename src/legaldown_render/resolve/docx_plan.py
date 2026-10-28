@@ -659,6 +659,8 @@ class _Planner:
         #: The labels Word draws differently for want of counters it cannot show, by what they have in common, as
         #: (line, message) of each place; reported once for each group (:meth:`report_section_labels`).
         self.label_findings: dict[tuple[object, ...], list[tuple[int | None, str]]] = {}
+        #: The units of lists whose number LibreOffice reads higher than Word does (:attr:`.docx_numbering.Step.lo_count`).
+        self.lo_counts: list[tuple[_Unit, Step]] = []
         self.drifts: list[_Drift] = []
         self.open_drift: dict[tuple[int, int], _Drift] = {}
         self.heading_num: Num | None = None
@@ -1064,6 +1066,7 @@ class _Planner:
             for block in section.blocks:
                 self.block(block, section)
         self.report_section_labels()
+        self.report_libreoffice_counts()
         for drift in self.drifts:
             self.report_drift(drift)
         self.report_collisions()
@@ -1522,6 +1525,8 @@ class _Planner:
                     "are kept as the renderer shows them by restarting at a fixed number, which will not follow "
                     "items added or removed before it.", node.line)
         step = self.sim.step(used.id, ilvl, unit)
+        if abstract.kind != "headings" and step.lo_count not in (-1, step.count):
+            self.lo_counts.append((node, step))
         if kind != "section":
             # The counters of the unit's own chain: the units it stands under, and every part of the number of the
             # section (a skipped heading level counts, as the ghost of the heading that skipped it).
@@ -1563,6 +1568,30 @@ class _Planner:
         if placed.abstract is not abstract:
             return "restart-section" if placed.abstract.kind == "headings" else "restart-family"
         return "resync"
+
+    def report_libreoffice_counts(self) -> None:
+        """One information for the units LibreOffice numbers higher than Word does. A level of a list that nothing
+        counted before a deeper item of the same list (an item nested in a unit of another list: its own level above is
+        never used here) is read by Word as unused, so the next unit of that level is 1; LibreOffice counts the
+        unused level as 1 and goes on from it, so that unit is 2 there. The plan is Word's, the file is right for it."""
+        if not self.lo_counts:
+            return
+        node, step = self.lo_counts[0]
+        more = f", and {len(self.lo_counts) - 1} more" if len(self.lo_counts) > 1 else ""
+        self.report("render-docx-libreoffice-count", "info",
+                    f"{len(self.lo_counts)} list item(s) are numbered as the renderer does in Word but one or more higher "
+                    f"in LibreOffice, which counts a level that nothing in the list numbered before a deeper item as 1: "
+                    f"the item '{printable(node.label or '')}' (the first{more}) reads '{step.own}' in Word and "
+                    f"'{printable(self.in_libreoffice(node, step))}' there. Nothing in the file is wrong for Word.",
+                    node.line)
+
+    def in_libreoffice(self, node: _Unit, step: Step) -> str:
+        """The counter of *node* as LibreOffice reads it, in the format of its level."""
+        assert node.unit is not None
+        unit = self.units[node.unit]
+        assert unit.ilvl is not None
+        abstract = next(a for a in self.abstracts if a.id == self.nums[(unit.num_id or 1) - 1].abstract_id)
+        return word_counter(step.lo_count, abstract.levels[unit.ilvl].num_fmt)
 
     def report_depth(self, depth: int, line: int | None) -> None:
         """Report, once, a list nested past the levels the plan has (:data:`MAX_DEPTH`), of any family."""

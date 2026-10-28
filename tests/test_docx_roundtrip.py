@@ -1052,11 +1052,8 @@ PATH_EDITS = [
 ]
 
 
-@functools.cache
 def path_clauses() -> str:
-    require_libreoffice()
-    data = render(PATH_CLAUSES, format="docx", **PATH_ITEMS).binary
-    return libreoffice_edit({"paths": (data, [(match, new) for match, new, _, _ in PATH_EDITS])})["paths"]  # type: ignore[arg-type]
+    return later_edits()["paths"]
 
 
 def test_a_path_label_on_the_reserved_levels_follows_the_items_a_lawyer_inserts_and_so_do_its_references() -> None:
@@ -1086,16 +1083,10 @@ Refs: {{ref: i4}} {{ref: i5}} {{ref: i7}}
 """
 
 
-@functools.cache
 def ordered_paths() -> dict[str, str]:
     """The ordered-parent document as it is, with a nested item inserted in the detached list, and with a new parent whose
     nested item is a copy of one of the detached list's (Word's paste keeps the list)."""
-    require_libreoffice()
-    data = render(ORDERED_PATHS, format="docx", **ORDERED_PARENT).binary
-    return libreoffice_edit({  # type: ignore[arg-type]
-        "original": (data, []),
-        "nested inserted": (data, [("four b", "NEW four")]),
-        "new parent": (data, [("three b", "NEW three"), ("three b", "NEW copy", "four b")])})
+    return {name: text for name, text in later_edits().items() if name in ("original", "nested inserted", "new parent")}
 
 
 def test_a_detached_list_draws_its_own_counter_and_its_references_are_live() -> None:
@@ -1133,11 +1124,8 @@ DEEP_EDITS = [
 ]
 
 
-@functools.cache
 def deep_lists() -> str:
-    require_libreoffice()
-    data = render(DEEP, format="docx").binary
-    return libreoffice_edit({"deep": (data, [(match, new) for match, new, _, _ in DEEP_EDITS])})["deep"]  # type: ignore[arg-type]
+    return later_edits()["deep"]
 
 
 def test_items_nested_past_nine_levels_are_numbered_by_the_list_they_go_on_in_and_follow_edits() -> None:
@@ -1168,15 +1156,33 @@ Refs: {{ref: one}} {{ref: deep}} {{ref: i}} {{ref: two}} {{ref: deeper}}
 """
 
 
-@functools.cache
 def skipped() -> tuple[str, str]:
     """What LibreOffice says about the document that skips a heading level (outline numbering) after a heading is inserted
     before its first section, and what the text writer prints for the edited source."""
-    require_libreoffice()
-    data = render(SKIPPED, format="docx", style="outline").binary
-    said = libreoffice_edit({"skipped": (data, [("One", "NEWH")])})["skipped"]  # type: ignore[arg-type]
     edited_source = applied(SKIPPED, [("# One {#one}", "# NEWH\n")])
-    return said, render(edited_source, format="text", style="outline").output
+    return later_edits()["skipped"], render(edited_source, format="text", style="outline").output
+
+
+@functools.cache
+def later_edits() -> dict[str, str]:
+    """What LibreOffice says about the documents of the sections above after their edits, all in one LibreOffice session
+    (starting it is what costs): path labels in a clause, the ordered-parent list as it is, with a nested item inserted
+    and with a new parent whose nested item is a copy, the list past nine levels, and the document that skips a level."""
+    require_libreoffice()
+
+    def docx(source: str, **settings: object) -> bytes:
+        data = render(source, format="docx", **settings).binary
+        assert data is not None
+        return data
+
+    ordered = docx(ORDERED_PATHS, **ORDERED_PARENT)
+    return libreoffice_edit({  # type: ignore[arg-type]
+        "paths": (docx(PATH_CLAUSES, **PATH_ITEMS), [(match, new) for match, new, _, _ in PATH_EDITS]),
+        "original": (ordered, []),
+        "nested inserted": (ordered, [("four b", "NEW four")]),
+        "new parent": (ordered, [("three b", "NEW three"), ("three b", "NEW copy", "four b")]),
+        "deep": (docx(DEEP), [(match, new) for match, new, _, _ in DEEP_EDITS]),
+        "skipped": (docx(SKIPPED, style="outline"), [("One", "NEWH")])})
 
 
 def test_the_live_parts_of_a_reference_below_a_skipped_level_follow_a_heading_inserted_before_it() -> None:
@@ -1191,3 +1197,22 @@ def test_the_live_parts_of_a_reference_below_a_skipped_level_follow_a_heading_in
     assert not any(r.fixed for r in plan.refs.values())
     assert any(d.rule == "render-docx-reference" and "heading level that the document skips" in d.message
                for d in diagnostics)
+
+
+# -- A level that nothing counted before a deeper item: where LibreOffice and Word differ -----------------------------------
+
+UNCOUNTED = FRONT + "# A\n\n- a\n  - b\n    1. c\n       - d\n    - e\n    - f\n"
+
+
+def test_libreoffice_counts_the_level_nothing_numbered_before_a_deeper_item_and_the_plan_reports_it() -> None:
+    """The one place LibreOffice's numbers differ from the plan's for a reason of Word's model, not of the file: the items
+    ``e`` and ``f`` are the first of their level in their list, which Word numbers (A), (B) and LibreOffice (B), (C)
+    (it counts the level above ``d`` as one). The plan is Word's and reports the difference."""
+    require_libreoffice()
+    result = render(UNCOUNTED, format="docx")
+    plan, diagnostics = plan_docx(result.tree)
+    said = lines_of(libreoffice_export({"uncounted": result.binary})["uncounted"].text)  # type: ignore[arg-type]
+    assert [line for line in said if line.endswith((" e", " f"))] == ["(B) e", "(C) f"]
+    assert [plan.units[u.unit].label for u in units(result.tree) if plan.units[u.unit].count and u.unit in ("u5", "u6")] \
+        == ["(A)", "(B)"]
+    assert any(d.rule == "render-docx-libreoffice-count" and d.level == "info" for d in diagnostics)

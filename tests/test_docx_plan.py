@@ -1783,7 +1783,7 @@ def extra_runs(name: str, switch: str) -> tuple:
     """(source, plan, diagnostics) of a sample of the random documents without a skipped heading level, under the label
     forms of :data:`EXTRA_VARIANTS` and a setting of the switch."""
     runs = []
-    for source in (*sample(name, 4, _random_sources()), *sample(name, 2, _alternative_sources())):
+    for source in (*sample(name, 8, _random_sources()), *sample(name, 2, _alternative_sources())):
         prefix = "" if source.startswith("---") else FRONT
         result = render(prefix + source, format="text", **EXTRA_VARIANTS[name][0])
         plan, diagnostics = plan_docx(result.tree, text_switch=switch)  # type: ignore[arg-type]
@@ -2408,6 +2408,21 @@ def test_a_reference_below_a_skipped_level_whose_number_Word_draws_with_another_
     assert "holds the number of a heading level that the document skips" in label.message
     assert "another unit" in label.message and "only as long as that counter" in label.message
     assert label.message.endswith(" 2 more places do the same.")  # the three paragraphs, one finding
+
+
+def test_a_level_nothing_counted_before_a_deeper_item_is_read_higher_by_libreoffice_and_the_plan_says_so() -> None:
+    # c is an ordered item (another list), d nested in it is on the enumerated list's level 4 with the level 3 above it
+    # never numbered there; e and f are the first items of that level 3: 1 and 2 in Word, 2 and 3 in LibreOffice
+    tree, plan, diagnostics = planned("# A\n\n- a\n  - b\n    1. c\n       - d\n    - e\n    - f\n")
+    e, f = [i for i in items(tree) if i.label in ("(A)", "(B)")]
+    assert [plan.units[i.unit].count for i in (e, f)] == [1, 2]
+    [found] = [d for d in diagnostics if d.rule == "render-docx-libreoffice-count"]
+    assert found.level == "info" and found.line == e.line
+    assert "the item '(A)' (the first, and 1 more) reads 'A' in Word and 'B' there" in found.message
+    assert "Nothing in the file is wrong for Word" in found.message
+    # without the deeper item first, nothing differs
+    _, _, diagnostics = planned("# A\n\n- a\n  - b\n    1. c\n    - e\n    - f\n")
+    assert "render-docx-libreoffice-count" not in rules(diagnostics)
 
 
 def test_the_labels_of_the_lists_of_one_chain_that_lose_counters_are_one_finding() -> None:

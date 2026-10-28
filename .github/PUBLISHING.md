@@ -165,7 +165,7 @@ For each file:
      `\t` would make a reference to such an item live and the planner's refusal is only cautious (report it); if it
      keeps the delimiter (`(a)`), the refusal is right and the reference stays fixed text, reported.
    - words between the counters (row 11, `Part %1 of %2`): only `docx.reference_text_switch: guess` expects `\t` to drop
-     them (the result would be `12`). If Word returns something else, report it.
+     them (the result would be `11` for `Part 1 of 1`). If Word returns something else, report it.
    - the reference to such an item reads as the HTML reads it, or the render reported `render-docx-reference` and the
      reference is fixed text (with the class it falls in and the setting that could change it).
    - skipped heading levels (a `###` straight after a `#`, an Error for the validator but rendered; part C of the check

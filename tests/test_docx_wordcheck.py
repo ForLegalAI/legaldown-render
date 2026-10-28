@@ -23,7 +23,7 @@ def test_the_document_is_a_package_that_holds_every_row_and_the_assumption_besid
     assert "Row 6, an abbreviation with a period: No. %1: drawn 'No. 1'" in text
     assert "documented: the switch is not used; guess: '1'" in text  # No. 1: only the guess drops the period
     assert "documented: 'I.1'; guess: 'I.1'" in text  # Microsoft's example with a roman counter
-    assert "Part %1 of %2" in text and "documented: the switch is not used; guess: '12'" in text  # words between counters
+    assert "Part %1 of %2" in text and "documented: the switch is not used; guess: '11'" in text  # words between counters
     assert contents["word/document.xml"].count(b"REF t3 \\n \\t \\h") == 1
     assert suppressed([Lit("Section "), Count("a", "1"), Lit("."), Count("b", "1")]) is not None
 

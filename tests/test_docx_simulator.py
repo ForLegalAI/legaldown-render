@@ -232,6 +232,22 @@ def test_each_abstract_num_has_its_own_model_of_a_level_that_nothing_numbered() 
     assert sim.step(2, 1, "u1").label == ".1"  # Word's: a letter counter at 0 is nothing
 
 
+def test_libreoffice_counts_a_level_nothing_numbered_before_a_deeper_one_and_goes_on_from_it() -> None:
+    """The count the plan gives is Word's (the unused level stays unused, so the next unit of that level is 1);
+    ``Step.lo_count`` is LibreOffice's (the unused level reads as its start and counts, so the next unit is 2)."""
+    sim = numbering(Num(1, 1), skipped="word")
+    first = sim.step(1, 2, "u1")  # level 3 first: levels 1 and 2 were never numbered in this list
+    assert (first.count, first.lo_count) == (1, 1)
+    second = sim.step(1, 1, "u2")
+    assert (second.count, second.lo_count) == (1, 2) and second.label == "(i)"
+    third = sim.step(1, 1, "u3")
+    assert (third.count, third.lo_count) == (2, 3)
+    # a level that was numbered is counted the same in both
+    fresh = numbering(Num(1, 1), skipped="word")
+    assert [(step.count, step.lo_count) for step in (fresh.step(1, 0, "a"), fresh.step(1, 1, "b"), fresh.step(1, 1, "c"))] \
+        == [(1, 1), (1, 1), (2, 2)]
+
+
 def test_the_first_paragraph_of_a_list_deeper_than_the_level_it_starts_at_fills_the_levels_above() -> None:
     sim = numbering(Num(1, 1, ((1, 1),)))
     assert sim.step(1, 1, "u1").label == "(i)"
