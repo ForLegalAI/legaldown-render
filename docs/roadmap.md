@@ -56,7 +56,7 @@ here.
 - Rendered output is unchanged, except that a comment-only quote past the validator's nesting
   depth no longer renders an empty paragraph
 
-### v0.4 — Hardening (next release)
+### v0.4 — Hardening (this release)
 
 Rendering what other people send, and reporting problems where they are. No new output format.
 [`CONFORMANCE.md`](../CONFORMANCE.md) has the exact behaviour of each item.

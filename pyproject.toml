@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.33"]
 build-backend = "hatchling.build"
 
 [project]
@@ -33,14 +33,14 @@ dependencies = [
     "legaldown-validator>=0.4.0,<0.5",
     # Inline Markdown (emphasis, links, code spans) within the validator's
     # blocks, parsed in inline mode only (docs/decisions/0007).
-    "markdown-it-py>=3.0,<5",
+    "markdown-it-py>=4.2,<5",
     # CLDR locale data for dates, money, and durations (docs/decisions/0005).
-    "babel>=2.14,<3",
-    "pyyaml>=6.0",
+    "babel>=2.18,<3",
+    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6", "build>=1.2"]
+dev = ["pytest>=9.2", "ruff>=0.17", "build>=1.6"]
 
 [project.scripts]
 legaldown-render = "legaldown_render.cli:main"
