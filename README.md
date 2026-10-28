@@ -145,8 +145,10 @@ result = render(source, RenderOptions(untrusted=True, document_root="/srv/upload
   document belongs to (§2.3); without one `render` raises `OptionsError` and the command exits 2.
 - It loads the style untrusted (`load_style(..., trusted=False)`): a built-in name, a mapping or YAML
   text, never a file; `extends` only a built-in; only plain CSS values (no `calc()`, no `var()`);
-  no `html.extra_css`; YAML text of at most 64 KiB with no aliases. Errors name the setting and
-  never quote the style or a path. See [Untrusted mode](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#untrusted-mode).
+  no `html.extra_css`; `values.date` one of `short`, `medium`, `long`, `full`; every label and format
+  at most 200 characters; YAML text of at most 64 KiB with no aliases and nested at most 32 levels.
+  Errors name the setting and never quote the style or a path, and list at most 20 problems.
+  `--untrusted --print-style` checks a style the same way, without needing `--root`. See [Untrusted mode](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#untrusted-mode).
 
 Without the option a style is the operator's own: it may be a file and may carry raw CSS, though a
 value that could leave its place in the stylesheet (`/*`, `</`, a backslash, a control character) or

@@ -379,7 +379,14 @@ out when the validator reported the same path at the same line, or at none (`dia
     never stripped: removing one token can form another (`/` + `/**/` + `*` is `/*`). Anything else
     is the operator's, so `calc()` and `var()` load. A value is not validated as CSS, though, so
     `12pt (` is emitted as written and leaves the rest of the stylesheet unparsable.
-  - `html.extra_css` is raw CSS, appended as written, but it may not contain `</style` in any case.
+  - `html.extra_css` is raw CSS, appended as written, but it may not contain `</style` in any case;
+    `stylesheet()` also writes any `</` in it as `<\/` (the same inside a CSS string), for a `Style`
+    built by hand.
+  - `values.date` is a CLDR pattern handed to Babel, which raises on one it does not know, at every
+    date in a document. The loader formats fixed dates with it (`_value_problems`), so a bad pattern is
+    a `StyleError` naming the setting.
+  - NUL and lone surrogates are refused in every value written into the stylesheet (`html.extra_css`
+    too): no output encoding can write them.
   - `writers/html.py:_css` is the last line, for `writers.html.stylesheet()` given a `Style` built
     by hand, which the loader never saw: it strips `;{}<>\@`, control characters and line breaks,
     and removes comment delimiters until none is left. A lone `/` stays, since `calc(100% / 3)`
@@ -395,12 +402,19 @@ out when the validator reported the same path at the same line, or at none (`dia
   `_convert` for a mapping and, through `style_to_dict`, for a `Style` object and for settings
   objects given as overrides. The grammars allow no function, no variable and no `!important`, so
   `calc(1em + 2px)` and `var(--x)` are refused. `html.extra_css` must be empty. YAML text is at most
-  64 KiB (UTF-8 bytes) and may not use aliases (the "billion laughs" shape). Every style, trusted or
+  64 KiB (UTF-8 bytes), may not use aliases (the "billion laughs" shape), and a number in it is at most
+  32 characters (`_StyleLoader` reads `!!int`, `!!float`, `!!bool` and timestamps through guarded
+  constructors, so a text PyYAML cannot convert is a `StyleError`, not its `ValueError`). Every
+  free-text setting is at most 200 characters (a label or format is repeated wherever the output shows
+  it, so an unbounded one multiplies the document's size) and `values.date` is one of the four names.
+  A message lists 20 problems at most and "and N more"; an exception the loader did not foresee is
+  reported as "the style could not be read", never with its own message. Every style, trusted or
   not, may nest 32 levels at most, in YAML text (refused by the scanner, `style/loader.py:_StyleLoader`,
-  before anything is built, as PyYAML's cost is quadratic in the depth) and in a mapping. A message names the setting and the problem, and never quotes
-  the style, a key, a template field or a path (a YAML error gives the line and column only), so it
-  can be shown to the user who sent it. `RenderOptions.untrusted` also requires a `document_root`
-  (§2.3: a renderer for documents it does not control SHOULD set one): without it `render` raises an
+  before anything is built, as PyYAML's cost is quadratic in the depth) and in a mapping. A message
+  names the setting and the problem, and never quotes the style, a key, a template field or a path (a
+  YAML error gives the line and column only), so it can be shown to the user who sent it.
+  `--untrusted --print-style` loads the style this way and needs no root. `RenderOptions.untrusted`
+  also requires a `document_root` (§2.3: a renderer for documents it does not control SHOULD set one): without it `render` raises an
   `OptionsError`, and the command exits 2. The option and the flag are one switch for both checks.
   Defaults are unchanged: trusted, no root required. A service should still choose the style
   itself. Document source has no power over the stylesheet either way: it is never emitted as HTML

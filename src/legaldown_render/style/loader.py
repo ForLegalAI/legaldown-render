@@ -21,16 +21,19 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import datetime
 import difflib
 import os
 import re
 import types
+import unicodedata
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 import yaml
+from babel.dates import format_date
 
 from ..errors import StyleError
 from . import model
@@ -46,6 +49,29 @@ MAX_UNTRUSTED_STYLE_BYTES = 64 * 1024
 #: reading one linear in its size, since PyYAML's scanner is quadratic in the
 #: nesting depth of what it reads.
 MAX_STYLE_DEPTH = 32
+
+#: The named date formats (``values.date``); anything else is a CLDR pattern.
+DATE_FORMATS = ("short", "medium", "long", "full")
+
+#: The longest number a style may write, in characters (30 digits and a sign or
+#: an underscore or two). A style needs none above 1000, and converting a long
+#: one is a cost an untrusted text should not impose.
+MAX_NUMBER_CHARS = 32
+
+#: A number a mapping or override may hold, in bits: far above what
+#: :data:`MAX_NUMBER_CHARS` allows in YAML, and far below what makes ``str`` slow or raise.
+MAX_NUMBER_BITS = 200
+
+#: The longest timestamp a style may write; the longest valid one is 35.
+MAX_TIMESTAMP_CHARS = 64
+
+#: The most free text one untrusted setting may hold, in characters: a label or
+#: a format is repeated in the output, once for every heading, reference or
+#: item that shows it.
+MAX_UNTRUSTED_TEXT = 200
+
+#: The most problems one message lists; a style with more says how many it left out.
+MAX_PROBLEMS = 20
 
 #: How an untrusted style is named in a message, instead of its own name (which
 #: is source text) or a path.
@@ -71,12 +97,44 @@ class _StyleLoader(yaml.SafeLoader):
         return super().add_indent(column)
 
 
+def _guarded(tag: str, kind: str) -> None:
+    """Make :class:`_StyleLoader` read *tag* with PyYAML's own constructor, but
+    refuse a text that is too long to be one, and report one that is not valid
+    as a :class:`yaml.constructor.ConstructorError`. PyYAML's constructors let
+    ``ValueError`` and ``KeyError`` out, with the text in the message, and
+    convert whatever number they are given."""
+    original = yaml.SafeLoader.yaml_constructors[tag]
+
+    def construct(loader: yaml.SafeLoader, node: yaml.Node) -> Any:
+        problem = None
+        if len(node.value) > MAX_NUMBER_CHARS and kind in ("integer", "number"):
+            problem = f"a {kind} of more than {MAX_NUMBER_CHARS} characters"
+        elif len(node.value) > MAX_TIMESTAMP_CHARS and kind == "timestamp":
+            problem = "a timestamp that is too long"
+        if problem is None:
+            try:
+                return original(loader, node)
+            except yaml.YAMLError:
+                raise
+            except Exception:  # ValueError, KeyError, OverflowError, AttributeError (an impossible timestamp)
+                problem = f"not a valid {kind}"
+        raise yaml.constructor.ConstructorError(None, None, problem, node.start_mark)
+
+    _StyleLoader.add_constructor(tag, construct)
+
+
 def _load_yaml(text: str) -> Any:
     return yaml.load(text, Loader=_StyleLoader)  # noqa: S506 - a SafeLoader
 
 
-class _TooDeep(Exception):
-    """A mapping nested more than :data:`MAX_STYLE_DEPTH` levels."""
+for _tag, _kind in (("int", "integer"), ("float", "number"), ("bool", "boolean"), ("timestamp", "timestamp")):
+    _guarded(f"tag:yaml.org,2002:{_tag}", _kind)
+
+
+class _Refused(Exception):
+    """A mapping that cannot be read as a style: nested more than
+    :data:`MAX_STYLE_DEPTH` levels, or with a key that is an enormous number.
+    The message is the problem, which never quotes the style."""
 
 
 def builtin_styles() -> list[str]:
@@ -108,15 +166,33 @@ def load_style(
     aliases, never a file; it may extend only built-in styles; every value that
     reaches the stylesheet (fonts, sizes, colours, margins, page size) must
     match a strict grammar (:data:`~.model.CSS_KINDS`), also in a
-    :class:`Style` and in *overrides*; and ``html.extra_css`` must be empty.
-    A message names the setting and the problem and never quotes the style or
-    a path.
+    :class:`Style` and in *overrides*; ``html.extra_css`` must be empty;
+    ``values.date`` is a named format; every free-text setting is at most 200
+    characters, without NUL or a lone surrogate; and a number in YAML text is at
+    most 32 characters. A message names the setting and the problem, never
+    quotes the style or a path, and lists at most 20 problems. Whatever else
+    the loader raises on such a style is a :class:`StyleError` too.
+
+    Always, ``values.date`` that is not a named format must be a pattern Babel
+    can format, and a number or timestamp in YAML text that is not one is a
+    :class:`StyleError`.
     """
     try:
         return _load(style, overrides, trusted)
-    except (_TooDeep, RecursionError):  # the second only as a last resort
+    except StyleError:
+        raise
+    except _Refused as refused:
+        raise StyleError(_UNTRUSTED_SOURCE if not trusted else "'(style)'", [str(refused)]) from None
+    except RecursionError:  # only as a last resort: the depth is bounded before it comes to this
         raise StyleError(_UNTRUSTED_SOURCE if not trusted else "'(style)'",
                          ["the style is nested too deeply"]) from None
+    except Exception:
+        if trusted:
+            raise
+        # Whatever else a style from elsewhere makes the loader raise (a bug, or
+        # a case nobody thought of) must not reach the caller as a traceback
+        # whose message quotes the style: it is the style that is refused.
+        raise StyleError(_UNTRUSTED_SOURCE, ["the style could not be read"]) from None
 
 
 def _load(style: Any, overrides: Mapping[str, Any] | None, trusted: bool) -> Style:
@@ -300,9 +376,9 @@ def _untrusted_yaml_problem(error: yaml.YAMLError) -> str:
 def _merge(base: Mapping, override: Mapping) -> dict:
     """*override* deep-merged onto *base*; mappings merge, anything else
     (lists included) replaces."""
-    merged = {str(key): value for key, value in base.items()}
+    merged = {_key_text(key): value for key, value in base.items()}
     for key, value in override.items():
-        key = str(key)
+        key = _key_text(key)
         if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
             merged[key] = _merge(merged[key], value)
         else:
@@ -317,7 +393,7 @@ def _expand_dotted(overrides: Mapping[str, Any], trusted: bool = True) -> dict:
     expanded: dict = {}
     for key, value in overrides.items():
         target = expanded
-        *parents, last = str(key).split(".")
+        *parents, last = _key_text(key).split(".")
         for part in parents:
             target = target.setdefault(part, {})
             if not isinstance(target, dict):
@@ -347,13 +423,21 @@ def _refuse_meta_overrides(expanded: Mapping) -> None:
         raise StyleError("overrides", problems)
 
 
+def _key_text(key: Any) -> str:
+    """A mapping key as the text it is read as: ``str(key)``, except that an
+    enormous number (``str`` would raise, or take quadratic time) is refused."""
+    if isinstance(key, int) and not isinstance(key, bool) and key.bit_length() > MAX_NUMBER_BITS:
+        raise _Refused("a key is a number too large to be a setting")
+    return str(key)
+
+
 def _copy(value: Any, depth: int = 0) -> Any:
     """A deep copy of *value* with every mapping made a plain dict. A value
-    nested more than :data:`MAX_STYLE_DEPTH` levels raises :class:`_TooDeep`."""
+    nested more than :data:`MAX_STYLE_DEPTH` levels raises :class:`_Refused`."""
     if depth > MAX_STYLE_DEPTH:
-        raise _TooDeep
+        raise _Refused("the style is nested too deeply")
     if isinstance(value, Mapping):
-        return {str(key): _copy(item, depth + 1) for key, item in value.items()}
+        return {_key_text(key): _copy(item, depth + 1) for key, item in value.items()}
     if isinstance(value, list):
         return [_copy(item, depth + 1) for item in value]
     if isinstance(value, tuple):
@@ -441,9 +525,33 @@ def _build(data: Mapping, source: str, trusted: bool = True) -> Style:
     problems: list[str] = []
     style = _convert(data, Style, "", problems, trusted=trusted)
     problems.extend(_template_problems(style, trusted))
+    problems.extend(_value_problems(style, trusted))
     if problems:
+        if len(problems) > MAX_PROBLEMS:
+            problems = [*problems[:MAX_PROBLEMS], f"and {len(problems) - MAX_PROBLEMS} more"]
         raise StyleError(source, problems)
     return style
+
+
+def _value_problems(style: Style, trusted: bool) -> list[str]:
+    """What is wrong with the settings that only mean something to a library:
+    ``values.date``, which is a name or a CLDR pattern for Babel, and which
+    Babel refuses at render time when it is no pattern (``GGGGGGG``) — so
+    every render of a document with a date would raise. An untrusted style
+    names one of the four formats; any other pattern is tried here, on a fixed
+    date, so that no render raises."""
+    date = style.values.date
+    if date in DATE_FORMATS:
+        return []
+    if not trusted:
+        return [f"values.date: must be one of {', '.join(DATE_FORMATS)} in an untrusted style"]
+    try:
+        for day in (datetime.date(2001, 2, 3), datetime.date(2026, 12, 31), datetime.date.min):
+            for locale in ("en", "cs", "de"):
+                format_date(day, format=date, locale=locale)
+    except Exception:  # Babel raises KeyError, ValueError, AttributeError, ... for a bad pattern
+        return ["values.date: not a date format (short, medium, long, full) or a valid CLDR date pattern"]
+    return []
 
 
 def _template_problems(style: Style, trusted: bool = True) -> list[str]:
@@ -476,7 +584,11 @@ def _template_problems(style: Style, trusted: bool = True) -> list[str]:
 def _got(value: Any, trusted: bool) -> str:
     """`` (got 3)`` for a message about a value — nothing for an untrusted
     style, whose text a message does not quote."""
-    return f" (got {value!r})" if trusted else ""
+    if not trusted:
+        return ""
+    if isinstance(value, int) and not isinstance(value, bool) and value.bit_length() > MAX_NUMBER_BITS:
+        return " (got a very large number)"  # repr would raise, or take quadratic time
+    return f" (got {value!r})"
 
 
 def _convert(value: Any, hint: Any, path: str, problems: list[str], *, trusted: bool = True,
@@ -517,14 +629,16 @@ def _convert(value: Any, hint: Any, path: str, problems: list[str], *, trusted: 
         converted = {}
         for key, item in value.items():
             if key_hint is int:
+                named = _key_text(key)
                 try:
                     key = int(key)
-                except (TypeError, ValueError):
-                    problems.append(f"{path}.{key}: key must be a number" if trusted
+                except (TypeError, ValueError, OverflowError):
+                    problems.append(f"{path}.{named}: key must be a number" if trusted
                                     else f"{path}: a key must be a number")
                     continue
                 if not 1 <= key <= 5:
-                    problems.append(f"{path}.{key}: heading levels are 1 to 5 (§4.1)")
+                    problems.append(f"{path}.{named}: heading levels are 1 to 5 (§4.1)" if trusted
+                                    else f"{path}: heading levels are 1 to 5 (§4.1)")
                     continue
             converted[key] = _convert(item, item_hint, f"{path}.{key}", problems, trusted=trusted)
         return converted
@@ -540,6 +654,9 @@ def _convert(value: Any, hint: Any, path: str, problems: list[str], *, trusted: 
         return value
     if hint is str:
         # YAML reads 700 or 1.5 as numbers; they are fine as text here.
+        if isinstance(value, int) and not isinstance(value, bool) and value.bit_length() > MAX_NUMBER_BITS:
+            problems.append(f"{label}: must be text, not an enormous number")  # str() would raise
+            return ""
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             value = str(value)
         elif not isinstance(value, str):
@@ -548,8 +665,21 @@ def _convert(value: Any, hint: Any, path: str, problems: list[str], *, trusted: 
         if css is not None and (problem := css_problem(value, css, trusted=trusted)):
             problems.append(f"{label}: {problem}")
             return ""
+        if not trusted and (problem := _text_problem(value)):
+            problems.append(f"{label}: {problem}")  # the value stays, so the template checks do not add to it
         return value
     raise TypeError(f"unsupported style field type {hint!r} at {label}")  # a bug in model.py
+
+
+def _text_problem(value: str) -> str | None:
+    """What is wrong with a free-text setting of an untrusted style: it is
+    repeated wherever the output shows it, so it is short, and a character that
+    no output encoding can write (NUL, a lone surrogate) would crash the writer."""
+    if len(value) > MAX_UNTRUSTED_TEXT:
+        return f"is longer than {MAX_UNTRUSTED_TEXT} characters"
+    if any(char == "\x00" or unicodedata.category(char) == "Cs" for char in value):
+        return "must not contain NUL or a lone surrogate"
+    return None
 
 
 def _convert_dataclass(value: Any, cls: type, path: str, problems: list[str], *, trusted: bool = True) -> Any:

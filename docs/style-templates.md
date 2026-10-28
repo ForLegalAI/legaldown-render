@@ -100,7 +100,7 @@ definitions:
   term_style: plain          # every {{term:}} reference
 
 values:
-  date: long                 # short | medium | long | full | a CLDR pattern such as "d. M. yyyy"
+  date: long                 # short | medium | long | full | a CLDR pattern such as "d. M. yyyy" (checked when the style loads; an untrusted style names one of the four)
   money: symbol              # symbol ($10,000.00) | code (USD 10,000.00) | name (10,000.00 US dollars)
   duration: long             # long (12 months) | short | narrow
 
@@ -199,7 +199,10 @@ author's. A value placed into the stylesheet (`typography`, `headings`, `page`, 
 must not contain `/*`, `*/`, `</`, a backslash, a control character or a line break: the style is
 refused, naming the setting (nothing is stripped). Other CSS is accepted as written, `calc()` and
 `var()` included, and is not checked as CSS, so a value such as `12pt (` breaks the rest of the
-stylesheet. `html.extra_css` is raw CSS and may not contain `</style` (in any case). `extends` and
+stylesheet. `html.extra_css` is raw CSS and may not contain `</style` (in any case). `values.date`, if
+it is not one of the four names, must be a CLDR date pattern that Babel can format; the loader tries it
+on fixed dates, so a bad one (`GGGGGGG`) is a style error, not an exception at render time. NUL and
+lone surrogates are refused in every value written into the stylesheet, `html.extra_css` included. `extends` and
 `--style` read any file the process can read. Do not render with styles from users you do not
 trust in this mode ([Security](architecture.md#security)).
 
@@ -226,9 +229,17 @@ with `RenderOptions(untrusted=True, document_root=...)` (`legaldown-render --unt
   Functions (`calc()`, `var()`, `min()`), `!important` and anything else are refused. The same grammar
   holds for a `Style` object and for overrides.
 - `html.extra_css` must be empty.
-- YAML text is at most 64 KiB and may not use aliases. (A style, trusted or not, nests 32 levels at most.)
+- `values.date` is `short`, `medium`, `long` or `full`, not a pattern.
+- Every free-text setting (`name`, `labels.*`, `references.format`, `placeholders.blank`,
+  `template_view.*`, and the `label` and `ref` of `numbering`, `enumeration` and `paragraphs` levels) is
+  at most 200 characters, since it is repeated wherever the output shows it. NUL and lone surrogates
+  (which no output encoding can write) are refused in any text.
+- YAML text is at most 64 KiB, may not use aliases, and a number in it is at most 32 characters.
+  (A style, trusted or not, nests 32 levels at most.)
 - An error names the setting and the problem and never quotes the style, a key or a path, so it can
-  be shown to whoever sent the style.
+  be shown to whoever sent the style. It lists 20 problems at most, then "and N more". Anything else
+  the loader might raise on such a style is reported as "the style could not be read".
+- `--untrusted --print-style` checks a style the same way (no `--root` is needed, nothing is rendered).
 - The built-in styles and the examples in this document all pass.
 
 ### Built-in labels

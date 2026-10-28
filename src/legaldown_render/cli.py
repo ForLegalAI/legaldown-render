@@ -97,7 +97,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--untrusted", action="store_true",
                         help="the document and the style are somebody else's (for a service rendering what its "
                              "users send): requires --root (exit 2 without), and the style must be a built-in "
-                             "name, with no file, no raw CSS (html.extra_css) and only plain CSS values")
+                             "name or YAML text (--style takes no file path), with no raw CSS (html.extra_css), "
+                             "plain CSS values and short labels. With --print-style it checks the style the "
+                             "same way and needs no --root")
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
     parser.add_argument("--answers", metavar="FILE",
@@ -161,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.print_style:
         try:
-            print(dump_style(load_style(args.style, overrides=overrides)), end="")
+            print(dump_style(load_style(args.style, overrides=overrides, trusted=not args.untrusted)), end="")
         except StyleError as error:
             _complain(f"legaldown-render: {error}")
             return 2

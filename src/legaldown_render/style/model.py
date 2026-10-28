@@ -271,10 +271,12 @@ def css_problem(value: str, kind: str, *, trusted: bool) -> str | None:
     """What is wrong with *value* for a setting of *kind* written into the
     stylesheet, or None. It never quotes the value.
 
-    Always: no comment delimiter, ``</``, backslash, control character, or
-    line break (and, for raw CSS, no ``</style``). An untrusted style is held
+    Always: no comment delimiter, ``</``, backslash, control character (NUL
+    included), lone surrogate, or line break (and, for raw CSS, no ``</style``). An untrusted style is held
     to the grammar of its kind, and may set no raw CSS."""
     if kind == "css":
+        if any(char == "\x00" or unicodedata.category(char) == "Cs" for char in value):
+            return "must not contain NUL or a lone surrogate"
         if "</style" in value.lower():
             return "must not contain '</style' (it would end the stylesheet)"
         if not trusted and value:
@@ -283,8 +285,8 @@ def css_problem(value: str, kind: str, *, trusted: bool) -> str | None:
     for token in CSS_FORBIDDEN:
         if token in value:
             return f"must not contain '{token}' (it would break out of the stylesheet)"
-    if any(unicodedata.category(char) in ("Cc", "Zl", "Zp") for char in value):
-        return "must not contain a control character or a line break"
+    if any(unicodedata.category(char) in ("Cc", "Zl", "Zp", "Cs") for char in value):
+        return "must not contain a control character, a line break or a lone surrogate"
     if not trusted:
         css = CSS_KINDS[kind]
         if not css.grammar.fullmatch(value):
