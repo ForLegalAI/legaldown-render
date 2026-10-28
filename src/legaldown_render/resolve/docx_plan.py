@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ..tree import Inline  # in the implementation: from ...tree import Inline
+from ..tree import Inline
 
 
 @dataclass(frozen=True, slots=True)
