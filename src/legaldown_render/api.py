@@ -20,7 +20,6 @@ from typing import Any
 
 import yaml
 from legaldown import AssemblyError, Diagnostic, Document, ValidationResult, parse, parse_template, validate
-from legaldown.grammar import is_valid_iso_date
 
 from .build import build_tree, normalize_source
 from .diagnostics import by_line, key_line, repeats
@@ -121,6 +120,17 @@ class RenderResult:
         return not any(diagnostic.level == "error" for diagnostic in self.diagnostics)
 
 
+def _interim_warning(filename: str) -> Diagnostic:
+    """The Warning that DOCX output is not complete yet: the writer's body is interim (no numbers,
+    references, contents, title block, attachments or signature blocks). It goes when the body is
+    complete."""
+    return Diagnostic(
+        rule="render-docx-interim", level="warning", file=filename,
+        message="DOCX output is incomplete in this version: headings and list items carry no numbers, and "
+                "cross-references, the table of contents, the title block, attachments and signature blocks are "
+                "not written yet. Do not use the file as the finished document.")
+
+
 def render(source: str, options: RenderOptions | None = None, /, **settings: Any) -> RenderResult:
     """Render LegalDown *source*.
 
@@ -176,8 +186,10 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
+    if options.format == "docx":
+        diagnostics.append(_interim_warning(document.filename))
     assert_resolved(tree)
-    written = _writer(options, style, docx, document, tree).write(tree)
+    written = _writer(options, style, docx).write(tree)
     if isinstance(written, bytes):
         return RenderResult("", diagnostics, options.format, tree, style, binary=written)
     return RenderResult(written, diagnostics, options.format, tree, style)
@@ -300,8 +312,7 @@ def _resolve(document: Document, result: ValidationResult, style: Style,
     return resolved, diagnostics + found
 
 
-def _writer(options: RenderOptions, style: Style, docx: DocxSettings | None, document: Document,
-            tree: RenderTree) -> HtmlWriter | TextWriter | DocxWriter:
+def _writer(options: RenderOptions, style: Style, docx: DocxSettings | None) -> HtmlWriter | TextWriter | DocxWriter:
     if options.format == "text":
         return TextWriter(style.attachments.separator)
     from . import __version__
@@ -309,21 +320,5 @@ def _writer(options: RenderOptions, style: Style, docx: DocxSettings | None, doc
     generator = f"legaldown-render {__version__}"
     if options.format == "docx":
         assert docx is not None
-        version, date = _page_fields(document, tree, style)
-        return DocxWriter(style, generator=generator, version=version, date=date, settings=docx)
+        return DocxWriter(style, generator=generator, settings=docx)
     return HtmlWriter(style, standalone=options.standalone, generator=generator)
-
-
-def _page_fields(document: Document, tree: RenderTree, style: Style) -> tuple[str, str]:
-    """The document's ``version`` and ``effective_date`` as a running header or
-    footer shows them (``{version}``, ``{date}``): the date formatted as the style's
-    ``values.date`` says, for the formatting locale the resolver used. A value that
-    holds directives (``{{...}}``) is left out: they are resolved where the document
-    shows them, not here, and a running text is no place for a blank to fill in."""
-    metadata = document.metadata
-    version = metadata.version or ""
-    date = metadata.effective_date or ""
-    locale = parse_locale(tree.locale)
-    if date and locale is not None and is_valid_iso_date(date):
-        date = Formatter(locale, style.values).date(date)
-    return ("" if "{{" in version else version), ("" if "{{" in date else date)

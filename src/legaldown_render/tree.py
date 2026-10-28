@@ -520,6 +520,12 @@ class RenderTree:
     colon: str = ": "
     #: The numbering formats the labels and designations were made with.
     formats: NumberingFormats = NumberingFormats()
+    #: The frontmatter's ``version`` and ``effective_date`` as plain text, exactly as
+    #: the title block shows them (directives resolved, a valid date formatted by the
+    #: style for the locale), whether or not the style shows them there: the
+    #: running header and footer of a paged format use them. Empty when absent.
+    version: str = ""
+    effective_date: str = ""
 
 
 # ---------------------------------------------------------------------------

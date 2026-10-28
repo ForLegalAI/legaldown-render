@@ -19,9 +19,9 @@ from collections.abc import Mapping
 
 from ...style import Style
 from ...style.docx import DocxSettings, docx_settings
-from ...tree import RenderTree, plain_text
+from ...tree import RenderTree
 from . import package as pkg
-from .body import interim_body
+from .body import document_title, interim_body
 from .headers import build_footer, build_header
 from .ooxml import el, serialize
 from .properties import build_app, build_core
@@ -37,29 +37,24 @@ class DocxWriter:
     *style* is the style template (the DOCX settings are converted from it, see
     :func:`~legaldown_render.style.docx.docx_settings`, which raises
     :class:`~legaldown_render.errors.StyleError` for one Word cannot express);
-    *generator* names the program in the document's properties. *version* and *date*
-    are the document's own, as the running header and footer show them
-    (``{version}``, ``{date}``: the frontmatter's ``version``, and its
-    ``effective_date`` as the style formats dates); the title is the tree's. Both are
-    empty for a document without one.
+    *generator* names the program in the document's properties. The running header and
+    footer take ``{title}``, ``{version}`` and ``{date}`` from the tree (its title, and the
+    ``version`` and ``effective_date`` the resolver formatted as the title block shows them).
     """
 
     extension = "docx"
     media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-    def __init__(self, style: Style, *, generator: str = "", version: str = "", date: str = "",
-                 settings: DocxSettings | None = None) -> None:
+    def __init__(self, style: Style, *, generator: str = "", settings: DocxSettings | None = None) -> None:
         self.style = style
         self.generator = generator or "legaldown-render"
-        self.version = version
-        self.date = date
         self.settings = settings if settings is not None else docx_settings(style)
 
     def write(self, tree: RenderTree) -> bytes:
         settings = self.settings
         language = language_tag(tree.language, self.style.locale)
-        title = plain_text(tree.title)
-        values: Mapping[str, str] = {"title": title, "version": self.version, "date": self.date}
+        title = document_title(tree)
+        values: Mapping[str, str] = {"title": title, "version": tree.version, "date": tree.effective_date}
         text_width = settings.page.text_width
 
         package = pkg.Package()

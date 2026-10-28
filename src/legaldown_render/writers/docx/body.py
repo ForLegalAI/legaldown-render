@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 
 from ...style.docx import PageGeometry
-from ...tree import Block, CodeBlock, DraftingNote, List, Paragraph, Quote, RenderTree, Rule, Table
+from ...tree import Block, CodeBlock, DraftingNote, List, Paragraph, Quote, RenderTree, Rule, Table, plain_text
 from ..text import inline_text
 from .ooxml import el, p, text_run
 from .styles import CODE, DRAFTING_NOTE, DRAFTING_NOTE_LABEL, QUOTE, SUBTITLE, TITLE, heading_style
@@ -37,11 +37,17 @@ def section_properties(page: PageGeometry, *, header_id: str | None = None, foot
     )
 
 
+def document_title(tree: RenderTree) -> str:
+    """The document's title as plain text, trimmed: the one text the title paragraph, the
+    ``{title}`` of a header or footer and the document properties all show."""
+    return plain_text(tree.title).strip()
+
+
 def interim_body(tree: RenderTree, page: PageGeometry, *, header_id: str | None = None,
                  footer_id: str | None = None) -> ET.Element:
     """``w:body`` for *tree*: see the module docstring. Interim."""
     content: list[ET.Element] = []
-    title = inline_text(tree.title).strip()
+    title = document_title(tree)
     if title:
         content.append(p(text_run(title), style=TITLE))
     subtitle = inline_text(tree.subtitle).strip()
