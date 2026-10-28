@@ -65,6 +65,16 @@ Also decided here, because every later part rests on them:
 - **Compatibility mode 15**, so Word does not open the file in Compatibility Mode. The settings are in
   the order the schema requires (`updateFields` follows `characterSpacingControl` and precedes
   `compat`), and contain no revision ids.
+- **Front and back matter.** The table of contents is a `TOC \o "1-N" \h \z \u` field whose cached result is the
+  planner's entries (each a link to a `_Toc` bookmark with a `PAGEREF` field whose cached page is empty, since only
+  Word knows the pages). The attachments heading and each attachment's title are paragraphs of styles with an outline
+  level, so `\u` lists them and the field needs no `\t` list of styles (whose separator depends on the locale). The
+  contents label has no outline level, so it is not an entry, and a condition label is a run inside its heading's
+  paragraph so that the contents keep it. A page break between attachments is the paragraph property "page break
+  before". The title block, the parties and the signature blocks are borderless tables.
+- **Output.** A DOCX is bytes: `RenderResult.binary` holds the file and `RenderResult.output` stays `str` (empty), so no
+  typed caller breaks. The command writes `-o FILE.docx`, or standard output with `-o -`, never to a terminal. Images
+  are shown as their alt text: below the Full level no file is read (§2.3, §17.6).
 - **Safety.** One sanitiser is applied to every text, attribute, field instruction, bookmark
   name, relationship and property value. It drops the characters XML cannot carry. Without it
   `xml.etree` writes a control character raw and a lone surrogate as a character reference, and Word
@@ -174,7 +184,11 @@ Under the `none` scheme a reference is a `REF` to the heading text.
 - Verification is part of the design: every part is validated against the schemas, the documents are
   opened in LibreOffice (the oracle available in CI, which updates fields and reports the text), and
   the same documents are checked by hand in Word before a release. LibreOffice ignores `\t`,
-  `lvlRestart`, `SEQ \s` and `w:updateFields`, so those differences are normalised in the comparison.
+  `lvlRestart`, `SEQ \s` and `w:updateFields`, fills a skipped heading level with its start value, and counts
+  a level that nothing in a list numbered before a deeper item as 1 where Word is expected to read it as 0
+  (`render-docx-libreoffice-count`), so those differences are normalised in the comparison and the Word-only ones
+  are on the checklist. The acceptance corpus compares whole documents with the plain-text writer's output under
+  three styles, before and after edits made in the editor.
 - Cost: an OOXML writer of our own, with its schema checks, instead of a library. The numbering
   planner is the bulk of the work.
 - Style template additions: `page.header`, `page.footer`, `docx.update_fields_on_open` and

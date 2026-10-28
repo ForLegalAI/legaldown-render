@@ -90,48 +90,47 @@ Rendering what other people send, and reporting problems where they are. No new 
   self-contained
 - **Project.** CI also runs on Windows, and publishing to PyPI waits for CI
 
-### v0.5 — DOCX (in progress)
+### v0.5 — DOCX (implemented; released after the Word checks)
 
 A document lawyers can edit: in the .docx every number, cross-reference, the table of contents and
 the page numbers are live Word features (numbering definitions and fields), and the renderer's
 values appear only as the cached results of fields. Decided in
 [ADR 0008](decisions/0008-docx-word-native.md), which also settles the question 0004 left open.
 
-- **Package core (done).** `docx` writer in the base package, with the standard library only (no
-  `[docx]` extra): the OOXML parts, styles generated from the style template, settings (compatibility
-  mode 15, `w:updateFields`), page setup, running headers and footers with `PAGE`/`NUMPAGES` fields,
-  document properties, deterministic output. `RenderResult.binary`, `-o x.docx`, `-o -`. The body at that point
-  was an interim one: the title, `heading N` paragraphs and plain-text paragraphs, with no numbers yet
-- **Behaviour changes this brings.** `-o -` now writes to standard output for every format (it used to
-  create a file named `-`); `.docx` is a writable extension, and a DOCX with no `-o` goes to standard output
-  when that is not a terminal; `--fragment` with DOCX is a usage error; `RenderTree` gains `version` and
-  `effective_date` (plain text), filled whether or not the title block shows them; `.docx` renders added
-  the Warning `render-docx-interim` until the body was complete (it is gone since the front and back matter)
-- **Style settings (done).** `page.header` and `page.footer` (the HTML writer ignores them for now),
-  `docx.update_fields_on_open`; settings Word cannot express are a `StyleError` for DOCX
-- **Verification (done).** Every part validated against the ISO/IEC 29500 schemas (fetched in CI, not
-  stored), well-formedness fuzzing, a determinism test, and LibreOffice opening the documents through
-  UNO as the oracle (a `docx` CI job)
-- **Body writer (done).** `numbering.xml`, numbered paragraphs, bookmarks, `REF` fields with cached results,
-  term hyperlinks, and every block and inline, written from a `DocxPlan` (`resolve/docx_plan.py`)
-- **Planner: numbering, cross-references and contents plan (done).** The tree is mapped to Word numbering
-  (heading list, list families, paragraphs) and checked against the resolver with a model of Word's counters;
-  every `{{ref:}}` is covered by `REF` fields and delimiters (the designation cover), every anchor has a bookmark,
-  and the table of contents is planned from Word's numbers; `render` runs the planner and reports its
-  `render-docx-*` diagnostics. A LibreOffice round trip with wrong cached results checks the numbers and references
-  against the plain-text oracle
-- **Front and back matter (done).** The title block (header rows and parties), the `TOC` field with its cached
-  entries and `PAGEREF` page numbers, the attachments (bookmarked, separated by a page break or a rule) and the
-  signature blocks; the `render-docx-interim` Warning is gone. A LibreOffice round trip checks the contents against the
-  HTML's entries, also after a heading is inserted in the editor; a manual Word checklist for releases is in
-  `.github/PUBLISHING.md`
-- **Planner: qualified labels, alternatives and resynchronised numbers (done).** The continental `5.1` items and the
-  numbered paragraphs ride the heading list's level after their section's, and lists nested in them its reserved
-  levels, so they restart by structure; alternatives that share a number (§15.8) are `numId 0` paragraphs whose
-  number is a `REF` field of the first, with the units under them on a num of their own; a unit Word would count
-  off the resolver's is restarted at a fixed value and reported. Clauses and nested items inserted through UNO are
-  numbered as the renderer numbers them
-- **Next.** Running the manual Word checklist, which finds what only Word shows
+- **The writer.** A `docx` writer in the base package, written with the standard library only (no `[docx]`
+  extra): the OOXML parts, styles generated from the style template, settings (compatibility mode 15,
+  `w:updateFields`), page setup, running headers and footers with `PAGE`/`NUMPAGES` fields, document
+  properties, and deterministic bytes. The body is every block and inline: headings, paragraphs, lists, quotes,
+  drafting notes, code, tables with a repeated header row, rules, links, defined terms, blanks and choices
+  (images as their alt text), then the front and back matter: the title block, a live `TOC` field with cached
+  entries and `PAGEREF` page numbers, the attachments and the signature blocks
+- **The planner** (`resolve/docx_plan.py`): the render tree carries the numbering structure of every unit, and a pure
+  planning step maps it to Word numbering (the heading list, list families, paragraphs, qualified `5.1` labels on the
+  heading list's levels, alternatives that share a number as `numId 0` paragraphs with a `REF` field, restarts by
+  structure or by a fixed value), to bookmarks, and to the fields of every `{{ref:}}` (the designation cover), with the
+  cached results taken from a model of Word's counters. Where Word draws differently from the renderer, the render
+  reports a `render-docx-*` diagnostic (listed in [`CONFORMANCE.md`](../CONFORMANCE.md))
+- **Style settings.** `page.header` and `page.footer` (the HTML writer ignores them for now),
+  `docx.update_fields_on_open` and `docx.reference_text_switch`; settings Word cannot express are a `StyleError`
+  for DOCX only
+- **Verification.** Every part validated against the ISO/IEC 29500 schemas (fetched in CI, not stored), well-formedness
+  fuzzing, determinism, and LibreOffice as the oracle through UNO (a `docx` CI job): the numbers and references
+  unit by unit with the cached results made wrong on purpose, whole documents against the plain-text writer's
+  output under three styles, and edit-then-update (a heading, an item, a numbered paragraph inserted, a clause
+  deleted, as a lawyer does). The manual Word checklist in `.github/PUBLISHING.md` covers what only Word shows
+- **Behaviour changes this brings.**
+  - `-o -` writes to standard output for every format (it used to create a file named `-`).
+  - `.docx` is a writable extension; a DOCX with no `-o` goes to standard output when that is not a terminal, and is
+    never written to a terminal. `--fragment` with DOCX is a usage error.
+  - `render(..., format="docx")` returns the file as `RenderResult.binary` (bytes); `RenderResult.output` stays
+    `str` and is empty for it. `FORMATS` gains `docx`.
+  - `RenderTree` gains fields for the numbering structure (`formats`, and on sections, list items and
+    paragraphs `unit`, `number`, `parent_unit`, `shares_number_with`; `List.family`; `CrossRef.target_unit`,
+    `section_unit`) and `version` and `effective_date` (plain text, filled whether or not the title block shows
+    them). HTML and plain-text output are byte-identical to 0.4 (the goldens are unchanged).
+  - New `render-docx-*` diagnostics for DOCX renders only.
+- **Next.** Running the manual Word checklist, which finds what only Word shows; its findings are recorded in the
+  release notes. Whether the writer then claims §13.6 for DOCX is decided in `CONFORMANCE.md`
 
 ### v0.6 — PDF
 
