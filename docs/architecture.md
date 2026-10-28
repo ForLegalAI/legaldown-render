@@ -245,7 +245,7 @@ references show; the Warning says so. Every other heading reads exactly as its d
 ### The DOCX planner (`resolve/docx_plan.py`)
 
 The DOCX writer contains no numbering rules either (ADR 0003, [ADR 0008](decisions/0008-docx-word-native.md)).
-Between the resolved tree and that writer sits a pure function, `plan_docx(tree, *, file=None) -> (DocxPlan,
+Between the resolved tree and that writer sits a pure function, `plan_docx(tree, *, file=None, text_switch="documented", text_width=...) -> (DocxPlan,
 diagnostics)`, which maps the numbering structure above to what Word needs: the abstractNums and nums, for every
 section, list item and numbered paragraph the `(numId, ilvl)` its paragraph takes, the bookmark of every anchor, the
 fields of every cross-reference, and the entries of the table of contents. It reads only `tree.formats` and the
@@ -676,7 +676,7 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 
 Markers: `conformance` (the specification's documents), `ooxml_schema` (DOCX parts against the schemas), `libreoffice`
 (DOCX opened in LibreOffice; skipped without `soffice` and `python3-uno`, a failure when `LEGALDOWN_REQUIRE_DOCX_TOOLS`
-is set, as in the CI job that installs them) and `acceptance`: the DOCX acceptance corpus, whose run takes about half a
+is set, as in the CI job that installs them) and `acceptance`: the DOCX acceptance corpus, whose run takes about a
 minute of LibreOffice time and is left out of a plain `pytest` (it runs with `-m`, with `LEGALDOWN_ACCEPTANCE=1`, or when
 its file is named). `pytest -n auto` (pytest-xdist, in the `dev` extra) runs the whole suite in a third of the serial time.
 

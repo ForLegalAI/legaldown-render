@@ -125,7 +125,7 @@ values appear only as the cached results of fields. Decided in
   - `render(..., format="docx")` returns the file as `RenderResult.binary` (bytes); `RenderResult.output` stays
     `str` and is empty for it. `FORMATS` gains `docx`.
   - `RenderTree` gains fields for the numbering structure (`formats`, and on sections, list items and
-    paragraphs `unit`, `number`, `parent_unit`, `shares_number_with`; `List.family`; `CrossRef.target_unit`,
+    paragraphs `unit`, `number`, `parent_unit`, `shares_number_with`; `List.family`, `List.depth`, `List.format` and `List.start`; `CrossRef.target_unit`,
     `section_unit`) and `version` and `effective_date` (plain text, filled whether or not the title block shows
     them). HTML and plain-text output are byte-identical to 0.4 (the goldens are unchanged).
   - New `render-docx-*` diagnostics for DOCX renders only.

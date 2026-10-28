@@ -51,7 +51,13 @@ version number can never be reused once published.
    `pytest --update-golden tests/test_golden.py`, and check that `git diff tests/golden` shows
    only that line. Also update the version named in [`CONFORMANCE.md`](../CONFORMANCE.md) and the
    milestone in [`docs/roadmap.md`](../docs/roadmap.md).
-3. Commit, then publish a GitHub Release with the tag `vX.Y.Z`. Its notes are where this
+3. For a release that changes the DOCX writer, run the checklist below ("Checking the DOCX in Word") first, and record the
+   Word version and platform (for example Word for Microsoft 365, Windows 11, build number; or Word for Mac) with
+   its findings in the release notes. Then update what says the DOCX is not yet checked in Word: the row of
+   [`CONFORMANCE.md`](../CONFORMANCE.md) ("DOCX output", and its section), the heading of the milestone in
+   [`docs/roadmap.md`](../docs/roadmap.md), and the README's DOCX section; and decide whether the renderer now claims
+   DOCX for §13.6 or keeps HTML as the format it claims it with.
+4. Commit, then publish a GitHub Release with the tag `vX.Y.Z`. Its notes are where this
    project records what changed in a release.
 
 The workflow first runs the CI workflow on the tagged commit. Only if that passes does it build the
@@ -96,7 +102,7 @@ for doc in ("features", "template"):
     source = Path(f"tests/documents/{doc}.lgd").read_text(encoding="utf-8")
     for style in ("default", "continental", "outline"):
         (out / f"{doc}.{style}.docx").write_bytes(render(source, format="docx", style=style, overrides=contents).binary)
-    # the settings whose effect only Word shows (see items 7 and 9); `True` marks the ones about attachments, which
+    # the settings whose effect only Word shows (see items 6, 7 and 9); `True` marks the ones about attachments, which
     # template.lgd has none of
     for name, (about_attachments, extra) in {
         "attachments-not-listed": (True, {"contents.attachments": False}),
@@ -262,7 +268,7 @@ and LibreOffice differ (`\t`, `lvlRestart`, `SEQ \s`, `w:updateFields`).
   validator's next minor version removes.
 - **The upload is gated on the tests.** `publish.yml` first calls [`ci.yml`](workflows/ci.yml)
   (`on: workflow_call`) as the job `ci`, and `build` needs it, so the lint, test
-  (Linux and Windows on Python 3.13) and conformance jobs must pass on the commit being published
+  (Linux and Windows on Python 3.13), conformance and docx (schemas and LibreOffice) jobs must pass on the commit being published
   before anything is built, and `testpypi` and `pypi` need `build`. The `validator-main` job is
   informational (`continue-on-error`) and never blocks a release. The caller grants the called
   workflow `contents: read`; a called workflow cannot hold more permissions than its caller gives.

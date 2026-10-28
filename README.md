@@ -136,7 +136,8 @@ may not contain `version` or `extends`, so `overrides=legaldown_render.style.sty
 edit. It is written with the standard library alone, so it needs nothing beyond the base install.
 
 **The point of it:** in the Word file the numbers, the cross-references, the table of contents and the page
-numbers are Word's own features, not typed text. Insert a clause in Word, update the fields, and the clauses after it,
+numbers are Word's own features, not typed text. (This is how the file is built and how it behaves in LibreOffice, which CI
+runs; it has not yet been checked in Word itself, which the maintainers do by hand before a release.) Insert a clause in Word, update the fields, and the clauses after it,
 every "see 2.1(b)" and the contents follow. The renderer still works every value out; it writes the value only as the
 cached result of a field, so the document reads right before any field is updated
 ([ADR 0008](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/decisions/0008-docx-word-native.md)).
@@ -148,7 +149,7 @@ row, rules, links, defined terms, blanks and choices have Word styles generated 
 a style in Word applies everywhere. The page size, margins, fonts and colours are the style's, and the file carries the
 document's title and language.
 
-**What is live:**
+**What is live** (by design; confirmed in LibreOffice, to be confirmed in Word):
 
 - Heading numbers (the heading styles are linked to a multilevel list), list items and numbered paragraphs are Word
   numbering definitions. A nested list restarts under a new parent item, and a clause inserted before another renumbers it.
@@ -189,7 +190,7 @@ with the line (the rules are listed in [the conformance notes](https://github.co
 - CI checks every part against the ISO/IEC 29500 schemas and opens the documents in LibreOffice, which updates the
   fields and is compared with the plain-text output. It cannot run Word, so the maintainers check the golden documents
   in Word before a release ([the checklist](https://github.com/ForLegalAI/legaldown-render/blob/main/.github/PUBLISHING.md)).
-- `--fragment` does not apply: a Word document is always whole. On the command line the file goes to `-o FILE.docx`, or
+- `--fragment` (and `standalone=False` in the API, where it is ignored) does not apply: a Word document is always whole, and `--fragment` with it is a usage error. On the command line the file goes to `-o FILE.docx`, or
   to standard output with `-o -` (or without `-o` when standard output is not a terminal); it is never written to a terminal.
 
 ## Rendering documents you did not write
