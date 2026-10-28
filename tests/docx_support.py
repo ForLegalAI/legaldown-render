@@ -220,16 +220,18 @@ def repackage(data: bytes, name: str, change: Callable[[str], str]) -> bytes:
     return buffer.getvalue()
 
 
-def libreoffice_export(documents: dict[str, bytes]) -> dict[str, Exported]:
+def libreoffice_export(documents: dict[str, bytes], *, update: bool = True) -> dict[str, Exported]:
     """Open each document (name to DOCX bytes) in one LibreOffice instance, update its fields
-    and indexes, and return its text, header, footer and page count."""
+    and indexes (unless *update* is False: the fields as the file caches them), and return its
+    text, header, footer and page count."""
     python = require_libreoffice()
     with tempfile.TemporaryDirectory(prefix="ld-lo-") as folder:
         out = Path(folder, "out")
         out.mkdir()
         for name, data in documents.items():
             Path(folder, f"{name}.docx").write_bytes(data)
-        done = subprocess.run([python, str(UNO_EXPORT), str(out), *(str(Path(folder, f"{n}.docx")) for n in documents)],
+        done = subprocess.run([python, str(UNO_EXPORT), *([] if update else ["--no-update"]), str(out),
+                               *(str(Path(folder, f"{n}.docx")) for n in documents)],
                               capture_output=True, text=True, timeout=300, check=False)
         if done.returncode != 0:
             pytest.fail(f"LibreOffice export failed:\n{done.stdout}\n{done.stderr}")

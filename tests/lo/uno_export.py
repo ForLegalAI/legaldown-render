@@ -7,10 +7,15 @@ count and the text of the running header and footer.
 Run it with the system Python that has the ``uno`` module (``/usr/bin/python3`` once
 ``python3-uno`` is installed), **not** with the project's virtual environment:
 
-    /usr/bin/python3 tests/lo/uno_export.py OUTDIR FILE.docx [FILE.docx ...]
+    /usr/bin/python3 tests/lo/uno_export.py [--no-update] OUTDIR FILE.docx [FILE.docx ...]
 
 The same LibreOffice instance opens every file, so a test module pays the start-up
 once. Exit status 0 when every file was exported.
+
+With ``--no-update`` the fields are left as the file caches them: what the export says
+is then what the writer wrote (a document whose cached results were made wrong on
+purpose shows the wrong results there, and the right ones only after the update, which
+is how a round trip proves that LibreOffice computed the numbers and did not read them).
 """
 from __future__ import annotations
 
@@ -66,7 +71,7 @@ def _page_texts(document: object) -> tuple[str, str]:
     return header, footer
 
 
-def export(out_dir: str, files: list[str]) -> None:
+def export(out_dir: str, files: list[str], *, update: bool = True) -> None:
     profile = tempfile.mkdtemp(prefix="lo-profile-")
     pipe = f"legaldown_{uuid.uuid4().hex}"
     process = subprocess.Popen(
@@ -85,7 +90,8 @@ def export(out_dir: str, files: list[str]) -> None:
             if document is None:
                 raise SystemExit(f"LibreOffice could not open {path}")
             try:
-                _update(document)
+                if update:
+                    _update(document)
                 header, footer = _page_texts(document)
                 document.storeToURL(uno.systemPathToFileUrl(os.path.join(out_dir, f"{stem}.txt")),
                                     (_value("FilterName", "Text (encoded)"), _value("FilterOptions", "UTF8")))
@@ -105,6 +111,7 @@ def export(out_dir: str, files: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
+    arguments = [argument for argument in sys.argv[1:] if argument != "--no-update"]
+    if len(arguments) < 2:
         raise SystemExit(__doc__)
-    export(sys.argv[1], sys.argv[2:])
+    export(arguments[0], arguments[1:], update="--no-update" not in sys.argv[1:])
