@@ -175,17 +175,41 @@ def level_text(label: str, refs: Sequence[str], level: int, *, section: Sequence
     return tuple(parts)
 
 
-def lvl_text(parts: LevelParts) -> str:
-    """*parts* in OOXML form: ``%k`` for level ``k-1``. A literal ``%`` before a digit, or before a counter, cannot
-    be told from a placeholder in ``lvlText``; style validation (:func:`.docx_plan.docx_style_errors`) refuses it before
-    rendering, so one reaching here is a bug."""
+def level_text_problem(parts: LevelParts) -> str | None:
+    """Why *parts* cannot be written as an ``lvlText``, or None. A literal ``%`` before a digit, or before a
+    counter, cannot be told from a placeholder; this happens where the pieces of a label are put together (a ref
+    ending in ``%`` before another that starts with a counter), not only inside one template."""
     text = "".join(f"%{part + 1}" if isinstance(part, int) else part for part in parts)
     before_counter = any(isinstance(after, int) and isinstance(part, str) and part.endswith("%")
                          for part, after in zip(parts, parts[1:], strict=False))
     if before_counter or len(_PLACEHOLDER.findall(text)) != sum(isinstance(part, int) for part in parts):
-        raise InternalError("a label with a literal '%' before a digit reached the DOCX planner. This is a bug; "
+        return "a '%' meets a digit or a counter"
+    return None
+
+
+def lvl_text(parts: LevelParts) -> str:
+    """*parts* in OOXML form: ``%k`` for level ``k-1``. Style validation (:func:`.docx_plan.docx_style_errors`)
+    refuses parts with a :func:`level_text_problem` before rendering, so one reaching here is a bug."""
+    if level_text_problem(parts) is not None:
+        raise InternalError("a label that Word's level text cannot write reached the DOCX planner. This is a bug; "
                             "style validation refuses it.")
-    return text
+    return "".join(f"%{part + 1}" if isinstance(part, int) else part for part in parts)
+
+
+_SECTION = "section"
+
+
+def shows_section(label: str, refs: Sequence[str], level: int, *, textual: bool = False) -> bool:
+    """True if the label of level *level* of a list in a section shows a counter of the section: it uses
+    ``{section}``, or ``{path}`` of a designation that starts from the section's. Judged on the filled-in label
+    (a counter of the section is in it), not on how the template is spelled."""
+    section: list[Token] = [Count(_SECTION, "")]
+    designation: list[Token] = list(section)
+    for j in range(level + 1):
+        designation = extend_tokens(designation, fill_tokens(refs[j], n=[Count(j, "")], section=section),
+                                    textual=textual)
+    tokens = fill_tokens(label, n=[Count(level, "")], path=designation, section=section)
+    return any(isinstance(token, Count) and token.owner == _SECTION for token in tokens)
 
 
 def split_level_text(text: str) -> list[str | int]:
@@ -227,20 +251,24 @@ class WordNumbering:
     :meth:`add_num` (an abstractNum's levels are read when a paragraph is stepped, so a level may be defined
     after the abstractNum is added), then :meth:`step` paragraphs in document order.
 
-    *skipped* is the model of a heading level that was never used: ``"lo"`` shows its start value and counts on
-    (what the renderer does and LibreOffice shows); ``"word"`` shows ``start - 1`` and does not advance it, which is
-    what Word is expected to do (the documents that skip a level have a Core Error, ``heading-skip``)."""
+    *skipped* is the model of a level that was never used before a deeper one: ``"lo"`` shows its start value and
+    counts on (what the renderer does for a skipped heading level, and LibreOffice shows); ``"word"`` shows
+    ``start - 1`` and does not advance it, which is what Word is expected to do. It is the default of every
+    abstractNum and can be set for each in :meth:`add_abstract`."""
 
     def __init__(self, *, skipped: Literal["lo", "word"] = "lo") -> None:
         self.skipped = skipped
+        self._skipped: dict[int, Literal["lo", "word"]] = {}
         self._levels: dict[int, Sequence[LevelDef]] = {}
         self._nums: dict[int, Num] = {}
         self._count: dict[int, list[int]] = {}
         self._holder: dict[int, list[object | None]] = {}
         self._used: set[tuple[int, int]] = set()
 
-    def add_abstract(self, abstract_id: int, levels: Sequence[LevelDef]) -> None:
+    def add_abstract(self, abstract_id: int, levels: Sequence[LevelDef], *,
+                     skipped: Literal["lo", "word"] | None = None) -> None:
         self._levels[abstract_id] = levels
+        self._skipped[abstract_id] = skipped or self.skipped
         self._count[abstract_id] = [0] * 9
         self._holder[abstract_id] = [None] * 9
 
@@ -264,7 +292,10 @@ class WordNumbering:
         return self._count[abstract_id][ilvl], self._holder[abstract_id][ilvl]
 
     def step(self, num_id: int, ilvl: int, owner: object) -> Step:
-        """Number the next paragraph at (*num_id*, *ilvl*), which *owner* (a unit id) is."""
+        """Number the next paragraph at (*num_id*, *ilvl*), which *owner* (a unit id) is. ``numId`` 0 (no
+        numbering) counts nothing and restarts nothing; ``REF \\n`` of such a paragraph returns ``0``."""
+        if num_id == 0:
+            return Step(0, "", "", "0", ())
         num = self._nums[num_id]
         levels = self._levels[num.abstract_id]
         count, holder = self._count[num.abstract_id], self._holder[num.abstract_id]
@@ -276,20 +307,18 @@ class WordNumbering:
         holder[ilvl] = owner
         for deeper in range(ilvl + 1, 9):
             count[deeper], holder[deeper] = 0, None
+        skipped = self._skipped[num.abstract_id]
         for above in range(ilvl):
             if count[above] == 0:
                 holder[above] = Ghost(str(owner), above)
-                if self.skipped == "lo":
-                    count[above] = levels[above].start
-                else:
-                    count[above] = levels[above].start - 1
+                count[above] = levels[above].start if skipped == "lo" else levels[above].start - 1
         tokens: list[Token] = []
         for part in split_level_text(levels[ilvl].lvl_text):
             if isinstance(part, int):
                 tokens.append(Count(holder[part], word_counter(count[part], levels[part].num_fmt)))
             else:
                 tokens.append(Lit(part))
-        if self.skipped == "word":
+        if skipped == "word":
             # Never-used levels show start - 1 and stay unused: the next heading of that level starts at `start`.
             for above in range(ilvl):
                 if isinstance(holder[above], Ghost):

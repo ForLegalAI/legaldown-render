@@ -1,14 +1,15 @@
 """The DOCX planner: from the render tree to the numbering Word will draw (docs/decisions/0008).
 
-``plan_docx(tree, style)`` is the one place that knows how LegalDown numbering becomes Word numbering; the DOCX
-writer serialises its :class:`DocxPlan` and decides nothing (docs/decisions/0003). It is a pure function of the
-resolved tree: the numbering structure the resolver put on every section, list item and top-level paragraph
-(``unit``, ``number``, ``parent_unit``, ``List.family``, ``RenderTree.formats``; §13.1, §13.2) is mapped to
-abstractNums, nums and, for each unit, the (numId, ilvl) of its paragraph, and every placement is checked against the
-number the resolver gave the unit, by simulating Word's counters (:mod:`.docx_numbering`).
+``plan_docx(tree)`` is the one place that knows how LegalDown numbering becomes Word numbering; the DOCX writer
+serialises its :class:`DocxPlan` and decides nothing (docs/decisions/0003). It is a pure function of the resolved
+tree: the numbering structure the resolver put on every section, list item and top-level paragraph (``unit``,
+``number``, ``parent_unit``, ``List.family``, ``RenderTree.formats``; §13.1, §13.2) is mapped to abstractNums, nums
+and, for each unit, the (numId, ilvl) of its paragraph, and every placement is checked against the number the
+resolver gave the unit, by simulating Word's counters (:mod:`.docx_numbering`).
 
-What a plan holds so far: the numbering definitions and the numbering of every unit. The reference fields,
-bookmarks and table of contents are further parts of the plan that are empty here.
+What a plan holds so far: the numbering definitions and the numbering of every unit. ``UnitPlan.ind`` is never
+set, and the reference fields, bookmarks and table of contents (``refs``, ``anchors``, ``toc``, ``bookmarks``) are
+empty. :func:`docx_style_errors` is the part that runs on every DOCX render, before it (ADR 0006).
 
 **Data model.** Frozen data only; the planner assigns bookmark *names*, never ids (the writer allocates those);
 names are valid Word bookmark names of at most 40 characters and unique ignoring case. All sequences are tuples, all
@@ -23,8 +24,7 @@ from typing import Literal, NamedTuple
 
 from legaldown import Diagnostic
 
-from ..diagnostics import by_line, record
-from ..errors import InternalError, StyleError
+from ..diagnostics import by_line
 from ..style.model import LevelFormat, Style
 from ..tree import (
     DraftingNote,
@@ -36,21 +36,24 @@ from ..tree import (
     Quote,
     RenderTree,
     Section,
-    plain_text,
 )
 from ..urls import printable
 from .docx_numbering import (
     NUM_FMT,
     SAMPLE_COUNTER,
+    Count,
+    Ghost,
     LevelParts,
     Step,
     WordNumbering,
     level_text,
+    level_text_problem,
     lvl_text,
+    shows_section,
     split_level_text,
     word_counter,
 )
-from .numbering import RENUMBERED, format_counter, heading_levels
+from .numbering import format_counter, formats_of
 
 # ---------------------------------------------------------------------------
 # The plan (frozen data)
@@ -94,8 +97,8 @@ class Num:
 
     id: int  # from 1 (numId 0 means "no numbering" and is never a Num)
     abstract_id: int
-    #: ``(ilvl, value)``: the first number of the list at that level; deeper levels restart at 1. Overrides that
-    #: are never reached by a paragraph are harmless.
+    #: ``(ilvl, value)``: the first number of the list at that level; the deeper levels restart by themselves when
+    #: that level counts.
     start_overrides: tuple[tuple[int, int], ...] = ()
 
 
@@ -216,29 +219,21 @@ MAX_LVL_TEXT = 255
 #: or before a field that becomes ``%k``.
 _AMBIGUOUS_PERCENT = re.compile(r"%(?=[0-9{])")
 
-
-def _formats_of(style: Style) -> NumberingFormats:
-    """The numbering formats *style* gives (as ``Resolver._formats`` writes them into the tree)."""
-    enumeration = style.enumeration
-    return NumberingFormats(
-        scheme=style.numbering.scheme,
-        headings=() if style.numbering.scheme == "none" else heading_levels(style.numbering),
-        enumerated=tuple(enumeration.levels) if enumeration.enabled or enumeration.ordered == "enumerate" else (),
-        renumber=RENUMBERED if enumeration.ordered == "renumber" else None,
-        paragraphs=style.paragraphs.format if style.paragraphs.numbered else None,
-        reference=style.references.format,
-    )
+#: The setting a kind of abstractNum is made from, for a message.
+_SETTING = {"headings": "numbering.levels", "enumerated": "enumeration.levels", "renumber": "enumeration.ordered",
+            "paragraphs": "paragraphs.format"}
 
 
 def docx_style_errors(style: Style) -> list[str]:
     """What in *style* Word's numbering cannot express, one message per problem naming the setting; empty when
     the style is fine for DOCX.
 
-    Word's ``lvlText`` has no way to write a ``%`` before a digit, and a level's text is at most
+    Word's ``lvlText`` has no way to write a ``%`` before a digit or a counter, whether it stands in one template
+    or meets a counter where a label and the refs it shows are put together, and a level's text is at most
     :data:`MAX_LVL_TEXT` characters. These are problems of configuration, so a DOCX render calls this before
-    rendering and raises :class:`~legaldown_render.errors.StyleError` (ADR 0006); :func:`plan_docx` checks again."""
+    rendering (``style.docx.docx_settings``) and raises :class:`~legaldown_render.errors.StyleError` (ADR 0006)."""
     problems: list[str] = []
-    formats = _formats_of(style)
+    formats = formats_of(style)
     templates: list[tuple[str, LevelFormat]] = []
     if formats.headings:
         templates += [(f"numbering.levels[{i}]", f) for i, f in enumerate(style.numbering.levels[:5])]
@@ -249,16 +244,23 @@ def docx_style_errors(style: Style) -> list[str]:
     for path, level in templates:
         for name, template in (("label", level.label), ("ref", level.ref)):
             if _AMBIGUOUS_PERCENT.search(template):
-                problems.append(
-                    f"{path}.{name}: a '%' before a digit or a field cannot be written in a Word numbering level "
-                    f"(DOCX); write it without the '%'")
+                problems.append(f"{path}.{name}: a '%' before a digit or a field cannot be written in a Word "
+                                f"numbering level (DOCX); write it without the '%'")
     if problems:
         return problems
-    for kind, levels in _definitions(formats, set()).items():
+    unwritable: list[tuple[str, int]] = []
+    definitions = _definitions(formats, unwritable)
+    first_level: dict[str, int] = {}
+    for kind, level in unwritable:
+        first_level.setdefault(kind, level)
+    for kind, level in first_level.items():
+        problems.append(f"{_SETTING[kind]}: a '%' meets a digit or a counter where the label and the refs of level "
+                        f"{level + 1} are put together, which a Word numbering level cannot write (DOCX)")
+    for kind, levels in definitions.items():
         for level in levels:
             if len(level.lvl_text) > MAX_LVL_TEXT:
-                problems.append(f"the {kind} numbering level {level.ilvl + 1} is longer than {MAX_LVL_TEXT} "
-                                f"characters in Word (DOCX): shorten its label or the refs it shows")
+                problems.append(f"{_SETTING.get(kind, kind)}: the numbering level {level.ilvl + 1} is longer than "
+                                f"{MAX_LVL_TEXT} characters in Word (DOCX): shorten its label or the refs it shows")
     return problems
 
 
@@ -273,26 +275,22 @@ _STEP = 567
 _CHARACTER = 113
 
 
-def _num_fmt(counter: str, unmapped: set[str]) -> str:
-    """The ``numFmt`` of *counter*; a counter Word has no format for is written as ``decimal`` and noted."""
-    found = NUM_FMT.get(counter)
-    if found is None:
-        unmapped.add(counter)
-        return "decimal"
-    return found
-
-
 def _level(ilvl: int, num_fmt: str, parts: LevelParts, *, p_style: str | None = None,
-           widths: Mapping[int, str] | None = None) -> LevelDef:
+           widths: Mapping[int, str] | None = None, unwritable: list[tuple[str, int]] | None = None,
+           kind: str = "") -> LevelDef:
     """One level. Headings (*widths*: the ``numFmt`` of each level a ``%k`` names) get an indent wide enough for
     their widest label; items step one centimetre per level. A label with a word in it (``Article {n}``) is
-    followed by a space, any other by a tab."""
+    followed by a space, any other by a tab. With *unwritable*, parts a level text cannot write are noted there
+    (and written as nothing) instead of raising."""
     words = any(isinstance(part, str) and any(c.isalpha() for c in part) for part in parts)
     if widths is None:
         left, hanging = _STEP * (ilvl + 1), _STEP
     else:
         sample = sum(len(part) if isinstance(part, str) else len(SAMPLE_COUNTER[widths[part]]) for part in parts)
         left = hanging = max(_STEP, _CHARACTER * (sample + 2))
+    if unwritable is not None and level_text_problem(parts) is not None:
+        unwritable.append((kind, ilvl))
+        parts = ()
     return LevelDef(ilvl, num_fmt, lvl_text(parts), p_style=p_style, suff="space" if words else "tab",
                     left=left, hanging=hanging)
 
@@ -302,7 +300,8 @@ def _neutral(ilvl: int) -> LevelDef:
     return LevelDef(ilvl, "decimal", f"%{ilvl + 1}", left=_STEP * (ilvl + 1), hanging=_STEP)
 
 
-def _definitions(formats: NumberingFormats, unmapped: set[str]) -> dict[str, list[LevelDef]]:
+def _definitions(formats: NumberingFormats, unwritable: list[tuple[str, int]] | None = None
+                 ) -> dict[str, list[LevelDef]]:
     """The nine levels of every abstractNum *formats* needs, by kind. A label that needs a number of the section
     (``{section}``, or ``{path}`` of an item or paragraph in one) is written without it, as for a preamble item:
     Word shows only counters of the list itself in a level."""
@@ -310,35 +309,32 @@ def _definitions(formats: NumberingFormats, unmapped: set[str]) -> dict[str, lis
     out: dict[str, list[LevelDef]] = {}
     if formats.headings:
         refs = [f.ref for f in formats.headings]
-        fmts = {j: _num_fmt(f.counter, unmapped) for j, f in enumerate(formats.headings)}
+        fmts = {j: NUM_FMT[f.counter] for j, f in enumerate(formats.headings)}
         levels = [_level(k, fmts[k], level_text(f.label, refs, k, section=None), p_style=f"Heading{k + 1}",
-                         widths=fmts) for k, f in enumerate(formats.headings)]
+                         widths=fmts, unwritable=unwritable, kind="headings")
+                  for k, f in enumerate(formats.headings)]
         out["headings"] = [*levels, *(_neutral(k) for k in range(5, 9))]
     if formats.enumerated:
         size = len(formats.enumerated)
         refs = [formats.enumerated[j % size].ref for j in range(9)]
         out["enumerated"] = [
-            _level(d, _num_fmt(formats.enumerated[d % size].counter, unmapped),
-                   level_text(formats.enumerated[d % size].label, refs, d, section=(), textual=textual))
+            _level(d, NUM_FMT[formats.enumerated[d % size].counter],
+                   level_text(formats.enumerated[d % size].label, refs, d, section=(), textual=textual),
+                   unwritable=unwritable, kind="enumerated")
             for d in range(9)]
     if formats.renumber is not None:
         f = formats.renumber
-        out["renumber"] = [_level(d, _num_fmt(f.counter, unmapped),
-                                  level_text(f.label, [f.ref] * 9, d, section=(), textual=textual))
-                           for d in range(9)]
+        out["renumber"] = [_level(d, NUM_FMT[f.counter],
+                                  level_text(f.label, [f.ref] * 9, d, section=(), textual=textual),
+                                  unwritable=unwritable, kind="renumber") for d in range(9)]
     if formats.paragraphs is not None:
         f = formats.paragraphs
         out["paragraphs"] = [
-            _level(0, _num_fmt(f.counter, unmapped), level_text(f.label, [f.ref], 0, section=(), textual=textual)),
+            _level(0, NUM_FMT[f.counter], level_text(f.label, [f.ref], 0, section=(), textual=textual),
+                   unwritable=unwritable, kind="paragraphs"),
             *(_neutral(k) for k in range(1, 9))]
     out["bullet"] = [LevelDef(d, "bullet", _BULLETS[d % 3], left=_STEP * (d + 1), hanging=_STEP) for d in range(9)]
     return out
-
-
-def _needs_section(level: LevelFormat) -> bool:
-    """True if *level*'s label shows a number of the section: ``{section}``, or ``{path}`` (which holds it) of an
-    item or paragraph in a section."""
-    return "{section}" in level.label or "{path}" in level.label or "{section}" in level.ref
 
 
 def _reads(level: LevelDef, levels: Sequence[LevelDef]) -> str:
@@ -368,12 +364,20 @@ class _Placed(NamedTuple):
     abstract: _Abstract
 
 
+class _Drift:
+    """A run of units of one level that Word counts off from the resolver by the same amount."""
+
+    def __init__(self, node: _Unit, kind: str, step: Step, delta: int) -> None:
+        self.node, self.kind, self.step, self.delta, self.more = node, kind, step, delta, 0
+
+
 class _Planner:
     def __init__(self, tree: RenderTree, file: str | None) -> None:
         self.tree, self.file = tree, file or ""
         self.formats = tree.formats
         self.textual = tree.formats.scheme == "none"
         self.diagnostics: list[Diagnostic] = []
+        self.found: dict[tuple[str, str, str], int] = {}
         self.sim = WordNumbering()
         self.abstracts: list[_Abstract] = []
         self.nums: list[Num] = []
@@ -384,34 +388,48 @@ class _Planner:
         self.paragraph_nums: dict[str, Num] = {}
         self.flagged: set[str] = set()
         self.reported: set[tuple[str, object]] = set()
+        self.drifts: list[_Drift] = []
+        self.open_drift: dict[tuple[int, int], _Drift] = {}
         self.heading_num: Num | None = None
+        self.bullet_num: Num | None = None
         self.depth_reported = False
-        self.unmapped: set[str] = set()
-        self.definitions = _definitions(self.formats, self.unmapped)
+        self.definitions = _definitions(self.formats)
         self.by_kind: dict[str, _Abstract] = {}
 
     # -- registry -------------------------------------------------------------------
 
     def abstract(self, kind: str) -> _Abstract:
-        """The abstractNum of *kind*, made on first use (so ids follow the order of use)."""
+        """The abstractNum of *kind*, made on first use (so ids follow the order of use). Only headings can skip a
+        level (the renderer counts it as 1, as LibreOffice does); in any other list a level that nothing numbers
+        is read as Word reads it, 0, so that a label that needs it is reported."""
         found = self.by_kind.get(kind)
         if found is None:
             found = _Abstract(len(self.abstracts), kind, self.definitions[kind])
             self.abstracts.append(found)
             self.by_kind[kind] = found
-            self.sim.add_abstract(found.id, found.levels)
+            self.sim.add_abstract(found.id, found.levels, skipped="lo" if kind == "headings" else "word")
         return found
 
     def new_num(self, abstract: _Abstract, ilvl: int | None = None, first: int = 1) -> Num:
-        """A num on *abstract*; with *ilvl*, its list starts there at *first* and deeper levels at 1."""
-        overrides = () if ilvl is None else tuple((i, first if i == ilvl else 1) for i in range(ilvl, 9))
-        num = Num(len(self.nums) + 1, abstract.id, overrides)
+        """A num on *abstract*; with *ilvl*, its list starts there at *first* (the deeper levels restart by
+        themselves when that level counts)."""
+        num = Num(len(self.nums) + 1, abstract.id, () if ilvl is None else ((ilvl, first),))
         self.nums.append(num)
         self.sim.add_num(num)
         return num
 
     def report(self, rule: str, level: str, message: str, line: int | None) -> None:
-        record(Diagnostic(rule=rule, level=level, message=message, line=line, file=self.file), self.diagnostics)
+        """Record a finding; the same one (rule, level, message) again is one, at the lowest line."""
+        key = (rule, level, message)
+        index = self.found.get(key)
+        found = Diagnostic(rule=rule, level=level, message=message, line=line, file=self.file)
+        if index is None:
+            self.found[key] = len(self.diagnostics)
+            self.diagnostics.append(found)
+        else:
+            known = self.diagnostics[index]
+            if line is not None and (known.line is None or line < known.line):
+                self.diagnostics[index] = found
 
     # -- the pass -------------------------------------------------------------------
 
@@ -424,10 +442,8 @@ class _Planner:
             self.section(section)
             for block in section.blocks:
                 self.block(block, section)
-        for counter in sorted(self.unmapped):
-            self.report("render-docx-counter", "warning",
-                        f"The counter '{printable(counter)}' has no Word number format; it is written as decimal.",
-                        None)
+        for drift in self.drifts:
+            self.report_drift(drift)
         abstracts = tuple(
             AbstractNum(a.id, a.kind, f"{0x4C440000 + a.id:08X}",  # type: ignore[arg-type]
                         "multilevel" if a.kind == "headings" else "hybridMultilevel", tuple(a.levels))
@@ -463,23 +479,32 @@ class _Planner:
             parent = self.parent.get(parent)
         return False
 
-    def check(self, node: _Unit, kind: str, step: Step, counter: str, group: object, cause: tuple[str, ...]) -> None:
-        """Compare what Word gives *node* with what the resolver gave it, and report the first difference of a
-        chain (a unit with a flagged ancestor is not reported again). Word's count must be the resolver's; the
-        counter must read the same (letters past 26 and Roman numerals from 4000 do not); and the whole label must
-        read the same, unless a diagnostic already says why it cannot (an unsupported label, a clamped depth)."""
+    def check(self, node: _Unit, kind: str, step: Step, counter: str, group: object, cause: tuple[str, ...],
+              key: tuple[int, int]) -> None:
+        """Compare what Word gives *node* with what the resolver gave it. Word's count must be the resolver's (a run
+        of units off by the same amount is one finding, :meth:`report_drift`); the counter must read the same
+        (letters past 26 and Roman numerals from 4000 do not); and the whole label must read the same unless a
+        diagnostic already says why it cannot (a label that needs the section, a clamped depth). A unit whose
+        ancestor already differs is not reported again. *counter* is the one the level Word uses is written in."""
         assert node.unit is not None and node.number is not None
         fresh = not self.ancestor_flagged(node.unit)
         expected = format_counter(node.number, counter)
         word = kind[0].upper() + kind[1:]
-        if step.count == node.number and "clamped" in cause:
-            return  # a level 9 in the format of level 9: the clamp is the reason, and it is reported
-        if step.count == node.number and step.own == expected:
-            if step.label == node.label or "label-fallback" in cause:
+        if step.count != node.number:
+            self.flagged.add(node.unit)
+            if fresh:
+                delta = step.count - node.number
+                drift = self.open_drift.get(key)
+                if drift is not None and drift.delta == delta:
+                    drift.more += 1
+                else:
+                    drift = self.open_drift[key] = _Drift(node, kind, step, delta)
+                    self.drifts.append(drift)
+            return
+        self.open_drift.pop(key, None)
+        if step.own == expected:
+            if step.label == node.label or "label-fallback" in cause or "clamped" in cause:
                 return
-            rule = "render-docx-number-mismatch"
-            message = f"Word will number the {kind} '{printable(node.label or '')}' as '{printable(step.label)}'."
-        elif step.count != node.number:
             rule = "render-docx-number-mismatch"
             message = f"Word will number the {kind} '{printable(node.label or '')}' as '{printable(step.label)}'."
         elif counter.endswith("roman") and node.number >= 4000:
@@ -501,13 +526,25 @@ class _Planner:
             self.reported.add((rule, group))
             self.report(rule, "warning", message, node.line)
 
-    def fallback_label(self, level: LevelFormat, family: str, kind: str, line: int | None) -> None:
-        """Report a label that needs the section's number where Word can show only the list's own counters."""
+    def report_drift(self, drift: _Drift) -> None:
+        """One finding for a run of units that Word counts off by the same amount: the first, and how many follow."""
+        node, step = drift.node, drift.step
+        message = (f"Word will number the {drift.kind} '{printable(node.label or '')}' as '{printable(step.label)}', "
+                   f"{abs(drift.delta)} {'later' if drift.delta > 0 else 'earlier'} than the renderer")
+        if drift.more:
+            message += f"; so will the following {drift.more}"
+        self.report("render-docx-number-mismatch", "warning", message + ".", node.line)
+
+    def fallback_label(self, level: LevelFormat, family: str, ilvl: int, kind: str, line: int | None) -> None:
+        """Report a label that shows the section's number where Word can show only the list's own counters."""
         levels = self.definitions[family]
         self.report("render-docx-section-label", "warning",
                     f"The label '{printable(level.label)}' of {kind}s in a section shows the section's number, "
-                    f"which Word can show only for headings: in Word it reads '{printable(_reads(levels[0], levels))}'.",
-                    line)
+                    f"which Word can show only for headings: in Word it reads "
+                    f"'{printable(_reads(levels[ilvl], levels))}'.", line)
+
+    def shared_counter(self, message: str, line: int | None) -> None:
+        self.report("render-docx-shared-counter", "warning", message, line)
 
     # -- units ----------------------------------------------------------------------
 
@@ -521,16 +558,13 @@ class _Planner:
             return
         ilvl = section.level - 1
         parent = section.parent_unit
-        cause: tuple[str, ...] = ()
-        if (parent is None and section.level > 1) or (parent is not None
-                                                      and self.section_level[parent] + 1 < section.level):
-            cause = ("skipped-level",)
-            self.report("render-docx-heading-skip", "warning",
-                        f"Heading level skipped before '{printable(plain_text(section.title))}': the number shows "
-                        f"the skipped level as 1. Word may number the headings after it differently.", section.line)
+        skipped = (parent is None and section.level > 1) or (
+            parent is not None and self.section_level[parent] + 1 < section.level)
+        cause = ("skipped-level",) if skipped else ()
         step = self.sim.step(self.heading_num.id, ilvl, unit)
         self.add(section, "section", self.heading_num, ilvl, explicit=False, cause=cause, step=step)
-        self.check(section, "heading", step, self.formats.headings[ilvl].counter, ("heading", section.level), cause)
+        self.check(section, "heading", step, self.formats.headings[ilvl].counter, ("heading", section.level), cause,
+                   (0, ilvl))
 
     def paragraph(self, paragraph: Paragraph, section: Section) -> None:
         assert paragraph.unit is not None and section.unit is not None
@@ -539,28 +573,37 @@ class _Planner:
         if paragraph.number is None or fmt is None:
             self.add(paragraph, "paragraph", None, None, explicit=False)
             return
+        abstract = self.abstract("paragraphs")
         num = self.paragraph_nums.get(section.unit)
         if num is None:
-            num = self.paragraph_nums[section.unit] = self.new_num(self.abstract("paragraphs"), 0)
+            num = self.paragraph_nums[section.unit] = self.new_num(abstract, 0)
         cause: tuple[str, ...] = ()
-        if _needs_section(fmt):
+        if shows_section(fmt.label, [fmt.ref], 0, textual=self.textual):
             cause = ("label-fallback",)
-            self.fallback_label(fmt, "paragraphs", "paragraph", paragraph.line)
+            self.fallback_label(fmt, "paragraphs", 0, "paragraph", paragraph.line)
         step = self.sim.step(num.id, 0, paragraph.unit)
         self.add(paragraph, "paragraph", num, 0, explicit=True, cause=cause, step=step)
-        self.check(paragraph, "paragraph", step, fmt.counter, ("paragraphs", section.unit), cause)
+        self.check(paragraph, "paragraph", step, fmt.counter, ("paragraphs", section.unit), cause, (abstract.id, 0))
 
     def list_(self, lst: List, section: Section | None) -> None:
         first = lst.items[0]
+        if lst.family == "bullet":
+            self.bullets(lst, section)
+            return
+        fmt = lst.format
+        assert fmt is not None
         abstract = self.abstract(lst.family)
         ilvl = min(lst.depth, 8)
+        # The counter of the level Word uses: past level 9 that is level 9's, not the resolver's cycle.
+        levels = self.formats.enumerated if lst.family == "enumerated" else (fmt,)
+        counter = levels[min(lst.depth, 8) % len(levels)].counter
         parent = first.parent_unit
         placed = self.placed.get(parent) if parent is not None else None
         cause: tuple[str, ...] = ()
         # Nested in an item: that item's num, if it is of the same kind and Word counts the list from where the
         # resolver does (a sibling list continues, a list in a new item restarts); otherwise a num of its own.
         if (placed is not None and placed.abstract is abstract and lst.depth <= 8
-                and (lst.family == "bullet" or self.sim.peek(placed.num.id, ilvl) == first.number)):
+                and self.sim.peek(placed.num.id, ilvl) == first.number):
             num = placed.num
         else:
             num = self.new_num(abstract, ilvl, first.number or 1)
@@ -571,6 +614,12 @@ class _Planner:
                     self.report("render-docx-list-depth", "warning",
                                 f"A list is nested {lst.depth} levels deep: Word has 9. Items from level 10 on are "
                                 f"numbered in the format of level 9 and restart by fixed values.", first.line)
+            elif placed is not None and first.number > 1:
+                cause = ("resync",)
+                self.shared_counter(
+                    "A list that goes on from an earlier list in the same item (the resolver counts them as one) "
+                    "starts at a fixed number in Word: it will not follow items added or removed before it.",
+                    first.line)
             elif placed is not None:
                 kinds = placed.abstract is not abstract
                 cause = ("restart-family",) if kinds else ("resync",)
@@ -579,35 +628,63 @@ class _Planner:
                             "not by structure: an item added above it in Word will not restart it." if kinds else
                             "A list that Word would continue from another list in the same item restarts by a fixed "
                             "setting (Restart at 1), not by structure.", first.line)
-        fmt = lst.format
-        qualified = fmt is not None and section is not None and _needs_section(fmt)
-        if fmt is not None and qualified:
-            self.fallback_label(fmt, lst.family, "list item", first.line)
+        refs = ([f.ref for f in (self.formats.enumerated[j % len(self.formats.enumerated)]
+                                 for j in range(lst.depth + 1))]
+                if lst.family == "enumerated" else [fmt.ref] * (lst.depth + 1))
+        qualified = section is not None and shows_section(fmt.label, refs, lst.depth, textual=self.textual)
+        if qualified:
+            self.fallback_label(fmt, lst.family, ilvl, "list item", first.line)
         for index, item in enumerate(lst.items):
             assert item.unit is not None
             self.parent[item.unit] = item.parent_unit
-            item_cause = (cause if index == 0 else ()) + (("label-fallback",) if qualified else ())
-            if fmt is None:
-                self.units[item.unit] = UnitPlan(item.unit, "item", num.id, ilvl, True, None, None, "", "", None,
-                                                 item_cause, (), None)
-            else:
-                step = self.sim.step(num.id, ilvl, item.unit)
-                self.add(item, "item", num, ilvl, explicit=True, cause=item_cause, step=step)
-                self.check(item, "list item", step, fmt.counter, ("list", first.unit), item_cause)
+            item_cause = cause if index == 0 else ()
+            if lst.depth > 8 and "clamped" not in item_cause:
+                item_cause += ("clamped",)
+            if qualified:
+                item_cause += ("label-fallback",)
+            # Another list used Word's counter of this level in between: restart it where the resolver is.
+            if index and item.shares_number_with is None and self.sim.peek(num.id, ilvl) != item.number:
+                num = self.new_num(abstract, ilvl, item.number)
+                item_cause += ("resync",)
+                self.shared_counter(
+                    "Word's counter for a level of this list was also used by another list in between; the numbers "
+                    "are kept as the renderer shows them by restarting at a fixed number, which will not follow "
+                    "items added or removed before it.", item.line)
+            step = self.sim.step(num.id, ilvl, item.unit)
+            if any(isinstance(token, Count) and isinstance(token.owner, Ghost) for token in step.tokens):
+                # The label shows a level of its list that nothing numbers here: Word shows it as 0, and the
+                # resolver's label is that of the enclosing item of another kind. Not left to Word's reading.
+                item_cause += ("label-fallback",)
+                self.report("render-docx-section-label", "warning",
+                            f"The label '{printable(fmt.label)}' of list items shows the number of an enclosing item "
+                            f"that Word cannot show here (the list is not nested in one of its own kind): in Word "
+                            f"it reads '{printable(step.label)}'.", item.line)
+            self.add(item, "item", num, ilvl, explicit=True, cause=item_cause, step=step)
+            self.check(item, "list item", step, counter, ("list", first.unit), item_cause, (abstract.id, ilvl))
             self.placed[item.unit] = _Placed(num, abstract)
             for child in item.blocks:
                 self.block(child, section)
 
+    def bullets(self, lst: List, section: Section | None) -> None:
+        """Bullets count nothing, so every bullet list of the document is numbered by one num."""
+        abstract = self.abstract("bullet")
+        if self.bullet_num is None:
+            self.bullet_num = self.new_num(abstract)
+        ilvl = min(lst.depth, 8)
+        for item in lst.items:
+            assert item.unit is not None
+            self.parent[item.unit] = item.parent_unit
+            cause = ("clamped",) if lst.depth > 8 else ()
+            self.units[item.unit] = UnitPlan(item.unit, "item", self.bullet_num.id, ilvl, True, None, None, "", "",
+                                             None, cause, (), None)
+            self.placed[item.unit] = _Placed(self.bullet_num, abstract)
+            for child in item.blocks:
+                self.block(child, section)
 
-def plan_docx(tree: RenderTree, style: Style, *, file: str | None = None) -> tuple[DocxPlan, list[Diagnostic]]:
+
+def plan_docx(tree: RenderTree, *, file: str | None = None) -> tuple[DocxPlan, list[Diagnostic]]:
     """The numbering plan of *tree* for Word, and the diagnostics only planning can produce (all
-    ``render-docx-*``, in the order of their lines, naming *file*). Pure: the same tree and style give an equal plan.
-    *style* is the one the tree was resolved under. Raises :class:`~legaldown_render.errors.StyleError` for a style
-    Word's numbering cannot express (:func:`docx_style_errors`; a render checks that first, ADR 0006)."""
-    problems = docx_style_errors(style)
-    if problems:
-        raise StyleError(f"'{style.name}'", problems)
-    if tree.formats != _formats_of(style):
-        raise InternalError("the tree and the style given to the DOCX planner do not belong together. This is a bug; "
-                            "please report it with the document that triggers it.")
+    ``render-docx-*``, in the order of their lines, naming *file*). Pure: the same tree gives an equal plan, and
+    ``tree.formats`` carries the style's numbering. A style Word's numbering cannot express (:func:`docx_style_errors`)
+    is refused before rendering (ADR 0006), so it never reaches here."""
     return _Planner(tree, file).run()
