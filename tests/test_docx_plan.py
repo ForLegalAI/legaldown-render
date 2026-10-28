@@ -465,6 +465,8 @@ def test_a_sub_heading_after_the_items_of_its_section_is_restarted_where_the_res
     b = tree.sections[1]
     # Word's counter of the level is shared by the sub-heading and the items: 1.3 where the resolver has 1.1 again
     assert (b.label, plan.units[b.unit].label, plan.units[b.unit].cause) == ("1.1", "1.1", ("resync",))
+    assert plan.units[b.unit].explicit  # a num of its own: the paragraph has to carry it
+    assert plan.units[b.unit].explicit  # a num of its own: the paragraph must carry it
     assert plan.nums[plan.units[b.unit].num_id - 1].start_overrides == ((1, 1),)
     [found] = [d for d in diagnostics if d.rule == "render-docx-shared-counter"]
     assert found.level == "warning" and found.line == b.line
@@ -878,6 +880,36 @@ def test_a_designation_below_an_alternative_is_made_of_the_holders_counters() ->
         ("1.1(a)", 'REF a + "(" + REF deep'), ("1.1", "REF z")]
     assert all(r.exact and not r.fixed for r in plan.refs.values())
     assert "render-docx-reference" not in rules(diagnostics)
+
+
+def test_a_unit_that_shares_a_number_but_finds_another_count_in_the_level_is_restarted_not_made_an_alternative() -> None:
+    # Two clauses of the later alternative's sub-section counted the level of the heading list between: the number the
+    # sub-sub-section shares is not the one the level holds, so Word's counter is restarted at it instead of a field
+    # standing for a unit that is not where it is.
+    body = ("# D {#d when=forum:courts}\n\n## Sub {#s}\n\n### Deeper {#t}\n\n# D {#d when=forum:arb}\n\n"
+            "## Sub alt\n\n- clause one\n- clause two\n\n### Deeper alt\n")
+    tree, plan, diagnostics = planned(body, ALTERNATIVES, style="continental")
+    deeper = tree.sections[5]
+    assert deeper.shares_number_with == "s3"
+    mine = plan.units[deeper.unit]
+    assert (mine.alt, mine.cause, mine.label, mine.count, mine.explicit) == (None, ("resync",), "1.1.1", 1, True)
+    assert mine.num_id not in (0, None) and plan.nums[mine.num_id - 1].start_overrides == ((2, 1),)
+    assert "render-docx-shared-counter" in rules(diagnostics)
+
+
+def test_the_holder_is_the_unit_that_holds_the_level_now_not_always_the_first_alternative() -> None:
+    # A clause on the same level of the heading list counted between the two paragraphs that share a number: the level
+    # holds the clause's 1.1 now, and the later alternative shows that (the designations below it are made of the
+    # counters the level holds), so it refers to the clause. Nothing is off: the text is the same.
+    levels = {"paragraphs.numbered": True, "paragraphs.format": {"counter": "decimal", "label": "{section}.{n}",
+                                                                 "ref": ".{n}"}}
+    body = "# S\n\nPara. {#p when=forum:courts}\n\n- clause {#i}\n\nPara arb. {#p when=forum:arb}\n\nAfter.\n"
+    tree, plan, diagnostics = planned(body, ALTERNATIVES, style="continental", overrides=levels)
+    first, clause, later, after = [u for u in units(tree)][1:]
+    assert plan.units[later.unit].num_id == 0 and plan.units[later.unit].label == "1.1"
+    assert plan.units[later.unit].alt.segments[0].bookmark == plan.units[clause.unit].bookmarks[0]
+    assert plan.units[first.unit].bookmarks == ("ld_p",) and plan.units[after.unit].label == "1.2"
+    assert "render-docx-number-mismatch" not in rules(diagnostics)
 
 
 def test_the_alternatives_of_a_document_are_one_information_naming_the_first() -> None:
