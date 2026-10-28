@@ -50,6 +50,12 @@ def toc_style(level: int) -> str:
     return f"TOC{level}"
 
 
+#: The left indent in twips that ``Quote`` and ``DraftingNote`` set, which the body adds to the paragraphs
+#: that carry an indent of their own (a list item in a quote).
+QUOTE_INDENT = 567
+NOTE_INDENT = 227
+CODE_INDENT = 113
+
 _MUTED = "666666"
 _RULE = "C8C8C8"
 _MONOSPACE = "Courier New"
@@ -84,6 +90,13 @@ def _shade(fill: str) -> ET.Element:
 
 def _border(side: str, color: str, size: int = 4, space: int = 0) -> ET.Element:
     return el(side, {"val": "single", "sz": size, "space": space, "color": color})
+
+
+def container_bar(style_id: str) -> ET.Element | None:
+    """The left border that ``Quote`` and ``DraftingNote`` draw, for the paragraphs inside them that are not
+    in that style (code, rules), so that the bar runs unbroken; None for any other style."""
+    return {QUOTE: lambda: _border("left", _RULE, 18, 10),
+            DRAFTING_NOTE: lambda: _border("left", _NOTE_RULE, 24, 8)}.get(style_id, lambda: None)()
 
 
 def _style(style_id: str, name: str, *, kind: str = "paragraph", based_on: str | None = None,
@@ -183,7 +196,7 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                run=[el("i"), el("iCs"), el("color", {"val": _MUTED}), _size(half_points(1.1))]),
         _style(QUOTE, "Quote", based_on=NORMAL, next_style=NORMAL, priority=29, quick=True,
                props=[el("pBdr", None, _border("left", _RULE, 18, 10)),
-                      el("spacing", {"before": em(0.5), "after": em(0.5)}), el("ind", {"left": 567, "right": 567})]),
+                      el("spacing", {"before": em(0.5), "after": em(0.5)}), el("ind", {"left": QUOTE_INDENT, "right": 567})]),
         _style(CONTENTS_HEADING, "Contents Heading", based_on=NORMAL, next_style=NORMAL, priority=39, custom=True,
                props=[el("keepNext"), el("spacing", {"before": em(1.2), "after": em(0.4)}),
                       el("jc", {"val": first.align if first else "left"})],
@@ -192,10 +205,10 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                     _size(first.half_points if first else settings.half_points)]),
         _style(DRAFTING_NOTE, "Drafting Note", based_on=NORMAL, priority=30, custom=True,
                props=[el("keepLines"), el("pBdr", None, _border("left", _NOTE_RULE, 24, 8)), _shade(_NOTE_FILL),
-                      el("spacing", {"before": em(0.4), "after": em(0.4)}), el("ind", {"left": 227, "right": 113})]),
+                      el("spacing", {"before": em(0.4), "after": em(0.4)}), el("ind", {"left": NOTE_INDENT, "right": 113})]),
         _style(CODE, "Code", based_on=NORMAL, priority=31, custom=True,
                props=[_shade(_CODE_FILL), el("spacing", {"before": 0, "after": 0, "line": 240, "lineRule": "auto"}),
-                     el("ind", {"left": 113, "right": 113}), el("jc", {"val": "left"})],
+                     el("ind", {"left": CODE_INDENT, "right": 113}), el("jc", {"val": "left"})],
                run=[_fonts(_MONOSPACE), _size(half_points(0.9))]),
         _style(TABLE_GRID, "Table Grid", kind="table", based_on="TableNormal", priority=39,
                table=el("tblPr", None, el("tblBorders", None, *(_border(side, _RULE, 4)

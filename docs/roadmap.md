@@ -112,10 +112,12 @@ values appear only as the cached results of fields. Decided in
 - **Verification (done).** Every part validated against the ISO/IEC 29500 schemas (fetched in CI, not
   stored), well-formedness fuzzing, a determinism test, and LibreOffice opening the documents through
   UNO as the oracle (a `docx` CI job)
-- **Next.** Numbering structure in the render tree; a planner that maps the tree to Word (lists,
-  levels, bookmarks, cross-references composed of `REF` fields, cached values from a model of Word's
-  numbering); the body writer with the table of contents, title block, attachments and signature
-  blocks; a corpus checked against the plain-text oracle, also after edits made through UNO; a manual
+- **Body writer (done, awaiting the planner).** `numbering.xml`, numbered paragraphs, bookmarks, `REF`
+  fields with cached results, term hyperlinks, and every block and inline, written from a `DocxPlan`
+  (`resolve/docx_plan.py`); a plan with no numbering stands in until the planner is wired
+- **Next.** The planner that maps the tree to Word (lists, levels, bookmarks, cross-references composed
+  of `REF` fields, cached values from a model of Word's numbering); the table of contents, title block,
+  attachments and signature blocks; a corpus checked against the plain-text oracle, also after edits made through UNO; a manual
   Word checklist for releases
 
 ### v0.6 — PDF

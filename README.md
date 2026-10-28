@@ -141,15 +141,17 @@ computed as their cached results, so a lawyer who inserts a clause gets the numb
 updated by Word
 ([ADR 0008](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/decisions/0008-docx-word-native.md)).
 
-**What is there today** is the package, not yet the body of the document: a valid `.docx` (checked against the
-ISO/IEC 29500 schemas, and opened in LibreOffice in CI) with styles generated from the style template
+**What is there today** is the package and the body writer, not yet the numbering: a valid `.docx` (checked
+against the ISO/IEC 29500 schemas, and opened in LibreOffice in CI) with styles generated from the style template
 (`Normal`, `heading 1` to `heading 5`, `Title`, `Quote`, `toc 1` to `toc 5`, `Hyperlink`, ...), the page size
 and margins, a running header and footer from `page.header` and `page.footer` (the default footer is "3 / 12"
 as live page fields), the document's title and language, `w:updateFields` so Word refreshes fields when it
-opens the file (`docx.update_fields_on_open`), and deterministic output. **The body is interim:** the title,
-the headings as Word headings, and every other block as plain text, with **no numbers, references, contents,
-title block, attachments or signature blocks yet**, and every render reports the Warning
-`render-docx-interim` to say so. Do not send such a file as a contract. Settings Word
+opens the file (`docx.update_fields_on_open`), and deterministic output. The body writer lays out headings,
+paragraphs, lists (with the numbering definitions, bookmarks and `REF` fields a plan names), quotes, drafting
+notes, code, tables with a repeated header row, rules, links, defined terms and the template view's labels and
+choices. **The file is still interim:** until the planner that decides the numbering is wired in, it carries
+**no numbers, no cross-reference fields, and no title block, contents, attachments or signature blocks**, and
+every render reports the Warning `render-docx-interim` to say so. Do not send such a file as a contract. Settings Word
 cannot express (a `%` length, say) are an error for DOCX only. See
 [Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md#docx)
 and the [roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md).
