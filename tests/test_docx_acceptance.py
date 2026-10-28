@@ -180,8 +180,8 @@ def normalise(written: str, shown: str, tree: RenderTree) -> tuple[list[str], li
     page numbers of the contents. The formats differ by nature in these ways, each undone here and in no other:
 
     * a rule (``---``) and a signing line (``____``) are borders of paragraphs and cells in the DOCX, not text;
-    * a table is pipes and a separator row in the text and cells in the DOCX, which LibreOffice's text export lays out as a
-      line a cell or a line a row, as its version does: a row is compared as the words of its cells, however many lines they take;
+    * a table is pipes and a separator row in the text and cells in the DOCX (tests/lo/uno_text.py reads one line a cell): a row is
+      compared as the words of its cells, however many lines they take, so that a text laid out by row would do as well;
     * a quote's ``>`` is the indent of a style in the DOCX;
     * a link's ``<url>`` after its text is the target of the hyperlink;
     * a condition label (§15.8) and the label of a drafting note are in ``[ ]`` in the text and a styled run in the DOCX,
@@ -241,8 +241,8 @@ def normalise(written: str, shown: str, tree: RenderTree) -> tuple[list[str], li
                 pages.append(int(entry[2]))
     shown_lines = [line for line in squeezed if line]
 
-    # A table's cells are one line each in some LibreOffice versions and one line a row in others: a row that the text
-    # writer prints on one line is read from as many lines of LibreOffice's as it takes to say the same words.
+    # A row that the text writer prints on one line is read from as many lines of LibreOffice's as it takes to say the
+    # same words (one a cell, as tests/lo/uno_text.py reads the document, but not by that alone).
     written_lines: list[str] = []
     seen: list[str] = []
     cursor = 0
@@ -336,8 +336,8 @@ def test_the_comparison_catches_a_wrong_number_a_missing_line_and_a_wrong_page_o
 
 @pytest.mark.libreoffice
 def test_a_table_row_on_one_line_reads_as_the_same_row_on_several() -> None:
-    """LibreOffice's text export lays a table out as a line a cell (24.2) or a line a row (later versions): both are the
-    document, so both pass."""
+    """A table laid out as a line a cell (as the document is read) or a line a row (as some LibreOffice text filters write
+    it) is the same table, so both pass."""
     case = next(c for c in shown_corpus()["default"] if c.name == "documents/features.lgd")
     assert case.shown is not None
     text = case.shown.text
