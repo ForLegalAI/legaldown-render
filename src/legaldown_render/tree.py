@@ -450,6 +450,9 @@ class ContentsEntry:
     title: tuple[Inline, ...]
     anchor: str | None
     condition_label: str | None = None
+    #: The section's :attr:`Section.unit` for an entry that lists a section, so that a writer keys the entry on the
+    #: unit and does not count positions; None for the attachments heading and for an attachment.
+    unit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
