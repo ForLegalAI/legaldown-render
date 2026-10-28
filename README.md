@@ -150,7 +150,7 @@ output. **Numbering and cross-references are live:** headings, list items and nu
 numbering definitions (headings by the heading styles, nested lists restarting by structure), and a
 `{{ref: clause}}` is `REF` fields on bookmarks whose cached results are the text the plain-text writer prints, so
 "1(b)(ii)" or "I.A.1" stays right when a lawyer inserts a clause and updates fields. A defined term or an attachment
-reference is an internal link. Where Word cannot draw what the renderer does (letters past 26, a label that shows the
+reference is an internal link. A reference that Word's fields cannot reproduce is written as its text (it will not follow edits) and reported. Where Word cannot draw what the renderer does (letters past 26, a label that shows the
 section's number in a list item, alternatives that share a number, a list restarted by a fixed setting), the render
 reports it as a `render-docx-*` Warning or Info with the line, see
 [the conformance notes](https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md). The body writer also

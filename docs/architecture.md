@@ -254,7 +254,7 @@ resolver and for the style check), and checks every placement against the number
 simulating Word's counters (`resolve/docx_numbering.py`), so that what Word draws is what the resolver numbered, or a
 diagnostic says why not. It is a planning step, not a stage of the pipeline: `render(format="docx")` calls it after
 resolution, passes the plan to the writer, and adds its diagnostics (named with the document's file, each finding once,
-in the order of their lines) to the result's. The style check, `docx_style_errors(style)`, runs earlier still, in
+ordered by line with the renderer's own) to the result's. The style check, `docx_style_errors(style)`, runs earlier still, in
 `style/docx.py:docx_settings`, before rendering (ADR 0006).
 
 **Word's list semantics**, stated once (the planner and its diagnostics rely on them):
@@ -297,12 +297,19 @@ counter. The cover with the fewest fields wins, then the fewest using `\t`, then
 the text of `references.format` is literal around it, and with two `{designation}` the same cover is written twice.
 `\t` (Word's switch that suppresses the words around a counter; LibreOffice ignores it) is used only where it leaves
 the bare counter (`Article I` gives `I`, `§ 3` gives `3`), never where the field's text holds a delimiter
-(`(a)`, `a)`, `1.2`, `No. 1`). Each field's cached result is **Word's** value (the simulator's), and `cached_lo` what
-LibreOffice shows. A unit that a field points at has a bookmark (its anchor's, or a hidden one); a reference to an
-item or paragraph the style does not number is the designation of its section (`ref-not-enumerated`), covered as one.
-Under the `none` scheme a heading is a field for the bookmarked text (`REF bookmark \h`) and the item's pieces
-follow after a space. A `RefPlan` is made once per target, keyed by `CrossRef.target_unit`; `exact` says that
-the cached results read as the renderer's text.
+(`(a)`, `a)`, `1.2`, and also a period: `No. 1`, so `No. {n}` has no `\t` form; this is conservative, because
+what Word does with a delimiter is not known, and is on the manual Word checklist). Each field's cached result is
+**Word's** value (the simulator's), and `cached_lo` what LibreOffice shows. A unit that a field points at has a
+bookmark (its anchor's, or a hidden one); a reference to an item or paragraph the style does not number is the
+designation of its section (`ref-not-enumerated`), covered as one. Under the `none` scheme a heading is a field for the
+bookmarked text (`REF bookmark \h`) and the item's pieces follow after a space; what the field returns is what the
+heading's runs show (`_shown`), which can differ from the renderer's designation by white space, and then the
+reference is reported. A `RefPlan` is made once per target, keyed by `CrossRef.target_unit`; `exact` says that the
+cached results read as the renderer's text. **When no cover exists** (a heading level skipped before the target under
+a `{n}`-style scheme, text around a counter that `\t` cannot drop) the reference is the renderer's text with no field
+(`RefPlan.fixed`): it reads right when the file is opened and does not follow edits, and `render-docx-reference` says
+so (one finding for the references that fail alike, naming the first and how many more). Nothing that Word could
+compute is written as literal text otherwise.
 
 **Bookmarks** (`resolve/docx_bookmarks.py`). The planner names bookmarks and the writer gives them ids. Every anchor of
 the tree has one, referenced or not: `ld_<anchor>` for a section, list item or paragraph, `lddef_<id>` for a
@@ -311,7 +318,13 @@ as `_`. A name is used only if it is valid, at most 40 characters, nothing but d
 ignoring case (Word compares names so); otherwise, and for a unit a field needs that has no anchor, it is hidden:
 `_Ld<k>`, counted in document order. The table of contents uses `_Toc<nine digits>` from 100000001. The writer wraps
 the paragraph's title or first paragraph in `UnitPlan.bookmarks`, then `toc_bookmark`; a term reference and an
-internal link point at `plan.anchors`.
+internal link point at `plan.anchors`. **A bookmark holds text only when a field returns that text** (`REF \h`, a
+heading under the `none` scheme): every other bookmark is a point at the start of the paragraph
+(`UnitPlan.collapsed`), because `REF \n` needs only the paragraph, and a field inside the bookmark it points at is
+a self-reference that Word cannot show and LibreOffice expands without end. Under the `none` scheme a heading whose
+title holds a reference that leads back to the heading, directly or through the titles of other headings, would have
+exactly that; the plan lists those references (`UnitPlan.literal_refs`, by target) and the writer writes them as
+their text, and `render-docx-reference-cycle` says so (the renderer already warns with `render-designation-cycle`).
 
 **The table of contents.** `ContentsEntry.unit` (the section's unit; None for the attachments heading and an
 attachment) keys each entry of `tree.contents` to its section. `plan.toc` lists the entries in order with
@@ -326,9 +339,10 @@ complex `TOC` field that uses them is written with the title block.
 starts at a fixed number), `number-mismatch` (any other difference: the first unit of a run that Word counts off by the
 same amount, with how many follow; it does not occur without an alternative that shares a number), `reference` (a
 cross-reference that cannot be built from fields, because a heading level is skipped before the target with a
-`{n}`-style scheme, or Word draws text around a counter that `\t` cannot drop (`({n})`, `{n}:`, `No. {n}`): it is one
-field for the target's own number, which Word reads differently; or one that reads differently in Word for a reason
-that no diagnostic of a unit already gives), and, as information, `static-restart` (a list that restarts at 1 by a
+`{n}`-style scheme, or Word draws text around a counter that `\t` cannot drop (`({n})`, `{n}:`, `No. {n}`): it is
+written as fixed text; or one that reads differently in Word for a reason that no diagnostic of a unit already
+gives; references that fail alike are one finding), `reference-cycle` (a heading's title holds a reference that
+leads back to it: written as text), and, as information, `static-restart` (a list that restarts at 1 by a
 fixed setting) and `reference-word-only` (a cover relies on `\t`, which LibreOffice ignores, once per document). A
 heading level that is skipped is the Core Error `heading-skip`; the plan only notes it on the unit.
 
@@ -411,7 +425,7 @@ Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can ev
 `ref-not-enumerated`, `path-not-relative` and `path-outside-root` (Errors for a file reference that is
 not relative, or that leaves the document root, §2.3; reported here because validator 0.4 checks
 neither), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id), and `render-docx-interim` (a Warning on every DOCX render, while the DOCX body is incomplete), and the rules the DOCX planner reports on what Word draws differently from the other formats (`render-docx-section-label`, `-list-depth`, `-letter-overflow`, `-roman-overflow`, `-shared-counter`, `-number-mismatch`, `-reference`, as Warnings, `-static-restart` and `-reference-word-only` as Infos; see "The DOCX planner"). The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id), and `render-docx-interim` (a Warning on every DOCX render, while the DOCX body is incomplete), and the rules the DOCX planner reports on what Word draws differently from the other formats (`render-docx-section-label`, `-list-depth`, `-letter-overflow`, `-roman-overflow`, `-shared-counter`, `-number-mismatch`, `-reference`, `-reference-cycle`, as Warnings, `-static-restart` and `-reference-word-only` as Infos; see "The DOCX planner"). The validator's
 diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
 `file:line:`.
 
@@ -592,6 +606,6 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_docx_body.py` | The DOCX body from hand-made plans: numbering definitions, `w:numPr`/`w:ind`/alternatives, bookmarks and `REF` fields with cached results, hyperlinks, every inline and block, escaping, schema validity (marker `ooxml_schema`) and a LibreOffice round trip of headings, nested lists and references whose cached values are wrong on purpose (marker `libreoffice`) |
 | `tests/test_docx_escaping.py` | Well-formedness of every part for any text, with a seeded fuzz and the characters XML cannot carry |
 | `tests/test_docx_validation.py` | Every part of every generated document against the ISO/IEC 29500-4 schemas (marker `ooxml_schema`; needs lxml and `python tests/schemas/fetch.py`) |
-| `tests/test_docx_roundtrip.py` | LibreOffice as the oracle of the numbering and the cross-references: every document of the corpus (the tests', the specification's, stress documents) under the default, outline, continental, mixed and `none` schemes, with every cached field result made wrong (`XXX`), every numbered paragraph marked and a line per reference added; the number LibreOffice draws and every reference it computes equal the renderer's, modulo the gaps the plan reports (marker `libreoffice`) |
+| `tests/test_docx_roundtrip.py` | LibreOffice as the oracle of the numbering and the cross-references, in one LibreOffice session: every document of the corpus (the tests', the specification's, stress documents with cycles and unanchored ancestors) under the default, outline, continental, mixed and `none` schemes, with every cached field result made wrong (`XXX`), every numbered paragraph marked and a line per reference added; the number LibreOffice draws, every reference it computes and every body paragraph's text equal what the file cached and the renderer wrote, modulo the gaps the plan reports (`\t` ignored, letters past 26, labels that need the section, alternatives; the table of contents is not written yet, so its entries and the `_Toc` bookmarks are not exercised); and edit-then-update (`tests/lo/uno_edit.py`): items and headings inserted before the targets as a lawyer does, fields updated, every reference and the numbers equal the renderer's for the edited source (marker `libreoffice`) |
 | `tests/test_docx_libreoffice.py` | The documents opened in LibreOffice through UNO (`tests/lo/uno_export.py`), fields updated: the words in order, header, footer, page count (marker `libreoffice`; skipped without `soffice` and `python3-uno`) |
 | `tests/conformance/` | Every example and fixture in the specification repository renders, every internal link has a target, and each invalid fixture renders its rule's failure marker. Needs `$LEGALDOWN_SPEC_DIR` or a sibling `../LegalDown` checkout |
