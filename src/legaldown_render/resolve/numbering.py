@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import re
 
-from ..style.model import LevelFormat, Numbering
+from ..style.model import LevelFormat, Numbering, Style
+from ..tree import NumberingFormats
 
 _ROMAN = (
     (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
@@ -94,3 +95,17 @@ def extend(designation: str, piece: str, *, textual: bool) -> str:
     if textual:
         return f"{designation} {piece.lstrip('.')}"
     return designation + piece
+
+
+def formats_of(style: Style) -> NumberingFormats:
+    """The numbering formats *style* gives (``RenderTree.formats``): those the resolver writes labels and
+    designations with, and the DOCX planner builds its numbering from."""
+    enumeration = style.enumeration
+    return NumberingFormats(
+        scheme=style.numbering.scheme,
+        headings=() if style.numbering.scheme == "none" else heading_levels(style.numbering),
+        enumerated=tuple(enumeration.levels) if enumeration.enabled or enumeration.ordered == "enumerate" else (),
+        renumber=RENUMBERED if enumeration.ordered == "renumber" else None,
+        paragraphs=style.paragraphs.format if style.paragraphs.numbered else None,
+        reference=style.references.format,
+    )

@@ -20,6 +20,7 @@ document is touched). What it converts:
   has no use for), ``rgb()``, ``hsl()``, and the sixteen basic names with
   ``orange``; any other name is an error asking for a hexadecimal colour.
 * The first family of ``typography.font_family``.
+* The numbering labels, which Word's level text must be able to write (``resolve.docx_plan.docx_style_errors``).
 
 A message names the setting and what is wrong with it and never quotes the
 value, so it is safe to show for a style from somebody else.
@@ -32,6 +33,7 @@ import re
 from dataclasses import dataclass
 
 from ..errors import StyleError
+from ..resolve.docx_plan import docx_style_errors
 from .model import Style
 
 #: A browser starts from 16 px; the size of text written in ``em`` or ``rem``
@@ -199,6 +201,7 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
             half_points=round((size if size is not None else font_points) * 2), bold=bold, italic=heading.italic,
             caps=heading.transform == "uppercase", small_caps=heading.transform == "small-caps", align=heading.align)
 
+    problems.items.extend(docx_style_errors(style))
     if problems.items:
         raise StyleError(f"'{style.name}'" if trusted else "'untrusted style'", problems.items)
     return DocxSettings(
