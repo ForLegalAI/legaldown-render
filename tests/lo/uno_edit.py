@@ -1,14 +1,15 @@
 #!/usr/bin/python3
 """Edit DOCX files in headless LibreOffice through UNO the way a lawyer does, update the fields, and write what
 the document says: for each job, a paragraph is inserted before the first paragraph that holds some text (so that
-it takes that paragraph's numbering and style, as pressing Enter at its start does), then every field and index is
-updated and the body is exported as plain text (``JOB.txt``, UTF-8).
+it takes that paragraph's numbering and style, as pressing Enter at its start does), or that paragraph is deleted,
+then every field and index is updated and the body is exported as plain text (``JOB.txt``, UTF-8).
 
 Run it with the system Python that has the ``uno`` module, **not** with the project's virtual environment:
 
     /usr/bin/python3 tests/lo/uno_edit.py OUTDIR JOBS.json
 
-``JOBS.json`` is a list of ``{"name": "job", "file": "/path/doc.docx", "edits": [["text of a paragraph", "new"], ...]}``.
+``JOBS.json`` is a list of ``{"name": "job", "file": "/path/doc.docx", "edits": [["text of a paragraph", "new"], ...]}``;
+an edit whose new text is ``null`` deletes the paragraph instead.
 One LibreOffice instance serves every job. Exit status 0 when every job was exported.
 """
 from __future__ import annotations
@@ -47,12 +48,20 @@ def _connect(pipe: str, process: subprocess.Popen[bytes]) -> object:
     raise SystemExit("soffice did not accept a connection in time")
 
 
-def _insert_before(document: object, match: str, new: str) -> None:
+def _edit(document: object, match: str, new: str | None) -> None:
+    """Insert a paragraph with the text *new* before the first paragraph that holds *match*, or, when *new* is None,
+    delete that paragraph (with its break, as Delete at its end does)."""
     text = document.getText()
     paragraphs = text.createEnumeration()
     while paragraphs.hasMoreElements():
         paragraph = paragraphs.nextElement()
         if paragraph.supportsService("com.sun.star.text.Paragraph") and match in paragraph.getString():
+            if new is None:
+                cursor = text.createTextCursorByRange(paragraph.getStart())
+                cursor.gotoEndOfParagraph(True)
+                cursor.goRight(1, True)
+                cursor.setString("")
+                return
             cursor = text.createTextCursorByRange(paragraph.getStart())
             text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
             cursor.goLeft(1, False)
@@ -79,7 +88,7 @@ def edit(out_dir: str, jobs: list[dict]) -> None:
                 raise SystemExit(f"LibreOffice could not open {job['file']}")
             try:
                 for match, new in job["edits"]:
-                    _insert_before(document, match, new)
+                    _edit(document, match, new)
                 for _ in range(2):  # page numbers and indexes settle after the first layout
                     document.getTextFields().refresh()
                     document.refresh()

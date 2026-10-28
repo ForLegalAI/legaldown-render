@@ -8,6 +8,7 @@ from __future__ import annotations
 import functools
 import random
 import re
+import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from legaldown_render.resolve.docx_plan import (
     FieldSeg,
     Literal_,
     Segment,
+    _components,
     _Planner,
     docx_style_errors,
     plan_docx,
@@ -1665,6 +1667,104 @@ def test_a_reference_in_a_heading_to_a_unit_inside_another_heading_is_still_a_fi
     _, plan, diagnostics = planned(body, overrides=NONE)
     assert not any(u.literal_refs for u in plan.units.values())
     assert "render-docx-reference-cycle" not in rules(diagnostics)
+
+
+def test_two_cyclic_headings_with_the_same_text_are_both_reported() -> None:
+    body = "# Same {{ref: a}} {#a}\n\n# Same {{ref: b}} {#b}\n\n# Same {{ref: c}} {#c}\n"
+    tree, plan, diagnostics = planned(body, overrides=NONE)
+    found = [d for d in diagnostics if d.rule == "render-docx-reference-cycle"]
+    assert [d.line for d in found] == [section.line for section in tree.sections]
+    assert all(f"line {d.line}" in d.message for d in found)
+
+
+def test_the_headings_that_lead_to_each_other_are_found_by_components_not_by_walking_from_each() -> None:
+    # a ring of three with a tail into it and a chain out of it: only the ring is cyclic, whatever the order
+    successors = {"a": ["b"], "b": ["c"], "c": ["a", "d"], "t": ["a"], "d": ["e"], "e": []}
+    component, order = _components(successors)
+    assert component["a"] == component["b"] == component["c"]
+    assert len({component[n] for n in "abctde"}) == 4
+    assert [sorted(members) for members in order if len(members) > 1] == [["a", "b", "c"]]
+    # each component comes after those it leads to
+    assert order.index(["e"]) < order.index(["d"]) < order.index(next(m for m in order if "a" in m))
+    assert order.index(["t"]) == len(order) - 1
+
+
+def test_the_components_of_a_graph_agree_with_what_each_node_can_reach() -> None:
+    rng = random.Random(3)
+    for _ in range(200):
+        size = rng.randint(1, 9)
+        names = [f"n{i}" for i in range(size)]
+        graph = {n: [m for m in names if rng.random() < 0.25] for n in names}
+        component, _ = _components(graph)
+
+        def reaches(start: str, goal: str, graph: dict[str, list[str]] = graph) -> bool:
+            seen, pending = set(), list(graph[start])
+            while pending:
+                node = pending.pop()
+                if node == goal:
+                    return True
+                if node not in seen:
+                    seen.add(node)
+                    pending += graph[node]
+            return False
+
+        for a in names:
+            for b in names:
+                assert (component[a] == component[b]) == (a == b or (reaches(a, b) and reaches(b, a)))
+
+
+def test_a_very_long_chain_of_components_does_not_hit_the_recursion_limit() -> None:
+    chain = {f"n{i}": [f"n{i + 1}"] for i in range(50_000)}
+    component, order = _components(chain)
+    assert len(order) == 50_001 and len(set(component.values())) == 50_001
+    ring = {f"n{i}": [f"n{(i + 1) % 50_000}"] for i in range(50_000)}
+    _, order = _components(ring)
+    assert len(order) == 1 and len(order[0]) == 50_000
+
+
+def _chain(count: int, close: bool) -> str:
+    """Headings that each refer to the one before (and the first to the last, with *close*): under the none scheme
+    each reference is a field for the heading's text."""
+    parts = [f"# H0 {{{{ref: h{count - 1}}}}} {{#h0}}\n" if close else "# H0 {#h0}\n"]
+    parts += [f"# H{i} see {{{{ref: h{i - 1}}}}} {{#h{i}}}\n" for i in range(1, count)]
+    return "\n".join(parts)
+
+
+@pytest.mark.parametrize("close", [False, True])
+def test_the_headings_of_a_long_chain_of_references_are_planned_in_linear_time(close: bool) -> None:
+    def seconds(count: int) -> float:
+        tree = render(FRONT + _chain(count, close), format="text", overrides=NONE).tree
+        best = float("inf")
+        for _ in range(2):
+            started = time.perf_counter()
+            plan_docx(tree)
+            best = min(best, time.perf_counter() - started)
+        return best
+
+    small, large = seconds(1000), seconds(4000)
+    assert large < 6 * max(small, 0.02), (small, large)  # four times the headings: a walk from each would be sixteen
+    assert large < 2.0
+
+
+def test_a_ring_of_references_in_titles_is_all_text_and_a_chain_all_fields() -> None:
+    _, ring, _ = planned(_chain(30, True), overrides=NONE)
+    assert all(ring.units[f"s{i}"].literal_refs for i in range(1, 31))
+    _, chain, _ = planned(_chain(30, False), overrides=NONE)
+    assert not any(unit.literal_refs for unit in chain.units.values())
+
+
+def test_the_text_a_heading_field_returns_is_made_of_the_fields_in_the_title_it_stands_for() -> None:
+    # A's title refers to the item under it (written as text: the item's designation starts with A's own text); B's
+    # refers to A, a field for A's text, which includes the text A's title has for that reference.
+    body = "# A {{ref: i}} {#a}\n\n- x {#i}\n\n# B {{ref: a}} {#b}\n\nRefs {{ref: a}} {{ref: b}} {{ref: i}}\n"
+    tree, plan, _ = planned(body, overrides=NONE)
+    a, b = tree.sections
+    assert plan.units[a.unit].literal_refs == ("u1",) and plan.units[b.unit].literal_refs == ()
+    texts = {t: cached(plan.refs[t].segments) for t in plan.refs}
+    title_of_a = next(i.text for i in iter_tree_inlines(tree) if isinstance(i, CrossRef) and i.target_unit == "u1")
+    # B's heading text is "B " and what the field for A gives, which is A's text: "A " and the reference as text
+    assert texts[a.unit] == "A " + title_of_a
+    assert texts[b.unit] == "B " + texts[a.unit]
 
 
 # -- What the bookmark returns is what the runs show ---------------------------------------------------------------

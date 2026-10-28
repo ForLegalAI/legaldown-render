@@ -20,8 +20,9 @@ The exported text is then compared with what the renderer wrote (the labels and 
 prints), **modulo the gaps the plan documents**, each of which the plan reports with a diagnostic:
 
 * a unit whose number Word draws differently from the renderer's (a letter counter past 26, a label that needs the
-  section's number, a list deeper than Word's nine levels, alternatives, which the next stage of the planner
-  places): LibreOffice must agree with the plan (the simulator), and the plan must say so;
+  section's number where the heading list cannot show it, a list deeper than Word's nine levels): LibreOffice must
+  agree with the plan (the simulator), and the plan must say so; a later alternative that shares a number has no number
+  of its own (``numId`` 0) and shows the holder's as a field, which LibreOffice updates to the renderer's;
 * ``\\t`` is ignored by LibreOffice (it is Word's switch), so a reference built with it reads there as
   ``FieldSeg.cached_lo`` says;
 * LibreOffice fills a skipped heading level with its start value, which is what the simulator models for headings.
@@ -43,7 +44,7 @@ from test_docx_plan import ALTERNATIVES, units
 
 from legaldown_render import DocumentError, render
 from legaldown_render.resolve.docx_plan import DocxPlan, FieldSeg, Literal_, plan_docx
-from legaldown_render.tree import CrossRef, ListItem, Paragraph, RenderTree, Section, iter_tree_inlines
+from legaldown_render.tree import CrossRef, ListItem, Paragraph, RenderTree, Section, iter_tree_inlines, plain_text
 from legaldown_render.writers.docx.ooxml import Bookmarks, p, text_run
 from legaldown_render.writers.docx.package import Relationships
 from legaldown_render.writers.docx.runs import InlineWriter
@@ -196,7 +197,7 @@ See {{ref: a}} {{ref: b}} {{ref: c}} {{ref: d}} {{ref: it}}.
 ## Sub one {#s1}
 
 - courts item {#ci when=forum:courts}
-- arbitration item {#ai when=forum:arb}
+- arbitration item {#ci when=forum:arb}
   - nested under alt {#an}
 - common item {#cm}
 
@@ -208,6 +209,108 @@ See {{ref: a}} {{ref: b}} {{ref: c}} {{ref: d}} {{ref: it}}.
 
 Ref {{ref: d}} {{ref: s1}} {{ref: sa}} {{ref: ci}} {{ref: an}} {{ref: cm}} {{ref: last}}
 """,
+    "alternatives in threes": ALTERNATIVES + """
+# Intro {#intro}
+
+Para one. {#pc when=forum:courts}
+
+Para arbitration. {#pc when=forum:arb}
+
+Para expert. {#pc when=forum:expert}
+
+Para next. {#pn}
+
+# Disputes {#d when=forum:courts}
+
+## Sub one {#s1}
+
+## Sub two {#s2}
+
+# Disputes {#d when=forum:arb}
+
+## Sub alt {#sa}
+
+- quoted item {#q}
+
+# Disputes {#d when=forum:expert}
+
+## Expert one {#e1}
+
+## Expert two {#e2}
+
+## Expert three {#e3}
+
+# Items {#items}
+
+- courts {#ci when=forum:courts}
+  - courts child {#cc}
+- arbitration {#ci when=forum:arb}
+  - arbitration child one {#ac1}
+  - arbitration child two {#ac2}
+- expert {#ci when=forum:expert}
+- common {#cm}
+  - common child {#cmc}
+
+# Last {#last}
+
+## Last one {#l1}
+
+Ref {{ref: d}} {{ref: s1}} {{ref: s2}} {{ref: sa}} {{ref: q}} {{ref: e1}} {{ref: e3}} {{ref: ci}} {{ref: cc}}
+{{ref: ac1}} {{ref: ac2}} {{ref: cm}} {{ref: cmc}} {{ref: pc}} {{ref: pn}} {{ref: last}} {{ref: l1}}
+""",
+    "nested titles": FRONT + """
+# A {{ref: i}} {#a}
+
+- x {#i}
+
+# B {{ref: a}} {#b}
+
+# C {{ref: b}} and {{ref: a}} {#c}
+
+Refs {{ref: a}} {{ref: b}} {{ref: c}} {{ref: i}}
+""",
+    "qualified": FRONT + """
+# Alpha {#alpha}
+
+Intro. {#p1}
+
+- first {#i1}
+  - nested one {#n1}
+  - nested two {#n2}
+    - deep {#d1}
+      - deeper {#d2}
+        - deepest {#d3}
+- second {#i2}
+  1. ordered {#o1}
+  1. ordered two {#o2}
+
+Between.
+
+- third {#i3}
+
+## Beta {#beta}
+
+- beta item {#bi}
+  - beta nested {#bn}
+
+### Gamma {#gamma}
+
+#### Delta {#delta}
+
+##### Epsilon {#eps}
+
+- five item {#ei}
+  - five nested {#en}
+- five two {#ej}
+
+# Second {#second}
+
+- x {#sx}
+  - y {#sy}
+
+Ref {{ref: i1}} {{ref: n2}} {{ref: d3}} {{ref: o2}} {{ref: i3}} {{ref: beta}} {{ref: bn}} {{ref: ei}} {{ref: en}}
+{{ref: ej}} {{ref: sy}} {{ref: p1}}
+""",
 }
 
 #: The settings that give the numbering words and symbols, which Word's ``\t`` switch drops from a reference.
@@ -217,11 +320,15 @@ WORDS: dict[str, dict] = {
     "section-sign": {"overrides": {"numbering.levels": [
         {"counter": "decimal", "label": "§ {n}", "ref": "{n}"}], "references.format": "§ {designation}"}},
     "paragraphs": {"overrides": {"paragraphs.numbered": True}},
+    # the items and the paragraphs of a section share the heading list's level: the numbers are restarted where the
+    # resolver counts them apart
+    "shared level": {"style": "continental", "overrides": {"paragraphs.numbered": True, "paragraphs.format": {
+        "counter": "decimal", "label": "{section}.{n}", "ref": ".{n}"}}},
 }
 
 #: What a diagnostic of the plan has to say when Word numbers a unit differently from the renderer.
-EXPLAINING = {"render-docx-number-mismatch", "render-docx-section-label", "render-docx-letter-overflow",
-              "render-docx-roman-overflow", "render-docx-list-depth", "render-docx-shared-counter"}
+EXPLAINING = {"render-docx-section-label", "render-docx-letter-overflow", "render-docx-roman-overflow",
+              "render-docx-list-depth"}
 
 WRONG = "XXX"
 OPEN, CLOSE = "⟦", "⟧"
@@ -504,10 +611,12 @@ def test_the_round_trip_reaches_numbers_references_and_every_gap() -> None:
     """The corpus is not vacuous: it numbers headings, items and paragraphs, it has references of every kind, and it
     reaches each documented gap (``\\t``, an overflowing letter counter, a label that needs the section)."""
     seen_rules: set[str] = set()
+    seen_causes: set[str] = set()
     references = suppressing = numbered = hidden = 0
     for variant in list(VARIANTS) + list(WORDS):
         for case in round_trip(variant):
             seen_rules |= case.rules
+            seen_causes |= {cause for unit in case.plan.units.values() for cause in unit.cause}
             references += len(case.plan.refs)
             numbered += sum(1 for unit in case.plan.units.values() if unit.count is not None)
             suppressing += sum(any(isinstance(s, FieldSeg) and s.suppress_text for s in r.segments)
@@ -515,7 +624,9 @@ def test_the_round_trip_reaches_numbers_references_and_every_gap() -> None:
             hidden += sum(isinstance(s, FieldSeg) and s.bookmark.startswith("_Ld")
                           for r in case.plan.refs.values() for s in r.segments)
     assert numbered > 200 and references > 100 and suppressing > 0 and hidden > 0
-    assert {"render-docx-letter-overflow", "render-docx-section-label"} <= seen_rules
+    assert {"render-docx-letter-overflow", "render-docx-section-label", "render-docx-shared-counter"} <= seen_rules
+    assert "render-docx-number-mismatch" not in seen_rules
+    assert {"alternative", "reserved-level", "resync", "restart-alternative", "restart-section"} <= seen_causes
 
 
 def test_the_cached_results_are_wrong_in_the_file_and_libreoffice_does_not_read_them() -> None:
@@ -603,8 +714,207 @@ def test_the_references_follow_the_insertions_a_lawyer_makes(variant: str) -> No
     assert [squeeze(line) for line in before.splitlines() if "Refs:" in line] != expected  # the edits moved them
 
 
-@pytest.mark.parametrize("variant", ["default", "outline", "none"])
+@pytest.mark.parametrize("variant", ["default", "outline", "continental", "none"])
 def test_the_numbers_follow_the_insertions_a_lawyer_makes(variant: str) -> None:
     said, written = edited()[variant]
     assert [squeeze(line) for line in said.lstrip("\ufeff").splitlines() if squeeze(line)] == [
         squeeze(line) for line in written.splitlines() if squeeze(line)]
+
+
+# -- Clauses and nested items inserted under the continental style --------------------------------------------------
+
+
+CLAUSES = FRONT + """
+# Alpha {#alpha}
+
+- clause one {#c1}
+  - nested of one {#n1}
+- clause two {#c2}
+  - nested of two {#n2}
+    - deep of two {#d2}
+
+Refs: {{ref: c1}} {{ref: n1}} {{ref: c2}} {{ref: n2}} {{ref: d2}}
+"""
+
+#: A clause and a nested item inserted before the second clause and its nested item.
+CLAUSE_EDITS = [
+    ("clause two", "NEW clause", "- clause two {#c2}", "- NEW clause"),
+    ("nested of two", "NEW nested", "  - nested of two {#n2}", "  - NEW nested"),
+]
+
+#: A heading section whose sub-headings follow numbered clauses: Word's counter of the level is shared with the clauses,
+#: so the first sub-heading is restarted at the number the renderer gives it (a fixed value).
+RESYNCED = FRONT + """
+# Alpha {#alpha}
+
+- clause one {#c1}
+- spare clause
+- clause two {#c2}
+
+## Beta {#beta}
+
+## Gamma {#gamma}
+
+Refs: {{ref: c1}} {{ref: c2}} {{ref: beta}} {{ref: gamma}}
+"""
+
+
+def applied(source: str, edits: list[tuple[str, str]]) -> str:
+    """*source* with each new line put before the line it goes before."""
+    for before, new in edits:
+        source = source.replace(before, f"{new}\n{before}", 1)
+    return source
+
+
+@functools.cache
+def clauses() -> dict[str, str]:
+    """What LibreOffice says about the clause document after the two insertions, under the continental style and under
+    the default (whose nested lists are the family's own)."""
+    require_libreoffice()
+    edits = [(match, new) for match, new, _, _ in CLAUSE_EDITS]
+    jobs = {style: (render(CLAUSES, format="docx", **settings).binary, edits)
+            for style, settings in {"continental": {"style": "continental"}, "default": {}}.items()}
+    return libreoffice_edit(jobs)  # type: ignore[arg-type]
+
+
+def lines_of(text: str) -> list[str]:
+    return [squeeze(line) for line in text.lstrip("\ufeff").splitlines() if squeeze(line)]
+
+
+@pytest.mark.parametrize("style", ["continental", "default"])
+def test_a_clause_and_a_nested_item_inserted_in_word_are_numbered_as_the_renderer_numbers_them(style: str) -> None:
+    settings = {"style": "continental"} if style == "continental" else {}
+    after = render(applied(CLAUSES, [(before, new) for _, _, before, new in CLAUSE_EDITS]), format="text", **settings)
+    said = lines_of(clauses()[style])
+    assert said == lines_of(after.output)
+    # the item inserted into a list of nested items starts it: "a)" under the continental style, "(i)" under the default
+    first, second = ("a)", "b)") if style == "continental" else ("(i)", "(ii)")
+    assert [line for line in said if line.endswith(("NEW nested", "nested of two"))] == [
+        f"{first} NEW nested", f"{second} nested of two"]
+
+
+def test_the_clause_inserted_under_the_continental_style_takes_the_next_number_of_the_heading_list() -> None:
+    said = lines_of(clauses()["continental"])
+    assert [line for line in said if line.endswith(("NEW clause", "clause two"))] == ["1.2 NEW clause", "1.3 clause two"]
+    assert [line for line in said if line.startswith("(1) Refs:")] == ["(1) Refs: 1.1 1.1(a) 1.3 1.3(b) 1.3(b)(i)"]
+
+
+# -- A sub-heading Word restarts at a fixed number: the limit of what an edit keeps live -------------------------------
+
+
+@functools.cache
+def resynced() -> dict[str, str]:
+    require_libreoffice()
+    data = render(RESYNCED, format="docx", style="continental").binary
+    jobs = {"original": (data, []), "clause deleted": (data, [("spare clause", None)]),
+            "clause inserted": (data, [("spare clause", "NEW clause")]),
+            "heading deleted": (data, [("Beta", None)]), "heading inserted": (data, [("Beta", "NEWH")])}
+    return libreoffice_edit(jobs)  # type: ignore[arg-type]
+
+
+def test_a_sub_heading_after_clauses_is_restarted_by_a_fixed_value_and_the_plan_says_so() -> None:
+    result = render(RESYNCED, format="docx", style="continental")
+    plan, diagnostics = plan_docx(result.tree)
+    assert plan.units["s2"].cause == ("resync",)
+    [found] = [d for d in diagnostics if d.rule == "render-docx-shared-counter"]
+    assert found.level == "warning"
+    assert lines_of(resynced()["original"]) == lines_of(render(RESYNCED, format="text", style="continental").output)
+
+
+def test_a_clause_inserted_or_deleted_before_the_restarted_sub_heading_leaves_it_and_what_follows_right() -> None:
+    sources = {"clause deleted": RESYNCED.replace("- spare clause\n", ""),
+               "clause inserted": applied(RESYNCED, [("- spare clause", "- NEW clause")])}
+    for name, source in sources.items():
+        assert lines_of(resynced()[name]) == lines_of(render(source, format="text", style="continental").output), name
+
+
+def test_a_sub_heading_inserted_or_deleted_before_the_restarted_one_is_the_documented_limit() -> None:
+    # The restarted heading keeps its fixed value, and the counter it shared goes on where the edit left it: the
+    # warning of the plan is what tells the author. Only the warning is asserted, not what the drift looks like.
+    _, diagnostics = plan_docx(render(RESYNCED, format="docx", style="continental").tree)
+    assert [d.level for d in diagnostics if d.rule == "render-docx-shared-counter"] == ["warning"]
+    for name in ("heading deleted", "heading inserted"):
+        said = lines_of(resynced()[name])
+        assert [line for line in said if "clause" in line and not line.startswith("(")] == [
+            "1.1 clause one", "1.2 spare clause", "1.3 clause two"]  # what stands before the edit is right
+
+
+# -- The contents: the headings with the numbers Word draws, and none of the units on the heading list ------------------
+
+CONTENTS = ALTERNATIVES + """
+# Alpha {#alpha}
+
+- item one {#i1}
+  - nested {#n1}
+- item two {#i2}
+
+## Beta {#beta}
+
+- beta item
+
+# Disputes {#d when=forum:courts}
+
+- courts item
+
+## Sub
+
+# Disputes {#d when=forum:arb}
+
+## Sub alt
+
+# Last
+"""
+
+
+def with_contents_field(data: bytes) -> bytes:
+    """*data* with a ``TOC \\o "1-5" \\h \\z \\u`` field at the start of the body, with a result that is wrong, for LibreOffice to
+    build the index from (the writer does not write the field itself)."""
+    def change(document: str) -> str:
+        ET.register_namespace("w", W.strip("{}"))
+        root = ET.fromstring(document.encode("utf-8"))
+        body = root.find(f"{W}body")
+        assert body is not None
+
+        def run(child: ET.Element) -> ET.Element:
+            holder = ET.Element(f"{W}r")
+            holder.append(child)
+            return holder
+
+        paragraph = ET.Element(f"{W}p")
+        for kind in ("begin", "instruction", "separate", "text", "end"):
+            if kind == "instruction":
+                child = ET.Element(f"{W}instrText")
+                child.text = ' TOC \\o "1-5" \\h \\z \\u '
+            elif kind == "text":
+                child = ET.Element(f"{W}t")
+                child.text = WRONG
+            else:
+                child = ET.Element(f"{W}fldChar")
+                child.set(f"{W}fldCharType", kind)
+            paragraph.append(run(child))
+        body.insert(0, paragraph)
+        return ET.tostring(root, encoding="unicode")
+
+    return repackage(data, "word/document.xml", change)
+
+
+@functools.cache
+def contents() -> tuple[DocxPlan, tuple[str, ...], str]:
+    require_libreoffice()
+    result = render(CONTENTS, format="docx", style="continental", overrides={"contents.enabled": True,
+                                                                              "contents.depth": 5})
+    assert result.binary is not None
+    plan, _ = plan_docx(result.tree)
+    shown = libreoffice_export({"contents": with_contents_field(result.binary)})["contents"]
+    lines = shown.text.lstrip("\ufeff").splitlines()
+    return plan, tuple(lines[:len(plan.toc)]), "\n".join(lines[len(plan.toc):])
+
+
+def test_the_contents_list_the_headings_as_the_plan_does_and_none_of_the_items_on_the_heading_list() -> None:
+    plan, entries, body = contents()
+    expected = [squeeze(f"{entry.number} {plain_text(entry.title)} {entry.condition_label or ''}") for entry in plan.toc]
+    said = [re.sub(r"\s+\d+$", "", squeeze(line)) for line in entries]
+    assert said == expected
+    assert [e.number for e in plan.toc] == ["1.", "1.1", "2.", "2.1", "2.", "2.1", "3."]  # the alternative's is shared
+    assert not any(word in line for line in entries for word in ("item", "nested"))
+    assert "1.1 item one" in body and "a) nested" in body  # the items are in the body: on the heading list, not in it

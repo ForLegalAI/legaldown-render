@@ -22,7 +22,7 @@ mappings are plain dicts built once in document order and never changed afterwar
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal, NamedTuple
 
@@ -386,13 +386,16 @@ def _reads(level: LevelDef, levels: Sequence[LevelDef]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _shown(inlines: tuple[Inline, ...]) -> str:
+def _shown(inlines: tuple[Inline, ...], ref_text: Callable[[CrossRef], str] | None = None) -> str:
     """What the runs of *inlines* show in the document (``writers/docx/runs.py``): the text of each, a hard break as a
     line break, a blank with its prompt. A heading's bookmark returns this, which is not always the heading's
-    designation (white space is collapsed in that)."""
+    designation (white space is collapsed in that). A cross-reference shows what *ref_text* says its fields give (its
+    own text by default)."""
     out: list[str] = []
     for inline in inlines:
         match inline:
+            case CrossRef() if ref_text is not None:
+                out.append(ref_text(inline))
             case Text(text=text) | Code(text=text) | CrossRef(text=text) | TermRef(text=text) | Value(text=text) \
                     | FailureMarker(text=text):
                 out.append(text)
@@ -407,10 +410,58 @@ def _shown(inlines: tuple[Inline, ...]) -> str:
             case Image(children=children):
                 out.append(plain_text(children))
             case Link(href=href, children=children):
-                out.append(_shown(children) if has_visible_content(children) else displayed_url(href))
+                out.append(_shown(children, ref_text) if has_visible_content(children) else displayed_url(href))
             case Emphasis(children=children) | Strong(children=children) | DefinedTerm(children=children):
-                out.append(_shown(children))
+                out.append(_shown(children, ref_text))
     return "".join(out)
+
+
+def _components(successors: Mapping[str, Sequence[str]]) -> tuple[dict[str, int], list[list[str]]]:
+    """The strongly connected components of a directed graph (Tarjan, iterative, so that a chain of any length is
+    fine): the component of each node, and the components in the order they are completed, which is every node's
+    successors first."""
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    component: dict[str, int] = {}
+    order: list[list[str]] = []
+    nodes = list(dict.fromkeys([*successors, *(n for out in successors.values() for n in out)]))
+    for root in nodes:
+        if root in index:
+            continue
+        index[root] = low[root] = len(index)
+        stack.append(root)
+        on_stack.add(root)
+        work = [(root, iter(successors.get(root, ())))]
+        while work:
+            node, following = work[-1]
+            for nxt in following:
+                if nxt not in index:
+                    index[nxt] = low[nxt] = len(index)
+                    stack.append(nxt)
+                    on_stack.add(nxt)
+                    work.append((nxt, iter(successors.get(nxt, ()))))
+                    break
+                if nxt in on_stack:
+                    low[node] = min(low[node], index[nxt])
+            else:
+                work.pop()
+                if work:
+                    parent = work[-1][0]
+                    low[parent] = min(low[parent], low[node])
+                if low[node] == index[node]:
+                    members = []
+                    while True:
+                        member = stack.pop()
+                        on_stack.discard(member)
+                        component[member] = len(order)
+                        members.append(member)
+                        if member == node:
+                            break
+                    order.append(members)
+    return component, order
+
 
 _Unit = Section | ListItem | Paragraph
 
@@ -697,40 +748,62 @@ class _Planner:
                            f"written differently there.{more}")
             self.report("render-docx-reference", "warning", message, first.found.line)
 
-    def cyclic_titles(self, built: dict[str, _Built]) -> dict[str, tuple[str, ...]]:
-        """The cross-references in a heading's title that must be text, by heading unit. Under the ``none`` scheme a
-        heading is designated by its text, and a field for it (``REF bookmark \\h``) returns what its bookmark holds;
-        a reference in the title that leads back to the heading (directly, or through the titles of other headings)
-        would be a field inside the bookmark it points at, which Word cannot show (a self-reference) and
-        LibreOffice expands without end. Such a reference is written as its text and reported."""
+    def cyclic_titles(self, built: dict[str, _Built]) -> tuple[dict[str, tuple[str, ...]], list[str]]:
+        """The cross-references in a heading's title that must be text, by heading unit, and the headings in the
+        order their texts can be worked out (those a title's fields return first). Under the ``none`` scheme a heading
+        is designated by its text, and a field for it (``REF bookmark \\h``) returns what its bookmark holds; a
+        reference in the title that leads back to the heading (directly, or through the titles of other headings)
+        would be a field inside the bookmark it points at, which Word cannot show (a self-reference) and LibreOffice
+        expands without end. Such a reference is written as its text and reported. The headings are the nodes of a
+        graph, an edge for each heading whose text a field in another's title returns; a reference in a title is
+        cyclic exactly when such a field's heading is in the title's own strongly connected component (the heading
+        itself included)."""
         if not any(not p.number for made in built.values() for p in made.pieces if isinstance(p, Field)):
-            return {}  # no field returns the text of a heading: nothing can lead back into one
+            return {}, []  # no field returns the text of a heading: nothing can lead back into one
         inside: dict[str, list[str]] = {}
         for section in self.tree.sections:
             if section.unit is not None:
                 targets = [i.target_unit for i in iter_inlines(section.title)
                            if isinstance(i, CrossRef) and i.target_unit in built]
                 inside[section.unit] = list(dict.fromkeys(t for t in targets if t is not None))
-        owners = {target: {p.owner for p in made.pieces if isinstance(p, Field) and not p.number}
+        owners = {target: tuple(dict.fromkeys(p.owner for p in made.pieces if isinstance(p, Field) and not p.number))
                   for target, made in built.items()}
-
-        def leads_to(start: str, goal: str) -> bool:
-            seen, pending = set(), [start]
-            while pending:
-                heading = pending.pop()
-                if heading == goal:
-                    return True
-                if heading not in seen:
-                    seen.add(heading)
-                    pending += [t for target in inside.get(heading, ()) for t in owners[target]]
-            return False
-
+        component, completed = _components({heading: list(dict.fromkeys(o for t in targets for o in owners[t]))
+                                            for heading, targets in inside.items()})
         found: dict[str, tuple[str, ...]] = {}
         for heading, targets in inside.items():
-            cyclic = tuple(t for t in targets if any(leads_to(owner, heading) for owner in owners[t]))
+            cyclic = tuple(t for t in targets if any(component[o] == component[heading] for o in owners[t]))
             if cyclic:
                 found[heading] = cyclic
-        return found
+        return found, [heading for members in completed for heading in members]
+
+    def heading_texts(self, built: dict[str, _Built], cyclic: Mapping[str, tuple[str, ...]], order: list[str]) -> None:
+        """What a field that returns a heading's text gives, worked out from the runs the heading is written with
+        (§13.3): a reference in the title is the text of the fields it is written as (which return the text of other
+        headings, worked out first), or its own text where it is written as text."""
+        sections = {section.unit: section for section in self.tree.sections if section.unit is not None}
+        for heading in order:
+            section = sections.get(heading)
+            if section is None:
+                continue
+
+            def shown(ref: CrossRef, heading: str = heading) -> str:
+                made = built.get(ref.target_unit or "")
+                if made is None or ref.target_unit in cyclic.get(heading, ()):
+                    return ref.text
+                return "".join(piece if isinstance(piece, str) else
+                               text_of(piece.tokens) if piece.number else self.heading_text[piece.owner]
+                               for piece in made.pieces)
+
+            self.heading_text[heading] = _shown(section.title, shown)
+
+    def references(self, found: Mapping[str, _Reference]) -> dict[str, _Built]:
+        built: dict[str, _Built] = {}
+        for target, reference in found.items():
+            made = self.reference(reference)
+            if made is not None:
+                built[target] = made
+        return built
 
     def finish(self) -> tuple[dict[str, UnitPlan], dict[str, str], dict[str, RefPlan], tuple[TocEntryPlan, ...]]:
         """The bookmarks, the cross-reference fields and the table of contents, which need the numbering of every
@@ -748,11 +821,14 @@ class _Planner:
                     known = found[inline.target_unit]
                     if known.line is None or line < known.line:
                         found[inline.target_unit] = known._replace(line=line)
-        built: dict[str, _Built] = {}
-        for target, reference in found.items():
-            made = self.reference(reference)
-            if made is not None:
-                built[target] = made
+        built = self.references(found)
+        cyclic, order = self.cyclic_titles(built)
+        if order:
+            # a heading's text is made of the fields in its title: the first pass found which are text and in what
+            # order the texts can be worked out, and the references are made again from them
+            self.heading_texts(built, cyclic, order)
+            self.unreferable = []
+            built = self.references(found)
         self.report_references()
         needed = {piece.owner for made in built.values() for piece in made.pieces if isinstance(piece, Field)}
         needed |= {holder for holder, _ in self.alts.values()}
@@ -760,7 +836,6 @@ class _Planner:
         #: of the paragraph, so that no field ever stands inside the bookmark it points at.
         enclosing = {piece.owner for made in built.values() for piece in made.pieces
                      if isinstance(piece, Field) and not piece.number}
-        cyclic = self.cyclic_titles(built)
         word_only = [(found[target].text, made.lo_text) for target, made in built.items() if made.lo_text is not None]
         if word_only:
             first, lo = word_only[0]
@@ -770,9 +845,10 @@ class _Planner:
                         f"switch, which LibreOffice ignores: there it reads '{printable(lo)}'{more}.", None)
         for section in self.tree.sections:
             if section.unit in cyclic:
+                where = f"line {section.line}" if section.line is not None else f"section {section.unit}"
                 self.report("render-docx-reference-cycle", "warning",
-                            f"The heading '{printable(plain_text(section.title)[:40])}' holds a cross-reference that "
-                            f"leads back to the heading itself, which a field cannot show (the heading's text is what "
+                            f"The heading '{printable(plain_text(section.title)[:40])}' ({where}) holds a "
+                            f"cross-reference that leads back to the heading itself, which a field cannot show (the heading's text is what "
                             f"the reference returns): it is written as text, so it will not follow edits made in Word.",
                             section.line)
 
