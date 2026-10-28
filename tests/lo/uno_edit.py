@@ -3,7 +3,7 @@
 the document says: for each job, a paragraph is inserted before the first paragraph that holds some text (so that
 it takes that paragraph's numbering and style, as pressing Enter at its start does), or that paragraph is deleted,
 then every field and index is updated (the indexes too, so a table of contents lists what was inserted) and the body
-is exported as plain text (``JOB.txt``, UTF-8).
+is written as plain text (``JOB.txt``, UTF-8, one line per paragraph, read from the document model: tests/lo/uno_text.py).
 
 Run it with the system Python that has the ``uno`` module, **not** with the project's virtual environment:
 
@@ -31,6 +31,7 @@ import uuid
 import uno  # type: ignore[import-not-found]  # noqa: I001 - provided by python3-uno, not by pip
 from com.sun.star.beans import PropertyValue  # type: ignore[import-not-found]
 from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK  # type: ignore[import-not-found]
+from uno_text import body_text
 
 
 def _value(name: str, value: object) -> PropertyValue:
@@ -124,8 +125,8 @@ def edit(out_dir: str, jobs: list[dict]) -> None:
                         indexes.getByIndex(position).update()
                     document.getTextFields().refresh()
                     document.refresh()
-                document.storeToURL(uno.systemPathToFileUrl(os.path.join(out_dir, f"{job['name']}.txt")),
-                                    (_value("FilterName", "Text (encoded)"), _value("FilterOptions", "UTF8")))
+                with open(os.path.join(out_dir, f"{job['name']}.txt"), "w", encoding="utf-8", newline="") as handle:
+                    handle.write(body_text(document))
             finally:
                 document.close(True)
     finally:
