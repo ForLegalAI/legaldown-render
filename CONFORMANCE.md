@@ -7,7 +7,7 @@ lists the Core rules it covers.
 
 It is checked against the specification's own examples and fixtures corpus (`tests/conformance/`):
 
-- every document renders to HTML and to text
+- every document renders to HTML, to text and to DOCX
 - every internal link resolves to an anchor that exists
 - each invalid fixture renders its rule's failure marker
 
@@ -20,6 +20,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | `{{include:}}` below Full (§17.5) | ✅ Renders `[NOT PROCESSED: include path]` with a Warning (`render-not-processed`); the path is checked as a file reference (§2.3) |
 | Party and side display rules (§3.6) | ✅ |
 | At least one output format (§13.6) | ✅ HTML (recommended) and plain text (optional) |
+| DOCX output (§13.6, recommended) | 🚧 In progress, not claimed. Written, as bytes, by `-o x.docx` / `format="docx"`: a valid OOXML package (every part validates against the ISO/IEC 29500-4 transitional schemas in CI; LibreOffice opens it) with styles, page setup, running header and footer (`PAGE`/`NUMPAGES` fields), document properties and deterministic output. The **body is interim**: the title, headings as `heading N` paragraphs and every other block as plain text, with no numbers, cross-references, table of contents, title block, attachments or signature blocks. The design is that numbers, references, the table of contents and page numbers are Word numbering definitions and fields, never text ([ADR 0008](docs/decisions/0008-docx-word-native.md)); none of the numbering is built yet. Every DOCX render reports the Warning `render-docx-interim` ("DOCX output is incomplete in this version") until the body is complete; it is the renderer's own rule, not the specification's, and goes away then. HTML is the format this renderer claims §13.6 with |
 | A heading in a list item or a quote | ✅ Shown as a bold line: it is not a section (§4.1), so it has no number or anchor |
 | Comment stripping (§8.6) | ✅ Inline comments, and comment blocks across any number of lines. As in CommonMark, a comment block left unclosed runs to the end of the document |
 | Templates with answers (§15.8) | ✅ Assembled first with `legaldown-validator`'s Assembly capability (§15.7), then rendered: `answers=` / `--answers answers.yaml`. A template that needs other files is refused (see below) |

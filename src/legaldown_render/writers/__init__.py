@@ -2,6 +2,7 @@
 (docs/decisions/0003); it only lays out what resolution computed."""
 from __future__ import annotations
 
+from .docx import DocxWriter
 from .html import HtmlWriter, stylesheet
 from .text import TextWriter
 
@@ -9,6 +10,7 @@ from .text import TextWriter
 FORMATS: dict[str, tuple[str, ...]] = {
     "html": ("html", "htm"),
     "text": ("txt", "text"),
+    "docx": ("docx",),
 }
 
 
@@ -30,4 +32,4 @@ def format_for_path(path: str) -> str | None:
     return next((name for name, extensions in FORMATS.items() if extension in extensions), None)
 
 
-__all__ = ["FORMATS", "HtmlWriter", "TextWriter", "file_extension", "format_for_path", "stylesheet"]
+__all__ = ["FORMATS", "DocxWriter", "HtmlWriter", "TextWriter", "file_extension", "format_for_path", "stylesheet"]

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "legaldown-render"
 # Single-sourced from src/legaldown_render/__init__.py.
 dynamic = ["version"]
-description = "Reference renderer for the LegalDown legal document format: HTML and plain text, DOCX and PDF planned"
+description = "Reference renderer for the LegalDown legal document format: HTML and plain text, DOCX in progress, PDF planned"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -40,7 +40,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.2", "ruff>=0.17", "build>=1.6"]
+# lxml validates the DOCX parts against the OOXML schemas in the tests (tests/schemas/README.md).
+dev = ["pytest>=9.2", "ruff>=0.17", "build>=1.6", "lxml>=6.1"]
 
 [project.scripts]
 legaldown-render = "legaldown_render.cli:main"
@@ -74,6 +75,8 @@ addopts = "-ra --strict-markers"
 pythonpath = ["src"]
 markers = [
     "conformance: renders the LegalDown specification's examples and fixtures (needs a checkout of the specification)",
+    "ooxml_schema: validates DOCX parts against the ISO/IEC 29500 schemas (needs lxml and the schemas: python tests/schemas/fetch.py)",
+    "libreoffice: opens DOCX files in LibreOffice and compares what it shows (needs soffice and python3-uno)",
 ]
 # A deprecated legaldown-validator API fails the tests: the next minor
 # release removes it, and the dependency range admits only one minor version.

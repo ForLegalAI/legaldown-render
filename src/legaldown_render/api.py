@@ -26,15 +26,16 @@ from .diagnostics import by_line, key_line, repeats
 from .errors import DocumentError, OptionsError, RenderRefused, StyleError
 from .resolve import Formatter, parse_locale, resolve_tree
 from .style import Style, load_style
+from .style.docx import DocxSettings, docx_settings
 from .tree import RenderTree, assert_resolved
-from .writers import FORMATS, HtmlWriter, TextWriter
+from .writers import FORMATS, DocxWriter, HtmlWriter, TextWriter
 
 
 @dataclass(frozen=True, slots=True)
 class RenderOptions:
     """Settings for one render job."""
 
-    #: ``html`` or ``text``.
+    #: ``html``, ``text`` or ``docx``.
     format: str = "html"
     #: A built-in style name, a path to a YAML style template, a Style, or (see
     #: :func:`~.style.load_style`) a mapping or YAML text.
@@ -100,6 +101,8 @@ class RenderOptions:
 class RenderResult:
     """What a render produced."""
 
+    #: The rendered text: HTML or plain text. Empty for ``docx``, which is bytes
+    #: (:attr:`binary`), not text.
     output: str
     #: Core (validator) and Rendering diagnostics, each with its stable rule id.
     diagnostics: list[Diagnostic]
@@ -107,11 +110,25 @@ class RenderResult:
     #: The resolved tree, for tools that want more than the output text.
     tree: RenderTree
     style: Style
+    #: The rendered file for a binary format (``docx``): the bytes of the whole
+    #: file. None for ``html`` and ``text``.
+    binary: bytes | None = None
 
     @property
     def ok(self) -> bool:
         """True when the document has no errors."""
         return not any(diagnostic.level == "error" for diagnostic in self.diagnostics)
+
+
+def _interim_warning(filename: str) -> Diagnostic:
+    """The Warning that DOCX output is not complete yet: the writer's body is interim (no numbers,
+    references, contents, title block, attachments or signature blocks). It goes when the body is
+    complete."""
+    return Diagnostic(
+        rule="render-docx-interim", level="warning", file=filename,
+        message="DOCX output is incomplete in this version: headings and list items carry no numbers, and "
+                "cross-references, the table of contents, the title block, attachments and signature blocks are "
+                "not written yet. Do not use the file as the finished document.")
 
 
 def render(source: str, options: RenderOptions | None = None, /, **settings: Any) -> RenderResult:
@@ -148,6 +165,8 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.locale:
         overrides["locale"] = options.locale
     style = load_style(options.style, overrides=overrides, trusted=not options.untrusted)
+    # A setting Word cannot express is a StyleError before any rendering starts (docs/decisions/0006).
+    docx = docx_settings(style, trusted=not options.untrusted) if options.format == "docx" else None
 
     source = normalize_source(source)
     assembled: list[Diagnostic] = []
@@ -167,9 +186,13 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     if options.strict and any(d.level == "error" for d in diagnostics):
         raise RenderRefused(diagnostics)
 
+    if options.format == "docx":
+        diagnostics.append(_interim_warning(document.filename))
     assert_resolved(tree)
-    output = _writer(options, style).write(tree)
-    return RenderResult(output, diagnostics, options.format, tree, style)
+    written = _writer(options, style, docx).write(tree)
+    if isinstance(written, bytes):
+        return RenderResult("", diagnostics, options.format, tree, style, binary=written)
+    return RenderResult(written, diagnostics, options.format, tree, style)
 
 
 def render_file(path: str | Path, options: RenderOptions | None = None, /, **settings: Any) -> RenderResult:
@@ -289,9 +312,13 @@ def _resolve(document: Document, result: ValidationResult, style: Style,
     return resolved, diagnostics + found
 
 
-def _writer(options: RenderOptions, style: Style) -> HtmlWriter | TextWriter:
+def _writer(options: RenderOptions, style: Style, docx: DocxSettings | None) -> HtmlWriter | TextWriter | DocxWriter:
     if options.format == "text":
         return TextWriter(style.attachments.separator)
     from . import __version__
 
-    return HtmlWriter(style, standalone=options.standalone, generator=f"legaldown-render {__version__}")
+    generator = f"legaldown-render {__version__}"
+    if options.format == "docx":
+        assert docx is not None
+        return DocxWriter(style, generator=generator, settings=docx)
+    return HtmlWriter(style, standalone=options.standalone, generator=generator)

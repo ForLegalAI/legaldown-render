@@ -8,7 +8,8 @@ report).
 
 Documents and output are always UTF-8 (the HTML says ``<meta charset="utf-8">``),
 never the console's or the locale's encoding, and output has LF line endings on
-every platform.
+every platform. A DOCX file is bytes: it is written to a file, or to standard output's
+binary interface (``-o -``, or no ``-o`` when standard output is not a terminal), never to a terminal.
 """
 from __future__ import annotations
 
@@ -28,11 +29,14 @@ from .urls import printable
 from .writers import FORMATS, file_extension, format_for_path
 
 #: Extensions (:func:`file_extension`, so no dot) of document formats this
-#: renderer does not write. An output file named so (``x.docx``, ``.pdf``,
+#: renderer does not write. An output file named so (``x.pdf``, ``.odt``,
 #: ``x.pdf.``) and no ``--format`` is a mistake to refuse: HTML under that name
 #: would mislead. Any other extension (``contract.v2``, ``report.2025-10-27``),
 #: or none, is just a name and keeps the HTML default.
-_UNWRITTEN_EXTENSIONS = frozenset({"docx", "doc", "odt", "rtf", "pdf", "md", "markdown", "epub", "tex"})
+_UNWRITTEN_EXTENSIONS = frozenset({"doc", "odt", "rtf", "pdf", "md", "markdown", "epub", "tex"})
+
+#: ``--output`` that names standard output instead of a file.
+_STDOUT = "-"
 
 
 def _safe(text: str) -> str:
@@ -70,17 +74,19 @@ def _setting(text: str) -> tuple[str, Any]:
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="legaldown-render",
-        description="Render a LegalDown document to HTML or plain text.",
+        description="Render a LegalDown document to HTML, plain text or DOCX.",
         epilog="Style settings: --style picks a template (built-in: "
                + ", ".join(builtin_styles())
                + ", or a .yaml file); --set overrides one setting, e.g. --set numbering.scheme=mixed. "
                "See every setting with --print-style.",
     )
     parser.add_argument("input", nargs="?", help="the .lgd file to render, or - for standard input")
-    parser.add_argument("-o", "--output", help="output file (default: standard output). Without --format, "
-                        ".html/.htm write HTML and .txt/.text plain text; any other name, with or without an "
-                        "extension, writes HTML, except the extension of a format not written (.docx, .doc, "
-                        ".odt, .rtf, .pdf, .md, .markdown, .epub, .tex), which needs --format")
+    parser.add_argument("-o", "--output", help="output file (default: standard output, except for DOCX, which "
+                        "is binary and is refused on a terminal). Without --format, .html/.htm write HTML, "
+                        ".txt/.text plain text and .docx a Word document; any other name, with or without an "
+                        "extension, writes HTML, except the extension of a format not written (.doc, "
+                        ".odt, .rtf, .pdf, .md, .markdown, .epub, .tex), which needs --format. -o - writes "
+                        "to standard output")
     parser.add_argument("-f", "--format", choices=sorted(FORMATS),
                         help="output format (default: html, or text for --output *.txt/*.text)")
     parser.add_argument("-s", "--style", help="style template: a built-in name or a path to a .yaml file")
@@ -176,8 +182,16 @@ def main(argv: list[str] | None = None) -> int:
         file_name = Path(args.output).name
         output_format = format_for_path(file_name)
         if not output_format and file_extension(file_name) in _UNWRITTEN_EXTENSIONS:
-            parser.error(f"cannot tell the output format from '{printable(args.output)}'; use --format html or text")
+            parser.error(f"cannot tell the output format from '{printable(args.output)}'; "
+                         "use --format html, text or docx")
     output_format = output_format or "html"
+    to_stdout = not args.output or args.output == _STDOUT
+    if output_format == "docx":
+        if args.fragment:
+            parser.error("--fragment applies to HTML only: a DOCX file is always the whole document")
+        if to_stdout and getattr(sys.stdout, "isatty", lambda: False)():
+            parser.error("refusing to write a DOCX file to a terminal; redirect standard output or name a file "
+                         "with -o FILE.docx")
     name = "<stdin>" if args.input == "-" else args.input
     try:
         source = _read_source(args.input)
@@ -224,14 +238,36 @@ def main(argv: list[str] | None = None) -> int:
         return 70
 
     _report(name, result.diagnostics, quiet=args.quiet)
-    if args.output:
-        try:
-            Path(args.output).write_text(result.output, encoding="utf-8", newline="\n")
-        except OSError as error:
-            _complain(f"legaldown-render: cannot write {args.output}: {error.strerror or error}")
-            return 1
-    else:
+    if result.binary is not None:
+        return _write_binary(result.binary, args.output)
+    if to_stdout:
         sys.stdout.write(result.output)
+        return 0
+    try:
+        Path(args.output).write_text(result.output, encoding="utf-8", newline="\n")
+    except OSError as error:
+        _complain(f"legaldown-render: cannot write {args.output}: {error.strerror or error}")
+        return 1
+    return 0
+
+
+def _write_binary(data: bytes, output: str) -> int:
+    """Write *data*, a rendered binary file, to the file *output*, or (with ``-``, or no
+    output at all) to standard output's bytes, never through its text encoding."""
+    if not output or output == _STDOUT:
+        buffer = getattr(sys.stdout, "buffer", None)
+        if buffer is None:
+            _complain("legaldown-render: cannot write to standard output: it has no binary interface")
+            return 1
+        sys.stdout.flush()
+        buffer.write(data)
+        buffer.flush()
+        return 0
+    try:
+        Path(output).write_bytes(data)
+    except OSError as error:
+        _complain(f"legaldown-render: cannot write {output}: {error.strerror or error}")
+        return 1
     return 0
 
 
