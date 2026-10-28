@@ -1,6 +1,7 @@
 # 0004. Output formats: text and HTML, then DOCX, then PDF
 
-- Status: Accepted (DOCX numbering and the PDF engine are still open)
+- Status: Accepted. The DOCX decisions (python-docx, the numbering question) are superseded by
+  [0008](0008-docx-word-native.md); the PDF engine is still open
 - Date: 2026-09-23
 
 ## Context
@@ -13,7 +14,8 @@ the dependencies they bring.
 
 - **v0.1: `text` and `html`.** HTML has no native dependencies, supports links, and is easy to
   inspect. Plain text costs almost nothing and is the test oracle for resolution.
-- **v0.3: `docx`** with python-docx, behind the `[docx]` extra.
+- **v0.3: `docx`** with python-docx, behind the `[docx]` extra (superseded by
+  [0008](0008-docx-word-native.md): OOXML written directly, in the base package).
 - **v0.4: `pdf`**, behind the `[pdf]` extra.
 
 ## Open questions
@@ -44,3 +46,7 @@ The leading option is WeasyPrint. It will be decided with a spike when v0.4 star
 - 2026-10-28: v0.4 became a hardening release (see the [roadmap](../roadmap.md)), so `docx`
   moves to v0.5 and `pdf` to v0.6. The open questions now read v0.5 (DOCX numbering) and v0.6
   (PDF spike).
+- 2026-10-28: [0008](0008-docx-word-native.md) decides the DOCX questions. Numbering is Word-native
+  (numbering definitions and `REF`/`TOC`/`PAGE` fields, never static text), and the writer produces
+  OOXML itself with the standard library, so DOCX needs no extra and no python-docx. "DOCX numbering"
+  above is closed; the PDF engine is not.

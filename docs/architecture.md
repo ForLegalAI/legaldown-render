@@ -29,10 +29,10 @@ This page describes how the renderer is built. The decisions behind it are in
  └───────────┬─────────────┘                               failure markers + Rendering diagnostics
              ▼
  ┌─────────────────────────┐
- │ 5. Write     writers/   │  html │ text   (docx, pdf later)
+ │ 5. Write     writers/   │  html │ text │ docx   (pdf later)
  └───────────┬─────────────┘
              ▼
- RenderResult(output, diagnostics, format, tree, style)
+ RenderResult(output, diagnostics, format, tree, style, binary)
 ```
 
 Stage 2, **assembly** with an answers set (§15.7), runs only when the job has answers, before
@@ -179,6 +179,7 @@ carries the structure behind every number, in terms that name no output format:
 
 | Where | Field | Holds |
 |---|---|---|
+| `RenderTree.version`, `RenderTree.effective_date` | `str` | The frontmatter's version and effective date as plain text, exactly as the title block shows them (directives resolved, a valid date formatted by the style for the locale), **whether or not** `title_block` shows them: a running header or footer uses them (`{version}`, `{date}`). Empty when absent |
 | `RenderTree.formats` | `NumberingFormats` | The formats the labels were made with, after the style is resolved: `scheme`; `headings`, one `LevelFormat` (counter, `label` and `ref` templates) per heading level (empty under `none`); `enumerated`, the formats by list depth (cycling); `renumber`, the one format of ordered lists (None under `enumeration.ordered: enumerate`); `paragraphs` (None unless numbered); `reference`, `references.format` |
 | `Section`, `ListItem`, `Paragraph` | `unit` | An id, unique in the document and equal on every render: `s<k>` for the k-th section, `u<k>` for the k-th item or top-level paragraph of a section in document order, the preamble first. Not the anchor. Every section, every item (in a quote too) and every top-level paragraph of a section has one, numbered or not, since an unnumbered one can still be the target of a reference; a paragraph inside an item, or in the preamble, is not a unit (None) |
 | same | `number` | The unit's own counter value (the last part of "2.1" is 1; the item's position in its list; the paragraph's in its section). None when the unit is not numbered: any section under `none`, an item of a list that is not enumerated, a paragraph when the style does not number them |
@@ -291,7 +292,8 @@ References, bookmarks and the table of contents are further parts of the plan, e
 |---|---|
 | `TextWriter` | Plain text (§13.6). A soft line break inside a paragraph is a space, a hard break a new line, and lists are indented with their labels, one quote stays one quote, and tables keep escaped cells and alignment. It takes the style's `attachments.separator` (default `page-break`; `rule` and `page-break` both print `---` before the attachments heading and between attachments). It is the **test oracle** for resolution |
 | `HtmlWriter` | A self-contained HTML5 page, or with `standalone=False` just the `<article>`. Semantic markup, with labels as real text rather than CSS counters, and a stylesheet generated from the style's presentation settings, including print rules |
-| DOCX, PDF | Planned ([ADR 0004](decisions/0004-html-first.md)) |
+| `DocxWriter` | A `.docx` file, as bytes (`RenderResult.binary`; `output` is empty). OOXML written directly with `zipfile` and `xml.etree` ([ADR 0008](decisions/0008-docx-word-native.md)): the parts, the styles generated from the style template, settings, page setup, running headers and footers, properties, a deterministic ZIP, and one sanitiser for every text and attribute. **Interim body:** the title, headings (`heading N`) and plain-text paragraphs with no numbers; the numbering definitions, cross-reference fields and table of contents that make the numbers live in Word (ADR 0008) follow. The DOCX-only settings are converted and checked before rendering (`style/docx.py`) |
+| PDF | Planned ([ADR 0004](decisions/0004-html-first.md)) |
 
 ## Package layout
 
@@ -313,9 +315,13 @@ src/legaldown_render/
 ├── style/
 │   ├── model.py       the style dataclasses (every field has a default)
 │   ├── loader.py      layering, extends, overrides, validation
+│   ├── docx.py        the presentation settings in Word's units; the style errors only DOCX has
 │   ├── labels.py      built-in labels per language (en, cs, de, fr, pl, sk)
 │   └── builtin/       default.yaml, continental.yaml, outline.yaml
-└── writers/           html.py, text.py
+└── writers/
+    ├── html.py, text.py
+    └── docx/          the DOCX writer: ooxml.py (sanitiser, builders), package.py (parts, relationships, ZIP),
+                       styles.py, settings.py, headers.py, properties.py, body.py (interim)
 ```
 
 ## Dependencies
@@ -327,7 +333,7 @@ src/legaldown_render/
 | `babel` | CLDR locale data (ADR 0005) |
 | `pyyaml` | Style templates |
 
-All of them are pure Python. The DOCX and PDF writers will bring their dependencies in as extras.
+All of them are pure Python. The DOCX writer needs nothing more (it writes OOXML itself, ADR 0008); the PDF writer will bring its dependency in as an extra. `lxml` is a test dependency only (`dev` extra), for validating DOCX parts against the OOXML schemas.
 
 The renderer uses only the validator's public API: `legaldown`, and the tooling modules
 `legaldown.syntax` and `legaldown.grammar` (roadmap item U3, done in validator 0.4.0). Before 1.0
@@ -352,7 +358,7 @@ Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can ev
 `ref-not-enumerated`, `path-not-relative` and `path-outside-root` (Errors for a file reference that is
 not relative, or that leaves the document root, §2.3; reported here because validator 0.4 checks
 neither), specification rule ids, plus renderer-specific ids prefixed `render-`:
-`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id). The validator's
+`render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id), and `render-docx-interim` (a Warning on every DOCX render, while the DOCX body is incomplete). The validator's
 diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
 `file:line:`.
 
@@ -385,6 +391,14 @@ out when the validator reported the same path at the same line, or at none (`dia
 
 - Raw HTML in the source is never emitted (§8.7).
 - Every text node and attribute is escaped.
+- DOCX: every text, attribute, field instruction, bookmark name, relationship and property value goes
+  through one sanitiser (`writers/docx/ooxml._t`, applied inside the element builders, so a caller
+  cannot forget it). It drops what XML cannot carry (C0 controls but TAB, LF and CR, DEL, C1,
+  U+FFFE/U+FFFF, lone surrogates): `xml.etree` alone writes `\x01` raw and a lone surrogate as a
+  character reference, and Word then reports the file as unreadable. TAB and line breaks in a text
+  become `w:tab` and `w:br`, never kept in `w:t`. A hyperlink relationship's Target is percent-encoded
+  to a valid URI, or the link stays text. The part contents are fuzzed for well-formedness in
+  `tests/test_docx_escaping.py`. The untrusted mode and the style caps apply to DOCX unchanged.
 - A link is a hyperlink (§8.7) only if its URL is relative (no scheme, a fragment) or its scheme
   is one of `urls.LINK_SCHEMES`: `http`, `https`, `mailto`, `tel`, `ftp`, `ftps`, `sftp`, `sip`,
   `sips`, `sms`, `urn`, `geo`, `news`. It is an allow-list, because a renderer reads documents it
@@ -520,4 +534,9 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_cli_io.py` | Encodings of the streams, input that is not UTF-8, unwritable output, LF line endings, the extension rule of `-o` |
 | `tests/test_errors.py` | The exception hierarchy and pickling of errors |
 | `tests/test_escaping.py` | Control characters from a document or the command line never reach a diagnostic or standard error unescaped |
+| `tests/test_docx_style.py` | `page.header`, `page.footer` and `docx.*`: validation, and how CSS lengths, colours and fonts become Word's units, with the StyleErrors only DOCX has |
+| `tests/test_docx_package.py` | The OOXML package: parts, relationships, content types, settings order, styles, page setup, headers and footers, properties, the interim body, determinism, the sanitiser and builders, the API and command line |
+| `tests/test_docx_escaping.py` | Well-formedness of every part for any text, with a seeded fuzz and the characters XML cannot carry |
+| `tests/test_docx_validation.py` | Every part of every generated document against the ISO/IEC 29500-4 schemas (marker `ooxml_schema`; needs lxml and `python tests/schemas/fetch.py`) |
+| `tests/test_docx_libreoffice.py` | The documents opened in LibreOffice through UNO (`tests/lo/uno_export.py`), fields updated: the words in order, header, footer, page count (marker `libreoffice`; skipped without `soffice` and `python3-uno`) |
 | `tests/conformance/` | Every example and fixture in the specification repository renders, every internal link has a target, and each invalid fixture renders its rule's failure marker. Needs `$LEGALDOWN_SPEC_DIR` or a sibling `../LegalDown` checkout |

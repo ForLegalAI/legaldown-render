@@ -6,3 +6,6 @@ build/
 dist/
 .pytest_cache/
 .ruff_cache/
+
+# OOXML schemas fetched for the DOCX tests (tests/schemas/README.md)
+tests/schemas/ooxml/

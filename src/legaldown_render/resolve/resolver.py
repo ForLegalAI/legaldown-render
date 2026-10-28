@@ -357,6 +357,8 @@ class Resolver:
             title = resolve(self.tree.title)
         with self._at(self.key_line("subtitle")):
             subtitle = resolve(self.tree.subtitle)
+        effective_date = self._effective_date()
+        version = self._version()
         resolved = replace(
             self.tree,
             title=title,
@@ -364,7 +366,9 @@ class Resolver:
             locale=self.formatter.tag,
             preamble=preamble,
             sections=sections,
-            header=self._header(),
+            header=self._header(effective_date, version),
+            version=plain_text(version),
+            effective_date=plain_text(effective_date),
             sides=self._sides() if self.style.title_block.parties else (),
             attachments=attachments,
             attachments_label=self.labels.attachments or "",
@@ -1389,15 +1393,28 @@ class Resolver:
     def _frontmatter(self, text: str) -> tuple[Inline, ...]:
         return self._resolve_inlines(plain_inlines(text))
 
-    def _header(self) -> tuple[tuple[str, tuple[Inline, ...]], ...]:
+    def _effective_date(self) -> tuple[Inline, ...]:
+        """The effective date as the title block shows it (a valid date formatted, any
+        other text resolved), or nothing when the document has none."""
+        if not self.metadata.effective_date:
+            return ()
+        with self._at(self.key_line("effective_date")):
+            return self._date_or_text(self.metadata.effective_date)
+
+    def _version(self) -> tuple[Inline, ...]:
+        """The version as the title block shows it, or nothing when the document has none."""
+        if not self.metadata.version:
+            return ()
+        with self._at(self.key_line("version")):
+            return self._frontmatter(self.metadata.version)
+
+    def _header(self, effective_date: tuple[Inline, ...],
+                version: tuple[Inline, ...]) -> tuple[tuple[str, tuple[Inline, ...]], ...]:
         rows: list[tuple[str, tuple[Inline, ...]]] = []
-        metadata = self.metadata
-        if self.style.title_block.effective_date and metadata.effective_date:
-            with self._at(self.key_line("effective_date")):
-                rows.append((self.labels.effective_date or "", self._date_or_text(metadata.effective_date)))
-        if self.style.title_block.version and metadata.version:
-            with self._at(self.key_line("version")):
-                rows.append((self.labels.version or "", self._frontmatter(metadata.version)))
+        if self.style.title_block.effective_date and effective_date:
+            rows.append((self.labels.effective_date or "", effective_date))
+        if self.style.title_block.version and version:
+            rows.append((self.labels.version or "", version))
         return tuple(rows)
 
     def _date_or_text(self, value: str) -> tuple[Inline, ...]:

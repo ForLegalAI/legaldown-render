@@ -54,6 +54,7 @@ def test_renders_without_crashing(path: Path) -> None:
     try:
         html = render(source).output
         render(source, format="text")
+        assert render(source, format="docx").binary is not None
     except DocumentError:
         assert "frontmatter-invalid-yaml" in str(path) or "frontmatter" in str(path)
         return
