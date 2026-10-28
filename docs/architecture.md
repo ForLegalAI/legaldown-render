@@ -241,6 +241,47 @@ piece after it is kept), and `render-designation-limit` says so for that heading
 cycle or past a cap, or one whose terms reach into one, may read differently from the designation
 references show; the Warning says so. Every other heading reads exactly as its designation.
 
+### The DOCX planner (`resolve/docx_plan.py`)
+
+The DOCX writer will contain no numbering rules either (ADR 0003). Between the resolved tree and that writer sits a
+pure function, `plan_docx(tree, style, *, file=None) -> (DocxPlan, diagnostics)`, which maps the numbering structure
+above to what Word needs: the abstractNums and nums, and for every section, list item and numbered paragraph the
+`(numId, ilvl)` its paragraph takes. It is a planning step, not a stage of the pipeline: nothing calls it yet. It
+reads `tree.formats` and the units' `number`, `parent_unit` and `List.family`/`depth`/`format`, and checks every
+placement against the number the resolver gave the unit by simulating Word's counters
+(`resolve/docx_numbering.py`), so that what Word draws is what the resolver numbered, or a diagnostic says why not.
+
+**Word's list semantics**, stated once (the planner and its diagnostics rely on them):
+
+- Counters belong to the abstractNum and are shared by every `w:num` of it. A num with a `startOverride` restarts
+  the named level at the first use of that num, and the levels above keep their values: this is Word's own
+  "Restart at 1".
+- A paragraph restarts every deeper level. A paragraph with `numId 0` counts nothing.
+- A list nested in an item of the same kind goes on a deeper level of its parent's num, so it restarts by
+  structure when a parent item is added. A list of another kind, a list in a quote, and a list Word would continue
+  where the resolver restarts have a num of their own that restarts by a fixed setting: an item added above one in
+  Word does not restart it. A sibling list under the same item that the resolver continues (its first item is 3)
+  shares the num, so that Word continues it too.
+- Paragraph numbering has one num per section, and a section added in Word does not restart it by itself.
+- `REF <bookmark> \n` returns the paragraph's level text with its counters, minus trailing periods.
+
+**What is planned.** Heading numbering (one multilevel abstractNum linked to the heading styles, the label templates
+turned into `lvlText`, the counters into `numFmt`), list families (enumerated, renumbered, bullets) with their nesting
+and restarts, depth beyond Word's nine levels (clamped), and numbered paragraphs. A label may show only counters of
+its own list, so a label that needs the section's number (`{section}`, or the `{path}` of an item or paragraph in a
+section: the continental style's `5.1`) is written without it, as for a preamble item, and reported
+(`render-docx-section-label`). `docx_style_errors(style)` names what Word's numbering cannot express at all (a `%`
+before a digit, a level text over 255 characters); a DOCX render calls it before rendering and raises `StyleError`
+(ADR 0006), and `plan_docx` checks again.
+
+**Diagnostics** (all `render-docx-*`, with the unit's line): `heading-skip`, `section-label`, `list-depth`,
+`letter-overflow` (Word repeats letters after 26, the renderer counts on: `aa`, `ab`), `roman-overflow` (4000 and
+beyond), `number-mismatch` (any other difference, which must not occur without a reason: alternatives that share a
+number are not yet planned and are reported this way), `counter` (a counter Word has no format for), and, as
+information, `static-restart` (a list that restarts by a fixed setting). The same finding is reported once.
+
+References, bookmarks and the table of contents are further parts of the plan, empty so far.
+
 ### 5. Write (`writers/`)
 
 > **A writer contains no LegalDown rules.** `tree.assert_resolved()` rejects a tree that still
@@ -266,6 +307,8 @@ src/legaldown_render/
 ├── resolve/
 │   ├── resolver.py    stage 4
 │   ├── numbering.py   counters, the §13.1 scheme presets, label templates
+│   ├── docx_plan.py   the DOCX plan: Word numbering for the resolved tree (planning step, not yet wired)
+│   ├── docx_numbering.py  Word's counters, label templates as tokens, lvlText, the numbering simulator
 │   └── values.py      Babel formatting of dates, money, durations
 ├── style/
 │   ├── model.py       the style dataclasses (every field has a default)
@@ -459,6 +502,8 @@ Each module is named for its topic. Shared helpers (the minimal document header,
 | `tests/test_values.py` | Money, dates and durations in a locale: exact digits, plural of the value shown, currency display, CLDR fallback to English |
 | `tests/test_numbering.py` | Counter formats, label templates and the preamble's `{section}` |
 | `tests/test_numbering_structure.py` | The numbering structure in the tree (`formats`, unit ids, numbers, parents, alternatives, list families, cross-reference units): headings in each scheme and with skipped levels, nested lists, section-qualified items, numbered paragraphs, alternatives, the `none` scheme and its second pass; and that every label, designation and reference can be written again from the structure alone, over the tests' and the specification's documents |
+| `tests/test_docx_plan.py` | The DOCX numbering plan: abstractNums per style and scheme, heading levels, top-level, nested, sibling, cross-family, quoted and clamped lists, numbered paragraphs, labels that need the section, letter and Roman overflow, diagnostics (lines, file, order, repeats), style errors, determinism; and that every numbered unit's simulated Word label is the resolver's or a diagnostic says why not, over the tests' and the specification's documents under each style and list setting, and over random documents |
+| `tests/test_docx_simulator.py` | Word's counters, label templates as tokens (equal to filling the template as text), `lvlText`, and the simulator: restarts, start overrides, shared counters, skipped levels, `peek`/`current` |
 | `tests/test_build.py` | Building the tree: comment-only items and quotes, emphasis next to a directive, spacing where an inline comment was dropped |
 | `tests/test_terms.py` | What `{{term:}}` shows, references inside terms, terms that name themselves or each other, the cap on a term text |
 | `tests/test_none_designations.py` | Designations under the `none` scheme: references and terms in headings, items and paragraphs under them, ambiguity on the final designations, cycles, the depth, length and nesting limits, the lines of the Warnings, work bounds, invariants on random documents |
