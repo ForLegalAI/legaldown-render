@@ -33,13 +33,14 @@ def at(source: str, needle: str) -> int:
 
 
 # One finding that the renderer reports, whatever the block it stands in: an
-# include is not processed (§17.5), a link's scheme is refused (§8.7), an image
-# path is not relative (§2.3).
+# include is not processed (§17.5), a link's scheme is refused (§8.7). An image
+# path that is not relative (§2.3) is the validator's finding since 0.5.0, at the
+# image's own line (test_a_path_finding_is_the_validators_at_the_images_line).
 TRIGGERS = {
     "render-not-processed": "{{include: part.lgd}}",
     "render-link-refused": "[the link](ms-msdt:x)",
-    "path-not-relative": "![the logo](/etc/passwd)",
 }
+IMAGE = "![the logo](/etc/passwd)"
 
 #: Containers for a trigger: the text of a section with the trigger at MARK, and the word that
 #: marks the line its finding is expected at.
@@ -71,6 +72,17 @@ def test_a_finding_is_at_the_first_line_of_its_block(container: str, rule: str) 
     for fmt in ("html", "text"):
         result = render(source, format=fmt)
         assert lines_of(result, rule) == [expected], (container, fmt, result.diagnostics)
+
+
+@pytest.mark.parametrize("container", sorted(CONTAINERS))
+def test_a_path_finding_is_the_validators_at_the_images_line(container: str) -> None:
+    # The validator reports the image at the line it is written on, which may be
+    # below the first line of its block; the renderer does not report it again.
+    body, _ = CONTAINERS[container]
+    source = HEAD + "\nBefore.\n\n" + body.replace("MARK", IMAGE)
+    for fmt in ("html", "text"):
+        result = render(source, format=fmt)
+        assert lines_of(result, "path-not-relative") == [at(source, IMAGE)], (container, fmt, result.diagnostics)
 
 
 def test_a_finding_in_the_preamble_is_at_its_block() -> None:
@@ -419,8 +431,9 @@ def test_lines_survive_resolving() -> None:
 def test_the_same_finding_on_two_lines_is_reported_once_at_the_first() -> None:
     source = HEAD + "\n# A\n\nOne ![a](/x.png).\n\nTwo ![b](/x.png).\n\nThree [l](ms-msdt:x) [m](ms-msdt:x)\n\nFour [l](ms-msdt:x)\n"
     result = render(source)
-    assert lines_of(result, "path-not-relative") == [at(source, "One")]
+    # The renderer's own finding is one; the validator's path finding is one for each image.
     assert lines_of(result, "render-link-refused") == [at(source, "Three")]
+    assert lines_of(result, "path-not-relative") == [at(source, "One"), at(source, "Two")]
 
 
 def test_a_finding_seen_again_at_a_lower_line_is_reported_at_the_lower() -> None:
@@ -441,8 +454,8 @@ def test_the_renderers_diagnostics_are_in_the_order_of_their_lines() -> None:
     source = ('---\ntitle: "T {{include: t.lgd}}"\nsubtitle: "S {{include: s.lgd}}"\n---\n\n# A\n\n'
               "![a](/x.png)\n\nBody {{include: b.lgd}}\n")
     result = render(source)
-    lines = [d.line for d in result.diagnostics if d.rule in ("render-not-processed", "path-not-relative")]
-    assert lines == sorted(lines) and len(lines) == 4
+    lines = [d.line for d in result.diagnostics if d.rule in ("render-not-processed", "render-link-refused")]
+    assert lines == sorted(lines) and len(lines) == 3
 
 
 def test_different_findings_of_one_rule_each_have_their_line() -> None:
@@ -455,7 +468,9 @@ def _with_validator_report(monkeypatch: pytest.MonkeyPatch, line: int | None, pa
     from legaldown import validate as real_validate
 
     def validate(document, **kwargs):  # type: ignore[no-untyped-def]
+        # A validator that names *path* alone, at *line*: the renderer reports the rest.
         result = real_validate(document, **kwargs)
+        result.diagnostics[:] = [d for d in result.diagnostics if d.rule != "path-not-relative"]
         result.diagnostics.append(Diagnostic(rule="path-not-relative", level="error", line=line,
                                              message=f"Image path '{path}' is not relative (§2.3)."))
         return result
@@ -478,12 +493,13 @@ def test_a_report_with_no_line_covers_the_path_wherever_it_is(monkeypatch: pytes
     assert len([d for d in render(source).diagnostics if d.rule == "path-not-relative"]) == 1
 
 
-def test_the_same_path_at_another_line_is_not_covered(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_validators_report_of_a_path_covers_it_at_every_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The validator judges every occurrence of a path (since 0.5.0), so a path it named
+    # at one line is not the renderer's to report at another.
     source = HEAD + "\n# A\n\n![a](https://x/p.png)\n\n\nOther ![b](https://x/p.png)\n"
     _with_validator_report(monkeypatch, at(source, "![a]"))
     errors = [d for d in render(source).diagnostics if d.rule == "path-not-relative"]
-    # The validator's line, and ours at the first image that is not the line it named.
-    assert [d.line for d in errors] == [at(source, "![a]"), at(source, "Other")]
+    assert [d.line for d in errors] == [at(source, "![a]")]
 
 
 # -- The file ------------------------------------------------------------------------------

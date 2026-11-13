@@ -971,9 +971,8 @@ class Resolver:
                                    effect="Its alt text is shown instead."):
                     # §2.3: an image path is relative and within the document
                     # root, so a remote, absolute or outside image is never
-                    # fetched or embedded. Its alt text stands in; the validator
-                    # (0.4) does not check file references, so the renderer
-                    # reports the Core rule.
+                    # fetched or embedded. Its alt text stands in; the finding is
+                    # the validator's where it made it (``covered_by``).
                     return alt
                 return replace(inline, children=alt, title=self._resolve_inlines(_attribute_text(title)))
             case _:
@@ -1555,11 +1554,12 @@ class Resolver:
 
         A report is left out when the validator made it already
         (:func:`~legaldown_render.diagnostics.covered_by`: its report of the
-        path, at this line); one this resolver made is kept once, at the lowest
+        path, at any line); one this resolver made is kept once, at the lowest
         line (:func:`~legaldown_render.diagnostics.record`). The
-        validator quotes the path in its message as '<path>', as written;
-        matching the quoted form keeps a path that is a prefix of another
-        ("/a" and "/ab") from being counted as already reported."""
+        validator quotes the path in its message as '<path>', as written (and
+        an image's as it reads percent-decoded); matching the quoted form keeps
+        a path that is a prefix of another ("/a" and "/ab") from being counted
+        as already reported."""
         problem = file_reference_problem(path, base=self.base, url=url)
         if problem is None:
             return False

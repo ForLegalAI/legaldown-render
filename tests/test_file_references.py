@@ -295,9 +295,11 @@ def test_a_markdown_link_is_not_a_file_reference(tmp_path: Path) -> None:
     assert '<a href="/etc/passwd">the file</a>' in result.output and '<a href="../../a.html">up</a>' in result.output
 
 
-def test_the_same_path_in_two_places_is_one_finding_at_the_first(tmp_path: Path) -> None:
+def test_the_same_path_in_two_places_is_a_finding_at_each(tmp_path: Path) -> None:
+    # The validator's (since 0.5.0), one for each occurrence; the renderer adds none.
     source = _frontmatter("").replace("Body.", "One {{include: /x.lgd}}.\n\nTwo {{include: /x.lgd}}.\n\nThree {{include: /y.lgd}}.")
-    assert findings(render(source)) == [(NOT_RELATIVE, line_of(source, "One")), (NOT_RELATIVE, line_of(source, "Three"))]
+    assert findings(render(source)) == [(NOT_RELATIVE, line_of(source, "One")), (NOT_RELATIVE, line_of(source, "Two")),
+                                        (NOT_RELATIVE, line_of(source, "Three"))]
 
 
 def test_a_path_that_breaks_both_rules_is_not_relative() -> None:
@@ -313,7 +315,9 @@ def test_the_validators_report_of_an_include_is_not_repeated(monkeypatch: pytest
     line = line_of(source, "Before")
 
     def validate(document, **kwargs):  # type: ignore[no-untyped-def]
+        # The validator's report in another wording than its own: it still covers the path.
         result = real_validate(document, **kwargs)
+        result.diagnostics[:] = [d for d in result.diagnostics if d.rule != NOT_RELATIVE]
         result.diagnostics.append(Diagnostic(rule=NOT_RELATIVE, level="error", line=line,
                                              message="Include path 'https://x.example/p.lgd' is not relative."))
         return result

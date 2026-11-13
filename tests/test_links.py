@@ -79,10 +79,13 @@ def test_an_image_inside_a_link_keeps_the_link() -> None:
     assert '<a href="https://example.com">logo</a>' in result.output
 
 
-def test_the_same_image_path_is_reported_once() -> None:
+def test_each_image_path_is_the_validators_finding() -> None:
+    # Since 0.5.0 the validator reports each image (one for each occurrence); the
+    # renderer does not report them again.
     result = render(FRONT + "# A\n\n![a](https://x/p.png) ![b](https://x/p.png) ![c](/q.png)\n")
     errors = [d for d in result.diagnostics if d.rule == "path-not-relative"]
-    assert len(errors) == 2  # the same path twice is one finding
+    assert len(errors) == 3
+    assert not any("Its alt text is shown instead." in d.message for d in errors)
 
 
 def test_strict_refuses_a_non_relative_image() -> None:
@@ -99,8 +102,9 @@ def test_the_validators_own_report_is_not_repeated(monkeypatch: pytest.MonkeyPat
     import legaldown_render.api as api
 
     def validate(document, **kwargs):  # type: ignore[no-untyped-def]
+        # A validator that names one of the two paths: the other is the renderer's.
         result = real_validate(document, **kwargs)
-        # Line 6 is the paragraph's: a report at another line is another finding.
+        result.diagnostics[:] = [d for d in result.diagnostics if d.rule != "path-not-relative"]
         found = Diagnostic(rule="path-not-relative", level="error", line=6,
                            message="Image path 'https://x/p.png' is not relative (§2.3).")
         result.diagnostics.append(found)
@@ -126,9 +130,11 @@ def test_a_path_that_starts_another_is_not_covered_by_the_validators_report() ->
 @pytest.mark.parametrize("path", ["javascript:alert(1)", "data:text/html,x", "https://e/p.png"])
 def test_the_not_relative_message_is_generic(path: str) -> None:
     result = render(FRONT + f"# A\n\n![x](<{path}>)\n")
-    message = next(d.message for d in result.diagnostics if d.rule == "path-not-relative")
-    assert "never fetched" not in message
-    assert "file references are relative paths with no URI scheme. Its alt text is shown instead." in message
+    messages = [d.message for d in result.diagnostics if d.rule == "path-not-relative"]
+    assert len(messages) == 1  # the validator's, not repeated
+    assert "never fetched" not in messages[0]
+    assert f"'{path}'" in messages[0] and "is not relative" in messages[0]
+    assert "<img" not in result.output
 
 
 @pytest.mark.parametrize("empty", ["", "  ", "%20"])
@@ -288,3 +294,36 @@ def test_a_link_text_that_differs_from_its_url_shows_both_in_text() -> None:
 def test_a_link_around_a_picture_keeps_the_picture_not_its_url() -> None:
     output = html("# A\n\n[![](img/p.png)](https://example.com)\n")
     assert '<a href="https://example.com"><img src="img/p.png" alt=""></a>' in output
+
+
+# -- Link reference definitions (§4.7, validator#92) -----------------------------
+
+def test_a_reference_link_takes_its_definition_and_the_definition_renders_nothing() -> None:
+    output = html('# A\n\nSee [the site][s] and [s].\n\n[s]: https://example.com/a_b "The &amp; site"\n')
+    assert '<a href="https://example.com/a_b" title="The &amp; site">the site</a>' in output
+    assert '<a href="https://example.com/a_b" title="The &amp; site">s</a>' in output
+    assert "[s]:" not in output and "[s]:" not in text("# A\n\nSee [s].\n\n[s]: https://example.com\n")
+
+
+def test_the_first_definition_of_a_label_wins_whatever_its_case() -> None:
+    output = html("# A\n\n[x][Label]\n\n[label]: https://first.example\n\n[LABEL]: https://second.example\n")
+    assert '<a href="https://first.example">x</a>' in output and "second.example" not in output
+
+
+def test_a_definition_in_a_quote_or_a_list_item_counts_for_the_whole_document() -> None:
+    output = html("# A\n\nSee [q][s] and [i][t].\n\n> [s]: https://s.example\n\n- item\n\n  [t]: https://t.example\n")
+    assert '<a href="https://s.example">q</a>' in output and '<a href="https://t.example">i</a>' in output
+
+
+def test_a_label_with_no_definition_stays_text() -> None:
+    assert "[x][nope]" in text("# A\n\nSee [x][nope].\n")
+
+
+def test_a_reference_image_is_checked_as_its_definitions_path() -> None:
+    source = FRONT + "# A\n\n![logo][r] and ![pic][ok]\n\n[r]: /etc/passwd\n\n[ok]: img/p.png\n"
+    result = render(source, format="html")
+    assert '<img src="img/p.png" alt="pic">' in result.output
+    assert "/etc/passwd" not in result.output and "logo" in result.output
+    errors = [d for d in result.diagnostics if d.rule == "path-not-relative"]
+    # The validator's, once, at the definition's line.
+    assert [d.line for d in errors] == [source.split("\n").index("[r]: /etc/passwd") + 1]

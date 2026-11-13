@@ -13,13 +13,13 @@ here.
 | U1 | validator | **Keep nested list structure** in the model ([#14](https://github.com/ForLegalAI/legaldown-validator/issues/14)) | Done in [validator#61](https://github.com/ForLegalAI/legaldown-validator/pull/61); the renderer nests lists from it (v0.2) |
 | U2 | validator | **Source positions** (line numbers) on sections, blocks, and diagnostics ([#27](https://github.com/ForLegalAI/legaldown-validator/issues/27)) | Done for the validator's diagnostics in 0.3.0 ([validator#85](https://github.com/ForLegalAI/legaldown-validator/pull/85)); the CLI prints them. 0.4.0 makes a block's, a list item's and a heading's line public (`Document.line_of`, `Document.layout()`) and the line of a frontmatter key (`Document.source_map`). The renderer uses them: every diagnostic it reports names its file and line (v0.4, §16.9). Still open: the line of a directive within a block, so the renderer reports the first line of the block ([#93](https://github.com/ForLegalAI/legaldown-validator/issues/93)) |
 | U3 | validator | **Public API** ([#26](https://github.com/ForLegalAI/legaldown-validator/issues/26)) for what the renderer imports from submodules, and the validator's own **placed markers** and **template decision** | Done. Mostly in 0.3.0 ([validator#90](https://github.com/ForLegalAI/legaldown-validator/pull/90)): `placed_markers` and `is_template` on the result. The rest in 0.4.0: quote and drafting-note content, code content, and the answers-file reader ([#93](https://github.com/ForLegalAI/legaldown-validator/issues/93), [#88](https://github.com/ForLegalAI/legaldown-validator/issues/88)). The reader is on `legaldown`, the rest in the tooling modules `legaldown.syntax` and `legaldown.grammar`. The renderer adopted it and dropped `validator_bridge.py`. The dependency stays pinned to one minor version, since before 1.0 a minor release may change the API |
-| U1b | validator | **Parser gaps** the renderer inherits. Fixed in validator 0.3.0: list markers (#21), tables (#22, #44), comments and HTML blocks (#23, #59), the signature-block cutoff (#24), empty comments (#28), indented code (#9, #41), empty list items (#46), content after a nested list (#64), nested marker changes (#65), headings in quotes and items (#78), raw-html (#40), hard breaks (#25). Still open: link reference definitions ([#92](https://github.com/ForLegalAI/legaldown-validator/issues/92)) | Mostly done; adopted in v0.2 (validator 0.3.0). Listed in `CONFORMANCE.md` |
+| U1b | validator | **Parser gaps** the renderer inherits. Fixed in validator 0.3.0: list markers (#21), tables (#22, #44), comments and HTML blocks (#23, #59), the signature-block cutoff (#24), empty comments (#28), indented code (#9, #41), empty list items (#46), content after a nested list (#64), nested marker changes (#65), headings in quotes and items (#78), raw-html (#40), hard breaks (#25). The last, link reference definitions ([#92](https://github.com/ForLegalAI/legaldown-validator/issues/92)), in 0.5.0 (U6) | Done; adopted in v0.2 (validator 0.3.0) and on validator 0.5.0 |
 | U4a | validator | **Specification 0.2** (templates, §15) | Done in 0.2.0 |
 | U4b | validator | Template **assembly** with an answers set (§15.7, [#30](https://github.com/ForLegalAI/legaldown-validator/issues/30)) | Done in [validator#55](https://github.com/ForLegalAI/legaldown-validator/pull/55); the renderer uses it (v0.2) |
 | U5 | specification | A **rendering fixtures corpus**: source + style settings → expected plain-text output | Not started. The plain-text writer is designed to be its oracle |
-| U6 | validator | **Link reference definitions** (`[label]: url`) in the document model; they render as paragraphs today ([#92](https://github.com/ForLegalAI/legaldown-validator/issues/92)) | Open. Listed in `CONFORMANCE.md` |
-| U7 | validator | **`path-not-relative` and `path-outside-root`** (§2.3, §16.2) are not implemented in 0.4 | Open. Meanwhile the renderer reports both for every file reference itself (v0.4), and leaves its report out where the validator names the same path |
-| U8 | validator | **`definition-circular`** (§16) is not implemented in 0.4 | Open. The renderer renders terms that refer to themselves without looping and warns with its own `render-term-limit` and `render-designation-cycle`, not the specification's rule |
+| U6 | validator | **Link reference definitions** (`[label]: url`) in the document model ([#92](https://github.com/ForLegalAI/legaldown-validator/issues/92)) | Done in validator 0.5.0 (`link_definition` blocks, `legaldown.syntax.collect_link_definitions`). The renderer adopted it: a definition renders nothing, and `[text][label]` and its images resolve as in CommonMark |
+| U7 | validator | **`path-not-relative` and `path-outside-root`** (§2.3, §16.2) | Done in validator 0.5.0 ([#104](https://github.com/ForLegalAI/legaldown-validator/issues/104)): each occurrence at its own line. The renderer gives the validator no root, so it still reports `path-outside-root` itself, and `path-not-relative` only for a path the validator does not name (it reads an attachment's link as a URL) |
+| U8 | validator | **`definition-circular`** (§16) | Done in validator 0.5.0 ([#105](https://github.com/ForLegalAI/legaldown-validator/issues/105)), and reported through the renderer. The renderer still renders terms that refer to themselves without looping, and keeps `render-term-limit` and `render-designation-cycle` for what they bound |
 | U9 | validator | **Table rows wider than the header** lose their extra cells inside the validator, with no diagnostic | Open. Listed in `CONFORMANCE.md` |
 
 ## Milestones
@@ -131,6 +131,18 @@ values appear only as the cached results of fields. Decided in
   - New `render-docx-*` diagnostics for DOCX renders only.
 - **Next.** Running the manual Word checklist, which finds what only Word shows; its findings are recorded in the
   release notes. Whether the writer then claims §13.6 for DOCX is decided in `CONFORMANCE.md`
+
+### Unreleased — Validator 0.5.0
+
+- Built on `legaldown-validator` 0.5.0 (`>=0.5.0,<0.6`), which removes the APIs deprecated in 0.4.0; the renderer
+  used none of them
+- **Link reference definitions** (U6): `[label]: url` renders nothing, and `[text][label]`, `[label]` and their
+  images take the definition. A document with one no longer stops with an `InternalError`
+- **File references** (U7): `path-not-relative` is the validator's, one finding for each occurrence at its own line
+  (an image below the first line of its block used to be reported twice, at both lines). The renderer's own message
+  with "Its alt text is shown instead." now appears only where the validator names nothing
+- **`definition-circular`** (U8) and the validator's other new checks (the combined document, frontmatter keys
+  written twice, `definition-used-before-declaration`) appear among the diagnostics
 
 ### v0.6 — PDF
 
