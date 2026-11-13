@@ -137,7 +137,8 @@ values appear only as the cached results of fields. Decided in
 - Built on `legaldown-validator` 0.5.0 (`>=0.5.0,<0.6`), which removes the APIs deprecated in 0.4.0; the renderer
   used none of them
 - **Link reference definitions** (U6): `[label]: url` renders nothing, and `[text][label]`, `[label]` and their
-  images take the definition. A document with one no longer stops with an `InternalError`
+  images take the definition, and a list item holding nothing but definitions is left out, as a comment-only one
+  is. A document with one no longer stops with an `InternalError`
 - **File references** (U7): `path-not-relative` is the validator's, one finding for each occurrence at its own line
   (in 0.5 the renderer reported a path once, at the first line of its block). The renderer's own message with "Its
   alt text is shown instead." now appears only where the validator names nothing

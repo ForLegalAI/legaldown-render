@@ -485,9 +485,15 @@ class _Builder:
         An item whose blocks are all comments or raw HTML is the author
         removing it (§8.6), and is left out — after the whole list is
         traversed, so the numbers (and with them the markers) stay those of
-        the validator's list. An item with no blocks at all is an empty item
-        (CommonMark) and keeps its place, so later items keep their numbers.
-        A list left with no items is left out."""
+        the validator's list. So is an item that holds nothing but link
+        reference definitions (and comments): it renders nothing, and a
+        numbered clause with no text would be a blank clause in a contract.
+        An item with no blocks at all is an empty item (CommonMark) and keeps
+        its place, so later items keep their numbers. A list left with no
+        items is left out.
+
+        A placed marker is in the item's text: its first block that is not a
+        link reference definition, as the validator reads it (``item_text``)."""
         self._check_depth(1)
         self.depth += 1
         try:
@@ -499,7 +505,8 @@ class _Builder:
                 identifier = condition = ""
                 if marker is not None:
                     identifier, condition = marker.identifier, marker.condition
-                    children[0] = replace(children[0], text=_cut_marker(children[0].text, marker))
+                    first = next((i for i, child in enumerate(children) if child.kind != "link_definition"), 0)
+                    children[first] = replace(children[first], text=_cut_marker(children[first].text, marker))
                 blocks: list[Block] = []
                 outer = self.line
                 # The item's marker line; in a quote an item is not addressable.
@@ -517,9 +524,10 @@ class _Builder:
                             blocks.append(built)
                 finally:
                     self.line = outer
-                # Only a comment: the item is removed. Defensive: an item a
-                # marker belongs to (an anchor or a condition) never vanishes.
-                if item.blocks and all(child.kind == "html" for child in item.blocks) \
+                # Only comments or link reference definitions: the item renders
+                # nothing and is removed. Defensive: an item a marker belongs to
+                # (an anchor or a condition) never vanishes.
+                if item.blocks and all(child.kind in ("html", "link_definition") for child in item.blocks) \
                         and not identifier and not condition:
                     continue
                 items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition, line=item_line))

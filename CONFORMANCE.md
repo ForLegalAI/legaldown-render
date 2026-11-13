@@ -155,9 +155,11 @@ other Word-only assumption of the plan) is a manual checklist before each releas
   reports `path-outside-root` itself, and `path-not-relative` for a path the validator reads
   differently (an attachment's link is a URL to the renderer, read percent-decoded). It leaves its
   own report out when the validator names the same path, at any line.
-  A path with both problems (`/../x`) is `path-not-relative`. The reports are at the line of the
-  block holding the `{{include:}}` or image, or of the frontmatter key (`attachments[].file`,
-  `amends.file`, `supersedes.file`, `translations.<language>`), like the rest.
+  A path with both problems (`/../x`) is `path-not-relative`. The validator's reports are at the
+  line the `{{include:}}` or image is written on, or of the frontmatter key (`attachments[].file`,
+  `amends.file`, `supersedes.file`, `translations.<language>`); the renderer's own are at the line of
+  the block holding the `{{include:}}` or image, or of the key, like the rest of its findings. For an
+  image below the first line of its block the two rules can therefore name different lines.
   The checks are lexical, as §2.3 says: no path is resolved against the file system, no symbolic
   link is followed, and no file is read or its existence checked (that is Full, §17.4).
   The containment rule runs only where a root is set, as §2.3 says (it defines no default root,
@@ -289,7 +291,8 @@ other Word-only assumption of the plan) is a manual checklist before each releas
   definitions (`[label]: url`) are in the model since validator 0.5.0
   ([#92](https://github.com/ForLegalAI/legaldown-validator/issues/92)): they render nothing, and
   the links and images that name their label take the first definition of it in the document, as
-  in CommonMark.
+  in CommonMark. A list item that holds nothing but definitions (and comments) is left out, as a
+  comment-only item is, rather than shown as a numbered clause with no text.
 
 ## Beyond this level (Full, §17.4)
 

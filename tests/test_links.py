@@ -327,3 +327,18 @@ def test_a_reference_image_is_checked_as_its_definitions_path() -> None:
     errors = [d for d in result.diagnostics if d.rule == "path-not-relative"]
     # The validator's, once, at the definition's line.
     assert [d.line for d in errors] == [source.split("\n").index("[r]: /etc/passwd") + 1]
+
+
+def test_a_marker_in_an_item_that_opens_with_a_definition_is_in_its_text() -> None:
+    # The validator reads an item's text from its first block that is not a link
+    # reference definition, and places the item's marker there.
+    for gap in ("", "\n"):
+        output = text(f"# A\n\n- [x]: https://e.com\n{gap}  Item [text][x] {{#item-a}}\n- two\n\nSee {{{{ref: item-a}}}}.\n")
+        assert "(a) Item text <https://e.com>" in output and "See 1(a)." in output
+        assert "{#item-a}" not in output
+
+
+def test_an_item_of_only_definitions_is_left_out_like_a_comment_only_item() -> None:
+    output = text("# A\n\n1. one\n2. [x]: https://e.com\n   <!-- note -->\n3. three [y][x]\n")
+    assert "1. one\n2. three y <https://e.com>" in output
+    assert "\n3." not in output
