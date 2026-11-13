@@ -90,7 +90,7 @@ Rendering what other people send, and reporting problems where they are. No new 
   self-contained
 - **Project.** CI also runs on Windows, and publishing to PyPI waits for CI
 
-### v0.5 — DOCX (this release; the manual Word checks are still to come)
+### v0.5 — DOCX (released; the manual Word checks are still to come)
 
 A document lawyers can edit: in the .docx every number, cross-reference, the table of contents and
 the page numbers are live Word features (numbering definitions and fields), and the renderer's
@@ -132,19 +132,19 @@ values appear only as the cached results of fields. Decided in
 - **Next.** Running the manual Word checklist, which finds what only Word shows; its findings are recorded in the
   release notes. Whether the writer then claims §13.6 for DOCX is decided in `CONFORMANCE.md`
 
-### Unreleased — Validator 0.5.0
+### v0.6 — Validator 0.5.0 (this release)
 
 - Built on `legaldown-validator` 0.5.0 (`>=0.5.0,<0.6`), which removes the APIs deprecated in 0.4.0; the renderer
   used none of them
 - **Link reference definitions** (U6): `[label]: url` renders nothing, and `[text][label]`, `[label]` and their
   images take the definition. A document with one no longer stops with an `InternalError`
 - **File references** (U7): `path-not-relative` is the validator's, one finding for each occurrence at its own line
-  (an image below the first line of its block used to be reported twice, at both lines). The renderer's own message
-  with "Its alt text is shown instead." now appears only where the validator names nothing
+  (in 0.5 the renderer reported a path once, at the first line of its block). The renderer's own message with "Its
+  alt text is shown instead." now appears only where the validator names nothing
 - **`definition-circular`** (U8) and the validator's other new checks (the combined document, frontmatter keys
   written twice, `definition-used-before-declaration`) appear among the diagnostics
 
-### v0.6 — PDF
+### v0.7 — PDF
 
 - Choose the engine ([ADR 0004](decisions/0004-html-first.md)). The leading option is WeasyPrint
   on the HTML writer; its print stylesheet already exists
