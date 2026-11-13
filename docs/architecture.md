@@ -115,8 +115,10 @@ in a list item or a quote (`kind="heading"`) is not a section (§4.1) and shows 
 
 The builder never works around the validator's model. Where the model loses or misreads
 something, the output follows the model, and the gap is listed in `CONFORMANCE.md` and filed on
-the validator:
-- link reference definitions (`[label]: url`) render as paragraphs
+the validator. None is open: the last, link reference definitions (`[label]: url`), is in the model
+since validator 0.5.0 (`link_definition` blocks, which render nothing; the builder gives
+markdown-it the definitions `legaldown.syntax.collect_link_definitions` reads, so `[text][label]`
+and its images resolve as in CommonMark).
 
 Guessing at lost structure was tried, and it traded each gap for new bugs.
 
@@ -492,7 +494,7 @@ src/legaldown_render/
 
 | Dependency | Why |
 |---|---|
-| `legaldown-validator>=0.4.0,<0.5` | The only LegalDown parser; Core validation |
+| `legaldown-validator>=0.5.0,<0.6` | The only LegalDown parser; Core validation |
 | `markdown-it-py` | Inline Markdown inside one block's text (ADR 0007) |
 | `babel` | CLDR locale data (ADR 0005) |
 | `pyyaml` | Style templates |
@@ -520,8 +522,8 @@ turns into an error.
 
 Diagnostics reuse `legaldown.Diagnostic`. The renderer adds rules only it can evaluate:
 `ref-not-enumerated`, `path-not-relative` and `path-outside-root` (Errors for a file reference that is
-not relative, or that leaves the document root, §2.3; reported here because validator 0.4 checks
-neither), specification rule ids, plus renderer-specific ids prefixed `render-`:
+not relative, or that leaves the document root, §2.3; the validator reports `path-not-relative`
+since 0.5.0, and the renderer only what it does not name, see `CONFORMANCE.md`), specification rule ids, plus renderer-specific ids prefixed `render-`:
 `render-not-processed`, `render-link-refused` (a Warning for a link whose URL scheme links may not use; its text is shown), `render-locale-fallback` (an Info when no formatting locale is known, a Warning when a duration unit has no CLDR pattern in the locale and English is used), `render-ref-ambiguous`, `render-term-limit` (a Warning when defined terms refer to each other too deeply or too often: past 32 nested terms, 200,000 inline nodes resolved inside repeat computations of a term text (only cycles cause them), or 60 inline levels nested inside an open term, a `{{term:}}` shows its id; one block's own nesting, up to the builder's 100 levels, never counts), `render-designation-cycle` (a Warning for a heading that refers back to itself under the `none` scheme) and `render-designation-limit` (a Warning under the `none` scheme for headings that refer to each other past 32 headings, 60 nested levels, or 1,000 characters, and for a reference to a heading longer than 1,000 characters, which shows its first 1,000), and `render-term-too-long` (a Warning for a defined term whose text, with its references resolved, is longer than 1,000 characters: `{{term:}}` then shows the definition id), and the rules the DOCX planner reports on what Word draws differently from the other formats (`render-docx-section-label`, `-list-depth`, `-letter-overflow`, `-roman-overflow`, `-shared-counter`, `-number-mismatch`, `-reference`, `-reference-cycle`, as Warnings, `-alternative`, `-static-restart`, `-libreoffice-count` and `-reference-word-only` as Infos; see "The DOCX planner"). The validator's
 diagnostics carry their line (§16.9), and so do the renderer's own, and the CLI prints it as
 `file:line:`.

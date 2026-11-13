@@ -1,7 +1,7 @@
 # Conformance
 
-`legaldown-render` 0.5.0 targets **Level 2 — Rendering** of the LegalDown specification **0.2**
-(§17.3). Core parsing and validation come from `legaldown-validator` 0.4, which claims Level 1
+`legaldown-render` 0.6.0 targets **Level 2 — Rendering** of the LegalDown specification **0.2**
+(§17.3). Core parsing and validation come from `legaldown-validator` 0.5, which claims Level 1
 — Core. Its own [CONFORMANCE.md](https://github.com/ForLegalAI/legaldown-validator/blob/main/CONFORMANCE.md)
 lists the Core rules it covers.
 
@@ -149,13 +149,17 @@ other Word-only assumption of the plan) is a manual checklist before each releas
   diagnostics are listed in the order of their lines (none last), after the validator's. A document with no source to
   name a line of (built from a dict) reports no line. With `answers`, the lines are those of the
   assembled document (§15.8), not of the template file.
-- **File references (§2.3).** The renderer reports `path-not-relative` and `path-outside-root`
-  (§2.3, §16.2) for every file reference itself, because the validator (0.4) checks neither rule.
-  It leaves its own report out when the validator names the same path at the same line (or no
-  line), and keeps it for a path the validator did not name, or the same path at another line.
-  A path with both problems (`/../x`) is `path-not-relative`. The reports are at the line of the
-  block holding the `{{include:}}` or image, or of the frontmatter key (`attachments[].file`,
-  `amends.file`, `supersedes.file`, `translations.<language>`), like the rest.
+- **File references (§2.3).** The validator (since 0.5.0) reports `path-not-relative` for every
+  file reference §2.3 lists, each occurrence at its own line (an image at the line it is written on,
+  a reference-style image at its definition's). It is given no document root, so the renderer
+  reports `path-outside-root` itself, and `path-not-relative` for a path the validator reads
+  differently (an attachment's link is a URL to the renderer, read percent-decoded). It leaves its
+  own report out when the validator names the same path, at any line.
+  A path with both problems (`/../x`) is `path-not-relative`. The validator's reports are at the
+  line the `{{include:}}` or image is written on, or of the frontmatter key (`attachments[].file`,
+  `amends.file`, `supersedes.file`, `translations.<language>`); the renderer's own are at the line of
+  the block holding the `{{include:}}` or image, or of the key, like the rest of its findings. For an
+  image below the first line of its block the two rules can therefore name different lines.
   The checks are lexical, as §2.3 says: no path is resolved against the file system, no symbolic
   link is followed, and no file is read or its existence checked (that is Full, §17.4).
   The containment rule runs only where a root is set, as §2.3 says (it defines no default root,
@@ -247,8 +251,8 @@ other Word-only assumption of the plan) is a manual checklist before each releas
   read the next twice would otherwise ask for a text of 2^n words): a longer one is shown by its
   definition id in `{{term:}}` (a `label=` still wins), and the Warning `render-term-too-long` names the
   id, once. The
-  validator (0.4.0) does not report these cycles; the specification's `definition-circular`
-  Warning (§16) is not emitted yet.
+  specification's `definition-circular` Warning (§16) is the validator's (since 0.5.0), reported
+  once for each set of definitions that lead round to each other.
 - **Ambiguous references.** Each list starts again at its first number, as contracts are usually
   drafted, so two lists in one section can both have an item "(a)", and a style can number a
   paragraph or an item like a subsection ("1.1"). A `{{ref:}}` to a section, paragraph, or list
@@ -283,11 +287,12 @@ other Word-only assumption of the plan) is a manual checklist before each releas
   for example `[INVALID AMOUNT]`. The specification defines no marker for this case.
 - **One parser.** The renderer builds from the validator's document model only
   ([ADR 0007](docs/decisions/0007-one-parser-validator-model.md)). Anchors, markers, and the
-  template view therefore always agree with the validator's diagnostics. The price is that some
-  structure renders as the validator's model holds it, until that model keeps more (roadmap
-  U1b):
-  - **Link reference definitions** (`[label]: url`) render as paragraphs, and the links that use
-    them as text ([#92](https://github.com/ForLegalAI/legaldown-validator/issues/92)).
+  template view therefore always agree with the validator's diagnostics. Link reference
+  definitions (`[label]: url`) are in the model since validator 0.5.0
+  ([#92](https://github.com/ForLegalAI/legaldown-validator/issues/92)): they render nothing, and
+  the links and images that name their label take the first definition of it in the document, as
+  in CommonMark. A list item that holds nothing but definitions (and comments) is left out, as a
+  comment-only item is, rather than shown as a numbered clause with no text.
 
 ## Beyond this level (Full, §17.4)
 

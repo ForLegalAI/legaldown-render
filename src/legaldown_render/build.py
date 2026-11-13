@@ -23,6 +23,11 @@ Lists and quotes are built as the validator's model holds them: list items
 hold blocks, nested lists included, and a quote's content is the blocks the
 validator reads in it (``legaldown.syntax.quote_blocks``,
 ForLegalAI/legaldown-validator#71, #72).
+
+Link reference definitions (``[label]: url "title"``) are the validator's
+too (``link_definition`` blocks, ForLegalAI/legaldown-validator#92): they
+render nothing, and the links and images that name their label take what
+``legaldown.syntax.collect_link_definitions`` says the label means.
 """
 from __future__ import annotations
 
@@ -39,7 +44,9 @@ from legaldown import Block as ModelBlock
 from legaldown import Document, PlacedMarker, ValidationResult
 from legaldown.syntax import (
     Directive,
+    LinkDefinition,
     code_content,
+    collect_link_definitions,
     drafting_note_blocks,
     find_definition_anchors,
     is_drafting_note,
@@ -49,6 +56,7 @@ from legaldown.syntax import (
     render_block,
 )
 from markdown_it import MarkdownIt
+from markdown_it.common.utils import normalizeReference, unescapeAll
 from markdown_it.tree import SyntaxTreeNode
 
 from .errors import DocumentError, InternalError
@@ -188,7 +196,9 @@ class _Builder:
         # its alt text, and the writers show a refused link as its text
         # (`urls.LINK_SCHEMES`), which is the safety markdown-it was for.
         self.md.validateLink = lambda url: True
-        self.env: dict = {}
+        # The document's link reference definitions, for ``[text][label]``,
+        # ``[label]`` and their images wherever they are (#92).
+        self.env: dict = {"references": _references(self.md, collect_link_definitions(document))}
         self.payloads: list[_Payload] = []
         # The markers the validator placed, by (section index or None for
         # the preamble, block index).
@@ -421,6 +431,8 @@ class _Builder:
                 )
             case "rule":
                 return Rule()
+            case "link_definition":
+                return None  # renders nothing; its links take it (``_references``)
             case "heading":
                 # A heading in a list item or a quote: not a section (§4.1),
                 # so it has no number and no anchor. It shows as a bold line.
@@ -473,9 +485,15 @@ class _Builder:
         An item whose blocks are all comments or raw HTML is the author
         removing it (§8.6), and is left out — after the whole list is
         traversed, so the numbers (and with them the markers) stay those of
-        the validator's list. An item with no blocks at all is an empty item
-        (CommonMark) and keeps its place, so later items keep their numbers.
-        A list left with no items is left out."""
+        the validator's list. So is an item that holds nothing but link
+        reference definitions (and comments): it renders nothing, and a
+        numbered clause with no text would be a blank clause in a contract.
+        An item with no blocks at all is an empty item (CommonMark) and keeps
+        its place, so later items keep their numbers. A list left with no
+        items is left out.
+
+        A placed marker is in the item's text: its first block that is not a
+        link reference definition, as the validator reads it (``item_text``)."""
         self._check_depth(1)
         self.depth += 1
         try:
@@ -487,7 +505,8 @@ class _Builder:
                 identifier = condition = ""
                 if marker is not None:
                     identifier, condition = marker.identifier, marker.condition
-                    children[0] = replace(children[0], text=_cut_marker(children[0].text, marker))
+                    first = next((i for i, child in enumerate(children) if child.kind != "link_definition"), 0)
+                    children[first] = replace(children[first], text=_cut_marker(children[first].text, marker))
                 blocks: list[Block] = []
                 outer = self.line
                 # The item's marker line; in a quote an item is not addressable.
@@ -505,9 +524,10 @@ class _Builder:
                             blocks.append(built)
                 finally:
                     self.line = outer
-                # Only a comment: the item is removed. Defensive: an item a
-                # marker belongs to (an anchor or a condition) never vanishes.
-                if item.blocks and all(child.kind == "html" for child in item.blocks) \
+                # Only comments or link reference definitions: the item renders
+                # nothing and is removed. Defensive: an item a marker belongs to
+                # (an anchor or a condition) never vanishes.
+                if item.blocks and all(child.kind in ("html", "link_definition") for child in item.blocks) \
                         and not identifier and not condition:
                     continue
                 items.append(ListItem(blocks=tuple(blocks), anchor_id=identifier, condition=condition, line=item_line))
@@ -572,6 +592,19 @@ class _Builder:
             sections=sections,
             is_template=self.result.index.is_template,
         )
+
+
+def _references(md: MarkdownIt, definitions: dict[str, LinkDefinition]) -> dict[str, dict[str, str]]:
+    """The validator's link reference definitions (*definitions*, by label;
+    the first in the document already won) as markdown-it's inline parser
+    reads them from its ``env``: by markdown-it's form of the label, the URL
+    unescaped and normalised and the title unescaped, as its own block rule
+    would store them."""
+    return {
+        normalizeReference(label): {"href": md.normalizeLink(unescapeAll(definition.url)),
+                                    "title": unescapeAll(definition.title)}
+        for label, definition in definitions.items()
+    }
 
 
 def _strip_markers(block: ModelBlock, placed: list[PlacedMarker]) -> tuple[ModelBlock, str, str]:

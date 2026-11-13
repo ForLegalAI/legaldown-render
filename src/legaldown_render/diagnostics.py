@@ -82,13 +82,14 @@ def _same(a: Diagnostic, b: Diagnostic) -> bool:
 
 def covered_by(found: Diagnostic, path: str, validator: Iterable[Diagnostic]) -> bool:
     """True if the validator already reported *found*, a ``path-not-relative``
-    about *path*: its diagnostic of the rule quotes the path (``'<path>'``) and
-    is at the same line, or has none. A path the validator did not name is
-    still the renderer's to report, even where the validator reported another
-    at the same line, and so is the same path where it stands elsewhere."""
+    or ``path-outside-root`` about *path*: its diagnostic of the rule quotes the
+    path (``'<path>'``, as written or as it reads once percent-decoded), at any
+    line. Since 0.5.0 the validator judges every file reference of §2.3, each
+    occurrence at its own line (an image at the image's, which may be below the
+    first line of its block where the renderer reports; a reference-style image
+    at its definition's), so a path it names anywhere it named everywhere. A
+    path it did not name is still the renderer's to report: one it reads
+    differently (an attachment's link is a URL to the renderer, percent-decoded),
+    and every ``path-outside-root`` while the validator is given no root."""
     quoted = f"'{path}'"
-    return any(
-        d.rule == found.rule and quoted in d.message
-        and (d.line is None or found.line is None or d.line == found.line)
-        for d in validator
-    )
+    return any(d.rule == found.rule and quoted in d.message for d in validator)

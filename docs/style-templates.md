@@ -225,7 +225,7 @@ there. A text that is empty everywhere (the header by default) writes no header 
 fields that Word and LibreOffice count while laying out the pages (a viewer that lays out no pages shows
 the cached "1", so the default footer reads "1 / 1" there), and the other three fields are text.
 A single text is aligned; two or three are separated by tab stops at the middle and the right margin.
-The **HTML** and plain-text writers do not read them yet; the PDF writer will (v0.6).
+The **HTML** and plain-text writers do not read them yet; the PDF writer will (v0.7).
 
 ```yaml
 page:
