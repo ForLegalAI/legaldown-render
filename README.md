@@ -66,6 +66,7 @@ legaldown-render contract.lgd --root . --strict                 # file reference
 legaldown-render upload.lgd --untrusted --root uploads/ --style continental   # a document you did not write
 legaldown-render contract.lgd --final --strict                  # refuse if blanks or template constructs remain
 legaldown-render template.lgd --answers answers.yaml -o nda.html # fill in a template, then render it
+legaldown-render contract.lgd --fragment --id-prefix ld-       # an <article> to embed: id="ld-scope", href="#ld-scope"
 legaldown-render --print-style --style continental              # every setting, as YAML
 ```
 
@@ -137,7 +138,12 @@ format, and so is `assert_resolved`, the check the built-in writers make. A patc
 breaks them; [The render tree](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/render-tree.md)
 has the reference and what a minor release may change. For HTML with `standalone=False`, which is
 only the `<article>`, `legaldown_render.writers.stylesheet(style)` gives the CSS of the `ld-*`
-classes that a complete page has in its `<style>`.
+classes that a complete page has in its `<style>`, and `html_id_prefix=` (`--id-prefix`) puts a prefix before
+every `id` and every in-document `#` link of the output (`"ld-"` makes `id="scope"` `id="ld-scope"`, and
+`href="#def:fee"` `href="#ld-def:fee"`), so that the document's anchors cannot collide with the page's own. It is an ASCII letter and then letters,
+digits, `-` and `_` (an `OptionsError` otherwise); links the author wrote as `#…` are prefixed too, and
+`result.tree` keeps the anchors without it. The anchors themselves may contain `:`, which a CSS selector must
+escape (`#ld-def\:fee`).
 
 ## DOCX
 

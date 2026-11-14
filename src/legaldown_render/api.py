@@ -30,6 +30,7 @@ from .style import Style, load_style
 from .style.docx import DocxSettings, docx_settings
 from .tree import RenderTree, assert_resolved
 from .writers import FORMATS, DocxWriter, HtmlWriter, TextWriter
+from .writers.html import check_id_prefix
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,14 @@ class RenderOptions:
     answers: Mapping[str, Any] | None = None
     #: HTML only: a complete page (True) or just the ``<article>`` (False).
     standalone: bool = True
+    #: HTML only: put before every ``id`` and every in-document ``#`` link of
+    #: the output, so that a page that embeds it keeps ids of its own apart
+    #: (``"ld-"`` makes ``id="scope"`` ``id="ld-scope"``). An ASCII letter, then
+    #: letters, digits, ``-`` and ``_``; anything else is an
+    #: :class:`OptionsError`. The anchors in :attr:`RenderResult.tree` are
+    #: unprefixed. Ignored by the other formats, as DOCX bookmarks have a
+    #: prefix of their own.
+    html_id_prefix: str = ""
     #: The document's file name, which every diagnostic of the result names as
     #: its ``file`` (§16.9), the validator's and the renderer's alike, as
     #: ``Document.filename`` does for the validator: the name without its
@@ -142,6 +151,8 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
         raise TypeError("pass either a RenderOptions or keyword settings, not both")
     if options.format not in FORMATS:
         raise OptionsError(f"unknown output format '{options.format}' (known: {', '.join(FORMATS)})")
+    if (problem := check_id_prefix(options.html_id_prefix)) is not None:
+        raise OptionsError(problem)
     if options.untrusted and options.document_root is None:
         raise OptionsError("an untrusted render needs a document_root (§2.3): name the directory that file "
                            "references may not leave")
@@ -320,4 +331,4 @@ def _writer(options: RenderOptions, style: Style, docx: DocxSettings | None) -> 
     if options.format == "docx":
         assert docx is not None
         return DocxWriter(style, generator=generator, settings=docx)
-    return HtmlWriter(style, standalone=options.standalone, generator=generator)
+    return HtmlWriter(style, standalone=options.standalone, generator=generator, id_prefix=options.html_id_prefix)

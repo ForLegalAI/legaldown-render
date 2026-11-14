@@ -59,7 +59,19 @@ from ..tree import (
 )
 from ..urls import displayed_url, is_link_target, is_safe_href
 
-__all__ = ["HtmlWriter", "is_safe_href", "stylesheet"]
+__all__ = ["HtmlWriter", "check_id_prefix", "is_safe_href", "stylesheet"]
+
+_ID_PREFIX = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+
+
+def check_id_prefix(prefix: str) -> str | None:
+    """Why *prefix* cannot start an HTML id, or None if it can. It is a letter
+    and then letters, digits, ``-`` and ``_``, so that every prefixed id is
+    valid and a ``#`` link to it needs no escaping; ``""`` is no prefix."""
+    if prefix == "" or _ID_PREFIX.fullmatch(prefix):
+        return None
+    return (f"the HTML id prefix {prefix!r} is not usable: it must start with an ASCII letter and hold only letters, "
+            "digits, '-' and '_'")
 
 def _text(value: str) -> str:
     return escape(value, quote=False)
@@ -75,13 +87,28 @@ class HtmlWriter:
     extension = "html"
     media_type = "text/html"
 
-    def __init__(self, style: Style, *, standalone: bool = True, generator: str = "") -> None:
+    def __init__(self, style: Style, *, standalone: bool = True, generator: str = "", id_prefix: str = "") -> None:
         self.style = style
         self.standalone = standalone
         self.generator = generator
+        #: Put before every ``id`` and every in-document ``href="#..."`` the
+        #: page holds, so that a page embedding the output keeps its own ids:
+        #: the tree's anchors stay as they are. Checked by
+        #: :func:`check_id_prefix` when it comes through :func:`~legaldown_render.render`.
+        self.id_prefix = id_prefix
         # Inside a link, references render as plain spans: HTML forbids
         # nested links.
         self._in_link = False
+
+    def _id(self, anchor: str | None) -> str:
+        """The ``id`` attribute of *anchor*, with the prefix; nothing for none."""
+        return f' id="{_attr(self.id_prefix + anchor)}"' if anchor else ""
+
+    def _fragment(self, href: str) -> str:
+        """*href* with the prefix after its ``#`` when it is a link within the
+        page: an anchor, an ``{{attach:}}``, or a link the author wrote as
+        ``#...``, which may name any anchor. Any other URL is left as it is."""
+        return "#" + self.id_prefix + href[1:] if href.startswith("#") else href
 
     # -- document -------------------------------------------------------------
 
@@ -150,7 +177,7 @@ class HtmlWriter:
             # unlinked() has taken every link out of the title.
             text = f'{number}<span class="ld-contents-text">{self.inlines(entry.title)}</span>'
             if entry.anchor:
-                text = f'<a href="#{_attr(entry.anchor)}">{text}</a>'
+                text = f'<a href="#{_attr(self.id_prefix + entry.anchor)}">{text}</a>'
             if entry.condition_label:
                 text += f' <span class="ld-condition">{_text(entry.condition_label)}</span>'
             parts.append(f'<li class="ld-contents-level-{entry.level}">{text}</li>')
@@ -168,7 +195,7 @@ class HtmlWriter:
                 parts.append("</section>")
             open_levels.append(section.level)
             classes = f"ld-section ld-level-{section.level}" + (" ld-conditional" if section.condition_label else "")
-            anchor = f' id="{_attr(section.anchor)}"' if section.anchor else ""
+            anchor = self._id(section.anchor)
             parts.append(f'<section class="{classes}"{anchor}>')
             parts.append(self.heading(section))
             if section.condition_label:
@@ -186,7 +213,7 @@ class HtmlWriter:
 
     def attachments(self, tree: RenderTree) -> str:
         separator = self.style.attachments.separator
-        anchor = f' id="{_attr(tree.attachments_anchor)}"' if tree.attachments_anchor else ""
+        anchor = self._id(tree.attachments_anchor)
         parts = [f'<section class="ld-attachments ld-separator-{separator}"{anchor}>',
                  f'<h2 class="ld-attachments-heading">{_text(tree.attachments_label)}</h2>' if tree.attachments_label
                  else ""]
@@ -195,7 +222,7 @@ class HtmlWriter:
         return "\n".join(part for part in parts if part)
 
     def attachment(self, attachment: AttachmentPart) -> str:
-        anchor = f' id="{_attr(attachment.anchor)}"' if attachment.anchor else ""
+        anchor = self._id(attachment.anchor)
         parts = [f'<section class="ld-attachment"{anchor}>', f'<h3 class="ld-attachment-title">{self.inlines(attachment.title)}</h3>']
         if attachment.condition_label:
             parts.append(f'<p class="ld-condition">{_text(attachment.condition_label)}</p>')
@@ -246,7 +273,7 @@ class HtmlWriter:
 
     def paragraph(self, block: Paragraph, prefix: str = "") -> str:
         classes = "ld-p" + (" ld-conditional" if block.condition_label else "")
-        anchor = f' id="{_attr(block.anchor)}"' if block.anchor else ""
+        anchor = self._id(block.anchor)
         if block.condition_label:
             prefix += f'<span class="ld-condition">{_text(block.condition_label)}</span> '
         if block.label:
@@ -264,7 +291,7 @@ class HtmlWriter:
 
     def item(self, item: ListItem) -> str:
         classes = ' class="ld-conditional"' if item.condition_label else ""
-        anchor = f' id="{_attr(item.anchor)}"' if item.anchor else ""
+        anchor = self._id(item.anchor)
         label = f'<span class="ld-label">{_text(item.label)}</span>' if item.label else ""
         condition = f'<span class="ld-condition">{_text(item.condition_label)}</span> ' if item.condition_label else ""
         blocks = list(item.blocks)
@@ -322,7 +349,7 @@ class HtmlWriter:
                 outer, self._in_link = self._in_link, True
                 content = self.inlines(shown)
                 self._in_link = outer
-                return f'<a href="{_attr(href)}"{title_attr}>{content}</a>'
+                return f'<a href="{_attr(self._fragment(href))}"{title_attr}>{content}</a>'
             case Image(src=src, children=children, title=title):
                 alt = plain_text(children)
                 if not is_safe_href(src):
@@ -332,19 +359,19 @@ class HtmlWriter:
             case CrossRef(text=text, target=target):
                 if not target or self._in_link:
                     return f'<span class="ld-ref">{_text(text)}</span>'
-                return f'<a class="ld-ref" href="#{_attr(target)}">{_text(text)}</a>'
+                return f'<a class="ld-ref" href="#{_attr(self.id_prefix + target)}">{_text(text)}</a>'
             case TermRef(text=text, target=target, style=style):
                 classes = f"ld-term ld-style-{style}"
                 if target is None or self._in_link:
                     return f'<span class="{classes}">{_text(text)}</span>'
-                return f'<a class="{classes}" href="#{_attr(target)}">{_text(text)}</a>'
+                return f'<a class="{classes}" href="#{_attr(self.id_prefix + target)}">{_text(text)}</a>'
             case DefinedTerm(children=children, anchor=anchor, style=style, defining=defining):
                 tag = "dfn" if defining else "span"
-                anchor_attr = f' id="{_attr(anchor)}"' if anchor else ""
+                anchor_attr = self._id(anchor)
                 return f'<{tag} class="ld-defined ld-style-{style}"{anchor_attr}>{self.inlines(children)}</{tag}>'
             case Value(kind=kind, text=text, href=href):
                 if href and is_safe_href(href) and not self._in_link:
-                    return f'<a class="ld-value ld-{kind}" href="{_attr(href)}">{_text(text)}</a>'
+                    return f'<a class="ld-value ld-{kind}" href="{_attr(self._fragment(href))}">{_text(text)}</a>'
                 return f'<span class="ld-value ld-{kind}">{_text(text)}</span>'
             case Blank(id=identifier, text=text, prompt=prompt):
                 title_attr = f' title="{_attr(prompt)}"' if prompt else ""

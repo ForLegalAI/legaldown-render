@@ -107,6 +107,10 @@ def _parser() -> argparse.ArgumentParser:
                              "plain CSS values and short labels. With --print-style it checks the style the "
                              "same way and needs no --root")
     parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
+    parser.add_argument("--id-prefix", metavar="PREFIX", default="",
+                        help="HTML: put PREFIX before every id and in-document link, so that a page embedding the "
+                             "output keeps its own ids apart (ld- makes id=\"scope\" id=\"ld-scope\"): an ASCII "
+                             "letter, then letters, digits, - and _")
     parser.add_argument("--strict", action="store_true", help="refuse to render a document that has errors")
     parser.add_argument("--answers", metavar="FILE",
                         help="a YAML or JSON answers set (§15.7.1): the template is assembled with it and the "
@@ -189,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
     if output_format == "docx":
         if args.fragment:
             parser.error("--fragment applies to HTML only: a DOCX file is always the whole document")
+        if args.id_prefix:
+            parser.error("--id-prefix applies to HTML only: DOCX bookmarks have a prefix of their own")
         if to_stdout and getattr(sys.stdout, "isatty", lambda: False)():
             parser.error("refusing to write a DOCX file to a terminal; redirect standard output or name a file "
                          "with -o FILE.docx")
@@ -218,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
 
     options = RenderOptions(format=output_format, style=args.style, overrides=overrides,
                             strict=args.strict, final=args.final, answers=answers, standalone=not args.fragment,
+                            html_id_prefix=args.id_prefix,
                             filename="" if args.input == "-" else Path(args.input).name,
                             document_root=args.root, document_path=None if args.input == "-" else args.input,
                             untrusted=args.untrusted)

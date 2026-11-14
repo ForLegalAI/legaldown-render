@@ -154,6 +154,10 @@ values appear only as the cached results of fields. Decided in
   what the resolver computed. [The render tree](render-tree.md) says what a minor release may change; a few shapes
   are provisional. `legaldown_render.writers.stylesheet` is documented as the CSS for `standalone=False` output.
   Rendered output is unchanged
+- **HTML id prefix** (#13): `RenderOptions.html_id_prefix` and `--id-prefix` put a prefix before every `id` and
+  every in-document `#` link of the HTML output (authored `#…` links included), for output embedded in a host page.
+  An unusable prefix is an `OptionsError` (exit 2); with DOCX, `--id-prefix` is a usage error. Without it, the output
+  is unchanged
 
 ### v0.7 — PDF
 

@@ -64,7 +64,8 @@ items and paragraphs, are for information. A writer shows the resolved fields be
 line, for diagnostics.
 
 The tree holds no output-format detail: an id prefix, a CSS class or a bookmark name is the
-writer's. The DOCX writer, for instance, makes `ld_…` bookmarks from the anchors.
+writer's. The DOCX writer, for instance, makes `ld_…` bookmarks from the anchors, and the HTML
+writer's `html_id_prefix` changes its ids, not the tree.
 
 The build stage also has two source inlines, `DirectiveSource` and `DefinitionSource`, which hold
 LegalDown syntax. They are internal, and a tree from `render()` never holds one. The fields are
