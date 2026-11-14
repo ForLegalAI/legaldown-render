@@ -132,7 +132,7 @@ values appear only as the cached results of fields. Decided in
 - **Next.** Running the manual Word checklist, which finds what only Word shows; its findings are recorded in the
   release notes. Whether the writer then claims §13.6 for DOCX is decided in `CONFORMANCE.md`
 
-### v0.6 — Validator 0.5.0 (this release)
+### v0.6 — Validator 0.5.0 (released)
 
 - Built on `legaldown-validator` 0.5.0 (`>=0.5.0,<0.6`), which removes the APIs deprecated in 0.4.0; the renderer
   used none of them
@@ -145,7 +145,10 @@ values appear only as the cached results of fields. Decided in
 - **`definition-circular`** (U8) and the validator's other new checks (the combined document, frontmatter keys
   written twice, `definition-used-before-declaration`) appear among the diagnostics
 
-### Unreleased
+### v0.7 — A public render tree (this release)
+
+For hosts that read the tree or embed the HTML ([#13](https://github.com/ForLegalAI/legaldown-render/issues/13)).
+Only additions: no existing name, field or output changes.
 
 - **A public render tree** ([#13](https://github.com/ForLegalAI/legaldown-render/issues/13)): the node types of
   `RenderResult.tree` are public in `legaldown_render.tree` (`__all__`), and `RenderTree` in `legaldown_render`, with
@@ -159,7 +162,7 @@ values appear only as the cached results of fields. Decided in
   for output embedded in a host page. An unusable prefix is an `OptionsError` (exit 2); `--id-prefix` with another
   format is a usage error. Without it, the output is unchanged
 
-### v0.7 — PDF
+### v0.8 — PDF
 
 - Choose the engine ([ADR 0004](decisions/0004-html-first.md)). The leading option is WeasyPrint
   on the HTML writer; its print stylesheet already exists

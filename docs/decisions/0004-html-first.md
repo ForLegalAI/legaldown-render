@@ -52,3 +52,5 @@ The leading option is WeasyPrint. It will be decided with a spike when v0.4 star
   above is closed; the PDF engine is not.
 - 2026-11-13: v0.6 became the release built on legaldown-validator 0.5.0 (see the
   [roadmap](../roadmap.md)), so `pdf` moves to v0.7. The open question's PDF spike now reads v0.7.
+- 2026-11-14: v0.7 became the release that makes the render tree public (see the
+  [roadmap](../roadmap.md)), so `pdf` moves to v0.8. The open question's PDF spike now reads v0.8.
