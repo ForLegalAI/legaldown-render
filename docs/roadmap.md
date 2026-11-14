@@ -155,9 +155,9 @@ values appear only as the cached results of fields. Decided in
   are provisional. `legaldown_render.writers.stylesheet` is documented as the CSS for `standalone=False` output.
   Rendered output is unchanged
 - **HTML id prefix** (#13): `RenderOptions.html_id_prefix` and `--id-prefix` put a prefix before every `id` and
-  every in-document `#` link of the HTML output (authored `#…` links included), for output embedded in a host page.
-  An unusable prefix is an `OptionsError` (exit 2); with DOCX, `--id-prefix` is a usage error. Without it, the output
-  is unchanged
+  every `#` link to one of them in the HTML output (authored `#…` links that name an anchor of the document included),
+  for output embedded in a host page. An unusable prefix is an `OptionsError` (exit 2); `--id-prefix` with another
+  format is a usage error. Without it, the output is unchanged
 
 ### v0.7 — PDF
 

@@ -190,11 +190,11 @@ def main(argv: list[str] | None = None) -> int:
                          "use --format html, text or docx")
     output_format = output_format or "html"
     to_stdout = not args.output or args.output == _STDOUT
+    if args.id_prefix and output_format != "html":
+        parser.error(f"--id-prefix applies to HTML only, not {output_format}")
     if output_format == "docx":
         if args.fragment:
             parser.error("--fragment applies to HTML only: a DOCX file is always the whole document")
-        if args.id_prefix:
-            parser.error("--id-prefix applies to HTML only: DOCX bookmarks have a prefix of their own")
         if to_stdout and getattr(sys.stdout, "isatty", lambda: False)():
             parser.error("refusing to write a DOCX file to a terminal; redirect standard output or name a file "
                          "with -o FILE.docx")

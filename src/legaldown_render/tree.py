@@ -244,11 +244,6 @@ class FailureMarker:
     text: str
 
 
-Inline = (
-    Text | SoftBreak | HardBreak | Emphasis | Strong | Code | Link | Image
-    | DirectiveSource | DefinitionSource
-    | CrossRef | TermRef | DefinedTerm | Value | Blank | Choice | FailureMarker
-)
 
 #: The inlines of a resolved tree: every inline a writer can meet, and so every
 #: inline of :attr:`~legaldown_render.RenderResult.tree`. The fields are
@@ -258,6 +253,9 @@ ResolvedInline = (
     Text | SoftBreak | HardBreak | Emphasis | Strong | Code | Link | Image
     | CrossRef | TermRef | DefinedTerm | Value | Blank | Choice | FailureMarker
 )
+
+#: Every inline, the source nodes of the build stage included (internal).
+Inline = ResolvedInline | DirectiveSource | DefinitionSource
 
 SOURCE_INLINES = (DirectiveSource, DefinitionSource)
 
@@ -757,10 +755,14 @@ def unlinked(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
     return tuple(out)
 
 
+def _first_source_inline(tree: RenderTree) -> Inline | None:
+    return next((inline for inline in iter_tree_inlines(tree) if isinstance(inline, SOURCE_INLINES)), None)
+
+
 def is_resolved(tree: RenderTree) -> bool:
     """True if *tree* holds no source inline, so that every inline in it is a
     :data:`ResolvedInline`. A tree from :func:`~legaldown_render.render` always is."""
-    return not any(isinstance(inline, SOURCE_INLINES) for inline in iter_tree_inlines(tree))
+    return _first_source_inline(tree) is None
 
 
 def assert_resolved(tree: RenderTree) -> None:
@@ -768,10 +770,10 @@ def assert_resolved(tree: RenderTree) -> None:
     source inline: a writer must never see LegalDown semantics
     (docs/decisions/0003). Every built-in writer's input passes this check; a
     host's writer can make the same one."""
-    for inline in iter_tree_inlines(tree):
-        if isinstance(inline, SOURCE_INLINES):
-            raise InternalError(f"an unresolved {type(inline).__name__} reached a writer. This is a bug; "
-                                "please report it with the document that triggers it.")
+    inline = _first_source_inline(tree)
+    if inline is not None:
+        raise InternalError(f"an unresolved {type(inline).__name__} reached a writer. This is a bug; "
+                            "please report it with the document that triggers it.")
 
 
 def plain_text(inlines: tuple[Inline, ...]) -> str:

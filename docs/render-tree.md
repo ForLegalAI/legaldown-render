@@ -36,7 +36,8 @@ dataclasses. The docstrings in [`tree.py`](../src/legaldown_render/tree.py) desc
 | Part | Names |
 |---|---|
 | The document | `RenderTree`, with `NumberingFormats` (and its `LevelFormat`s), `ContentsEntry`, `SideInfo`/`PartyInfo`, `AttachmentPart`, `SignatureParty` |
-| Blocks (`Block`) | `Section` (kept flat, in document order: `level` gives the hierarchy), `Paragraph`, `List`/`ListItem` (`ListFamily`), `Quote`, `DraftingNote`, `CodeBlock`, `Table`, `Rule` |
+| Sections | `Section`, in `RenderTree.sections`: kept flat, in document order (`level` gives the hierarchy). It is not a `Block`; its `blocks` are |
+| Blocks (`Block`) | `Paragraph`, `List`/`ListItem` (`ListFamily`), `Quote`, `DraftingNote`, `CodeBlock`, `Table`, `Rule` |
 | Inlines (`ResolvedInline`) | `Text`, `SoftBreak`, `HardBreak`, `Emphasis`, `Strong`, `Code`, `Link`, `Image`, `CrossRef`, `TermRef`, `DefinedTerm`, `Value`, `Blank`, `Choice`, `FailureMarker` |
 | Helpers | `assert_resolved`, `is_resolved`, `iter_inlines`, `iter_tree_inlines`, `plain_text`, `has_visible_content` |
 

@@ -141,7 +141,8 @@ only the `<article>`, `legaldown_render.writers.stylesheet(style)` gives the CSS
 classes that a complete page has in its `<style>`, and `html_id_prefix=` (`--id-prefix`) puts a prefix before
 every `id` and every in-document `#` link of the output (`"ld-"` makes `id="scope"` `id="ld-scope"`, and
 `href="#def:fee"` `href="#ld-def:fee"`), so that the document's anchors cannot collide with the page's own. It is an ASCII letter and then letters,
-digits, `-` and `_` (an `OptionsError` otherwise); links the author wrote as `#…` are prefixed too, and
+digits, `-` and `_` (an `OptionsError` otherwise). A link the author wrote as `#…` is prefixed when it names an anchor
+of the document (a bare `#`, or an id of the host page, stays as written), and
 `result.tree` keeps the anchors without it. The anchors themselves may contain `:`, which a CSS selector must
 escape (`#ld-def\:fee`).
 

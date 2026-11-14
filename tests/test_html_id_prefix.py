@@ -50,18 +50,35 @@ def test_authored_and_attachment_links_are_prefixed_and_others_are_not() -> None
     assert any(fragment != "p-scope" for fragment in FRAGMENTS.findall(output))  # the attachment's
 
 
+def test_a_bare_fragment_and_ids_of_the_host_page_stay_as_written() -> None:
+    output = html("# Scope {#scope}\n\n[top](#), [skip](#main) and [scope](#scope).\n", html_id_prefix="ld-")
+    assert 'href="#">top</a>' in output
+    assert 'href="#main">skip</a>' in output
+    assert 'href="#ld-scope">scope</a>' in output
+
+
+def test_the_writer_checks_the_prefix_itself() -> None:
+    from legaldown_render.style import load_style
+    from legaldown_render.writers import HtmlWriter
+
+    with pytest.raises(OptionsError, match="id prefix"):
+        HtmlWriter(load_style("default"), id_prefix="my doc ")
+
+
 def test_the_tree_keeps_its_anchors() -> None:
     result = render("# Scope {#scope}\n\nText.\n", format="html", html_id_prefix="ld-")
     assert result.tree.sections[0].anchor == "scope"
     assert 'id="ld-scope"' in result.output
 
 
-def test_other_formats_ignore_the_prefix() -> None:
+@pytest.mark.parametrize("prefix", ["ld-", "1x", None])
+def test_other_formats_ignore_the_prefix(prefix: object) -> None:
     source = "# Scope {#scope}\n\nText.\n"
-    assert render(source, format="text", html_id_prefix="ld-").output == render(source, format="text").output
+    assert render(source, format="text", html_id_prefix=prefix).output == render(source, format="text").output
+    assert render(source, format="docx", html_id_prefix=prefix).binary
 
 
-@pytest.mark.parametrize("prefix", ["1st", "-x", "has space", "a#b", "a%20", "é", "a:b", "a\"b"])
+@pytest.mark.parametrize("prefix", ["1st", "-x", "has space", "a#b", "a%20", "é", "a:b", "a\"b", None, 1])
 def test_an_unusable_prefix_is_refused(prefix: str) -> None:
     with pytest.raises(OptionsError, match="id prefix"):
         render("Text.\n", html_id_prefix=prefix)
@@ -74,5 +91,6 @@ def test_command_line(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
     output = capsys.readouterr().out
     assert 'id="ld-scope"' in output and 'href="#ld-scope"' in output
     assert main([str(document), "--id-prefix", "1"]) == 2
-    with pytest.raises(SystemExit):
-        main([str(document), "--id-prefix", "ld-", "-o", str(tmp_path / "doc.docx")])
+    for output in ("doc.docx", "doc.txt"):
+        with pytest.raises(SystemExit):
+            main([str(document), "--id-prefix", "ld-", "-o", str(tmp_path / output)])

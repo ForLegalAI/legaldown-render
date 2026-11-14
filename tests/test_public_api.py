@@ -76,6 +76,8 @@ def test_the_node_types_are_public_and_the_source_nodes_are_not() -> None:
     assert set(typing.get_args(public_tree.Inline)) - resolved == set(public_tree.SOURCE_INLINES)
     assert not {cls.__name__ for cls in public_tree.SOURCE_INLINES} & names
     assert "Inline" not in names
+    # A section is not a block: it is in RenderTree.sections, and holds blocks.
+    assert public_tree.Section not in typing.get_args(public_tree.Block)
 
 
 def test_every_class_a_public_node_holds_is_public() -> None:

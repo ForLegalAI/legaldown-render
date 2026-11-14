@@ -67,9 +67,11 @@ class RenderOptions:
     #: the output, so that a page that embeds it keeps ids of its own apart
     #: (``"ld-"`` makes ``id="scope"`` ``id="ld-scope"``). An ASCII letter, then
     #: letters, digits, ``-`` and ``_``; anything else is an
-    #: :class:`OptionsError`. The anchors in :attr:`RenderResult.tree` are
-    #: unprefixed. Ignored by the other formats, as DOCX bookmarks have a
-    #: prefix of their own.
+    #: :class:`OptionsError`. A ``#`` link the author wrote gets the prefix
+    #: when it names an anchor of the document, and keeps its own otherwise (a
+    #: bare ``#``, an id of the host page). The anchors in
+    #: :attr:`RenderResult.tree` are unprefixed. Ignored, and not checked, by
+    #: the other formats (DOCX bookmarks have a prefix of their own).
     html_id_prefix: str = ""
     #: The document's file name, which every diagnostic of the result names as
     #: its ``file`` (§16.9), the validator's and the renderer's alike, as
@@ -140,7 +142,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     Problems in the document never raise: they render as failure markers and
     are listed in ``diagnostics``. Raises :class:`StyleError` for an invalid
     style or setting, :class:`OptionsError` for an unknown output format, an
-    ``untrusted`` render without a ``document_root``, or a
+    unusable ``html_id_prefix`` (for HTML), an ``untrusted`` render without a ``document_root``, or a
     document outside its document root, :class:`DocumentError` for a document that cannot be
     read, and :class:`RenderRefused` in strict mode when the document has
     errors, or when a template cannot be assembled with ``answers``.
@@ -151,7 +153,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
         raise TypeError("pass either a RenderOptions or keyword settings, not both")
     if options.format not in FORMATS:
         raise OptionsError(f"unknown output format '{options.format}' (known: {', '.join(FORMATS)})")
-    if (problem := check_id_prefix(options.html_id_prefix)) is not None:
+    if options.format == "html" and (problem := check_id_prefix(options.html_id_prefix)) is not None:
         raise OptionsError(problem)
     if options.untrusted and options.document_root is None:
         raise OptionsError("an untrusted render needs a document_root (§2.3): name the directory that file "
