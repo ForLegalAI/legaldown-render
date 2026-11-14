@@ -96,6 +96,16 @@ class RenderOptions:
     #: style file, ``extends`` only built-in styles, strict values, no raw CSS.
     #: False (the default) takes the style as the operator's own.
     untrusted: bool = False
+    #: HTML only: put before every ``id`` and every in-document ``#`` link of
+    #: the output, so that a page that embeds it keeps ids of its own apart
+    #: (``"ld-"`` makes ``id="scope"`` ``id="ld-scope"``). An ASCII letter, then
+    #: letters, digits, ``-`` and ``_``; anything else is an
+    #: :class:`OptionsError`. A ``#`` link the author wrote gets the prefix
+    #: when it names an anchor of the document, and keeps its own otherwise (a
+    #: bare ``#``, an id of the host page). The anchors in
+    #: :attr:`RenderResult.tree` are unprefixed. Ignored, and not checked, by
+    #: the other formats (DOCX bookmarks have a prefix of their own).
+    html_id_prefix: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +141,7 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     Problems in the document never raise: they render as failure markers and
     are listed in ``diagnostics``. Raises :class:`StyleError` for an invalid
     style or setting, :class:`OptionsError` for an unknown output format, an
-    ``untrusted`` render without a ``document_root``, or a
+    unusable ``html_id_prefix`` (for HTML), an ``untrusted`` render without a ``document_root``, or a
     document outside its document root, :class:`DocumentError` for a document that cannot be
     read, and :class:`RenderRefused` in strict mode when the document has
     errors, or when a template cannot be assembled with ``answers``.
@@ -157,6 +167,8 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
     style = load_style(options.style, overrides=overrides, trusted=not options.untrusted)
     # A setting Word cannot express is a StyleError before any rendering starts (docs/decisions/0006).
     docx = docx_settings(style, trusted=not options.untrusted) if options.format == "docx" else None
+    # Before any rendering too: the writer checks its settings (an HTML id prefix) as it is made.
+    writer = _writer(options, style, docx)
 
     source = normalize_source(source)
     assembled: list[Diagnostic] = []
@@ -170,7 +182,6 @@ def render(source: str, options: RenderOptions | None = None, /, **settings: Any
 
     tree, extra = _resolve(document, result, style, base, options.untrusted)
     assert_resolved(tree)
-    writer = _writer(options, style, docx)
     plan = None
     if isinstance(writer, DocxWriter):
         # What Word will draw differently from the other formats (docs/decisions/0008) is the planner's to report; its
@@ -320,4 +331,4 @@ def _writer(options: RenderOptions, style: Style, docx: DocxSettings | None) -> 
     if options.format == "docx":
         assert docx is not None
         return DocxWriter(style, generator=generator, settings=docx)
-    return HtmlWriter(style, standalone=options.standalone, generator=generator)
+    return HtmlWriter(style, standalone=options.standalone, generator=generator, id_prefix=options.html_id_prefix)

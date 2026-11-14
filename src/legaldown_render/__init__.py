@@ -16,12 +16,16 @@ time, under a style template (§13.7)::
 Parsing and Core validation come from legaldown-validator; this package
 claims the Rendering conformance level (§17.3). Exact coverage:
 https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md
+
+``result.tree`` is the resolved render tree; its node types are public in
+:mod:`legaldown_render.tree`, for a host that writes its own output format.
 """
 from __future__ import annotations
 
 from .api import RenderOptions, RenderResult, render, render_file
 from .errors import DocumentError, InternalError, OptionsError, RenderError, RenderRefused, StyleError
 from .style import Style, builtin_styles, dump_style, load_style
+from .tree import RenderTree
 
 __version__ = "0.6.0"
 
@@ -39,6 +43,7 @@ __all__ = [
     "render_file",
     "RenderOptions",
     "RenderResult",
+    "RenderTree",
     "Style",
     "StyleError",
     "load_style",

@@ -9,6 +9,12 @@ resolved tree (docs/decisions/0003): :func:`assert_resolved` rejects a tree
 that still holds a source node.
 
 All nodes are frozen; stages build new trees rather than mutate.
+
+This module is public: the names in ``__all__`` are the tree a host reads
+from :attr:`~legaldown_render.RenderResult.tree`, for instance to write its
+own output format. What may change between releases is in
+``docs/render-tree.md``. The source nodes, ``Inline`` (which holds them) and
+the traversal helpers not in ``__all__`` are internal.
 """
 from __future__ import annotations
 
@@ -20,6 +26,55 @@ from legaldown.syntax import Directive
 
 from .errors import InternalError
 from .style.model import LevelFormat
+
+__all__ = [
+    # The document
+    "RenderTree",
+    "NumberingFormats",
+    "LevelFormat",
+    "ContentsEntry",
+    "SideInfo",
+    "PartyInfo",
+    "AttachmentPart",
+    "SignatureParty",
+    # Blocks
+    "Block",
+    "Section",
+    "Paragraph",
+    "List",
+    "ListItem",
+    "ListFamily",
+    "Quote",
+    "DraftingNote",
+    "CodeBlock",
+    "Table",
+    "Rule",
+    # Inlines
+    "ResolvedInline",
+    "Text",
+    "SoftBreak",
+    "HardBreak",
+    "Emphasis",
+    "Strong",
+    "Code",
+    "Link",
+    "Image",
+    "CrossRef",
+    "TermRef",
+    "DefinedTerm",
+    "Value",
+    "Blank",
+    "Choice",
+    "FailureMarker",
+    # Helpers
+    "assert_resolved",
+    "is_resolved",
+    "iter_inlines",
+    "iter_tree_inlines",
+    "plain_text",
+    "has_visible_content",
+    "tree_anchors",
+]
 
 # ---------------------------------------------------------------------------
 # Inlines
@@ -190,11 +245,18 @@ class FailureMarker:
     text: str
 
 
-Inline = (
+
+#: The inlines of a resolved tree: every inline a writer can meet, and so every
+#: inline of :attr:`~legaldown_render.RenderResult.tree`. The fields are
+#: annotated with ``Inline``, the build stage's union, which also holds the two
+#: source nodes; a resolved tree never does (:func:`assert_resolved`).
+ResolvedInline = (
     Text | SoftBreak | HardBreak | Emphasis | Strong | Code | Link | Image
-    | DirectiveSource | DefinitionSource
     | CrossRef | TermRef | DefinedTerm | Value | Blank | Choice | FailureMarker
 )
+
+#: Every inline, the source nodes of the build stage included (internal).
+Inline = ResolvedInline | DirectiveSource | DefinitionSource
 
 SOURCE_INLINES = (DirectiveSource, DefinitionSource)
 
@@ -694,13 +756,55 @@ def unlinked(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
     return tuple(out)
 
 
+def _first_source_inline(tree: RenderTree) -> Inline | None:
+    return next((inline for inline in iter_tree_inlines(tree) if isinstance(inline, SOURCE_INLINES)), None)
+
+
+def tree_anchors(tree: RenderTree) -> frozenset[str]:
+    """Every output anchor of *tree*: of its sections, list items and
+    paragraphs (wherever they are nested), defining terms, attachments and the
+    attachments heading. They are the targets of its ``CrossRef`` and
+    ``TermRef`` links, of an ``{{attach:}}`` value's ``#`` href, and the
+    anchors an authored ``#...`` link may name; a writer that gives each an id
+    or bookmark knows which ``#`` links stay within the document."""
+    found: set[str | None] = {tree.attachments_anchor}
+
+    def blocks(items: tuple[Block, ...]) -> None:
+        for block in items:
+            match block:
+                case Paragraph(anchor=anchor):
+                    found.add(anchor)
+                case List(items=list_items):
+                    for item in list_items:
+                        found.add(item.anchor)
+                        blocks(item.blocks)
+                case Quote(blocks=children) | DraftingNote(blocks=children):
+                    blocks(children)
+
+    blocks(tree.preamble)
+    for section in tree.sections:
+        found.add(section.anchor)
+        blocks(section.blocks)
+    found.update(attachment.anchor for attachment in tree.attachments)
+    found.update(inline.anchor for inline in iter_tree_inlines(tree) if isinstance(inline, DefinedTerm))
+    return frozenset(anchor for anchor in found if anchor)
+
+
+def is_resolved(tree: RenderTree) -> bool:
+    """True if *tree* holds no source inline, so that every inline in it is a
+    :data:`ResolvedInline`. A tree from :func:`~legaldown_render.render` always is."""
+    return _first_source_inline(tree) is None
+
+
 def assert_resolved(tree: RenderTree) -> None:
-    """Raise :class:`InternalError` if *tree* still holds a source inline: a
-    writer must never see LegalDown semantics (docs/decisions/0003)."""
-    for inline in iter_tree_inlines(tree):
-        if isinstance(inline, SOURCE_INLINES):
-            raise InternalError(f"an unresolved {type(inline).__name__} reached a writer. This is a bug; "
-                                "please report it with the document that triggers it.")
+    """Raise :class:`~legaldown_render.InternalError` if *tree* still holds a
+    source inline: a writer must never see LegalDown semantics
+    (docs/decisions/0003). Every built-in writer's input passes this check; a
+    host's writer can make the same one."""
+    inline = _first_source_inline(tree)
+    if inline is not None:
+        raise InternalError(f"an unresolved {type(inline).__name__} reached a writer. This is a bug; "
+                            "please report it with the document that triggers it.")
 
 
 def plain_text(inlines: tuple[Inline, ...]) -> str:

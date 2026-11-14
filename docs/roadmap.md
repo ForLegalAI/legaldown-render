@@ -145,6 +145,20 @@ values appear only as the cached results of fields. Decided in
 - **`definition-circular`** (U8) and the validator's other new checks (the combined document, frontmatter keys
   written twice, `definition-used-before-declaration`) appear among the diagnostics
 
+### Unreleased
+
+- **A public render tree** ([#13](https://github.com/ForLegalAI/legaldown-render/issues/13)): the node types of
+  `RenderResult.tree` are public in `legaldown_render.tree` (`__all__`), and `RenderTree` in `legaldown_render`, with
+  `ResolvedInline` (the inlines a resolved tree holds), `assert_resolved`, `is_resolved` and the traversal helpers
+  `iter_inlines`, `iter_tree_inlines`, `plain_text`, `has_visible_content` and `tree_anchors`. A host can write its own format from
+  what the resolver computed. [The render tree](render-tree.md) says what a minor release may change; a few shapes
+  are provisional. `legaldown_render.writers.stylesheet` is documented as the CSS for `standalone=False` output.
+  Rendered output is unchanged
+- **HTML id prefix** (#13): `RenderOptions.html_id_prefix` and `--id-prefix` put a prefix before every `id` and
+  every `#` link to one of them in the HTML output (authored `#…` links that name an anchor of the document included),
+  for output embedded in a host page. An unusable prefix is an `OptionsError` (exit 2); `--id-prefix` with another
+  format is a usage error. Without it, the output is unchanged
+
 ### v0.7 — PDF
 
 - Choose the engine ([ADR 0004](decisions/0004-html-first.md)). The leading option is WeasyPrint

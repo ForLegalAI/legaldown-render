@@ -35,3 +35,7 @@ writer is a type error, not a runtime surprise.
   both kinds, and `assert_resolved` raises `InternalError` if an unresolved node reaches a writer.
   Anchors are made by the resolver itself (`Resolver._anchor`, where the first unit to take a
   name keeps it); there is no separate `anchors` resolver.
+- 2026-11-14: the resolved tree is public ([#13](https://github.com/ForLegalAI/legaldown-render/issues/13)): its node
+  types are in `legaldown_render.tree`'s `__all__`, with `assert_resolved`, `is_resolved` and `ResolvedInline`, the
+  union of the inlines a resolved tree holds, so that a host can write a format of its own under the same rule. The
+  source inlines stay internal. [The render tree](../render-tree.md) has what may change between releases.

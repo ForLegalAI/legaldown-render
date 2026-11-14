@@ -66,6 +66,7 @@ legaldown-render contract.lgd --root . --strict                 # file reference
 legaldown-render upload.lgd --untrusted --root uploads/ --style continental   # a document you did not write
 legaldown-render contract.lgd --final --strict                  # refuse if blanks or template constructs remain
 legaldown-render template.lgd --answers answers.yaml -o nda.html # fill in a template, then render it
+legaldown-render contract.lgd --fragment --id-prefix ld-       # an <article> to embed: id="ld-scope", href="#ld-scope"
 legaldown-render --print-style --style continental              # every setting, as YAML
 ```
 
@@ -129,6 +130,21 @@ cannot be assembled with its answers (`RenderRefused`) do. All of them are `Rend
 `StyleError` and `OptionsError` are also `ValueError`s. They can be pickled, so they cross process
 boundaries (`multiprocessing`, `concurrent.futures`) intact. `overrides=` takes dotted settings and
 may not contain `version` or `extends`, so `overrides=legaldown_render.style.style_to_dict(style)` must drop those two keys.
+
+`result.tree` is the resolved render tree: every label, designation, anchor, reference text,
+formatted value and failure marker, as the built-in writers draw them. Its node types are public in
+`legaldown_render.tree` (`RenderTree` also in `legaldown_render`), for a host that writes its own
+format, and so is `assert_resolved`, the check the built-in writers make. A patch release never
+breaks them; [The render tree](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/render-tree.md)
+has the reference and what a minor release may change. For HTML with `standalone=False`, which is
+only the `<article>`, `legaldown_render.writers.stylesheet(style)` gives the CSS of the `ld-*`
+classes that a complete page has in its `<style>`, and `html_id_prefix=` (`--id-prefix`) puts a prefix before
+every `id` and every in-document `#` link of the output (`"ld-"` makes `id="scope"` `id="ld-scope"`, and
+`href="#def:fee"` `href="#ld-def:fee"`), so that the document's anchors cannot collide with the page's own. It is an ASCII letter and then letters,
+digits, `-` and `_` (an `OptionsError` otherwise). A link the author wrote as `#…` is prefixed when it names an anchor
+of the document (a bare `#`, or an id of the host page, stays as written), and
+`result.tree` keeps the anchors without it. The anchors themselves may contain `:`, which a CSS selector must
+escape (`#ld-def\:fee`).
 
 ## DOCX
 
@@ -253,6 +269,7 @@ articles, 2.1-style items, numbered paragraphs), and `outline` (I. / A. / 1. / a
 |---|---|
 | [Concepts](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/concepts.md) | What a renderer is responsible for, principles, and vocabulary |
 | [Architecture](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/architecture.md) | The pipeline, the render tree, the package layout, and testing |
+| [The render tree](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/render-tree.md) | `RenderResult.tree`, the public node types, and what may change between releases |
 | [Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md) | The style format, layering, and every setting |
 | [Conformance](https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md) | What the Rendering level requires, and what is covered |
 | [Roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md) | Milestones, and the changes needed upstream |
