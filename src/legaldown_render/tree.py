@@ -9,6 +9,12 @@ resolved tree (docs/decisions/0003): :func:`assert_resolved` rejects a tree
 that still holds a source node.
 
 All nodes are frozen; stages build new trees rather than mutate.
+
+This module is public: the names in ``__all__`` are the tree a host reads
+from :attr:`~legaldown_render.RenderResult.tree`, for instance to write its
+own output format. What may change between releases is in
+``docs/render-tree.md``. The source nodes, ``Inline`` (which holds them) and
+the traversal helpers not in ``__all__`` are internal.
 """
 from __future__ import annotations
 
@@ -20,6 +26,54 @@ from legaldown.syntax import Directive
 
 from .errors import InternalError
 from .style.model import LevelFormat
+
+__all__ = [
+    # The document
+    "RenderTree",
+    "NumberingFormats",
+    "LevelFormat",
+    "ContentsEntry",
+    "SideInfo",
+    "PartyInfo",
+    "AttachmentPart",
+    "SignatureParty",
+    # Blocks
+    "Block",
+    "Section",
+    "Paragraph",
+    "List",
+    "ListItem",
+    "ListFamily",
+    "Quote",
+    "DraftingNote",
+    "CodeBlock",
+    "Table",
+    "Rule",
+    # Inlines
+    "ResolvedInline",
+    "Text",
+    "SoftBreak",
+    "HardBreak",
+    "Emphasis",
+    "Strong",
+    "Code",
+    "Link",
+    "Image",
+    "CrossRef",
+    "TermRef",
+    "DefinedTerm",
+    "Value",
+    "Blank",
+    "Choice",
+    "FailureMarker",
+    # Helpers
+    "assert_resolved",
+    "is_resolved",
+    "iter_inlines",
+    "iter_tree_inlines",
+    "plain_text",
+    "has_visible_content",
+]
 
 # ---------------------------------------------------------------------------
 # Inlines
@@ -193,6 +247,15 @@ class FailureMarker:
 Inline = (
     Text | SoftBreak | HardBreak | Emphasis | Strong | Code | Link | Image
     | DirectiveSource | DefinitionSource
+    | CrossRef | TermRef | DefinedTerm | Value | Blank | Choice | FailureMarker
+)
+
+#: The inlines of a resolved tree: every inline a writer can meet, and so every
+#: inline of :attr:`~legaldown_render.RenderResult.tree`. The fields are
+#: annotated with ``Inline``, the build stage's union, which also holds the two
+#: source nodes; a resolved tree never does (:func:`assert_resolved`).
+ResolvedInline = (
+    Text | SoftBreak | HardBreak | Emphasis | Strong | Code | Link | Image
     | CrossRef | TermRef | DefinedTerm | Value | Blank | Choice | FailureMarker
 )
 
@@ -694,9 +757,17 @@ def unlinked(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
     return tuple(out)
 
 
+def is_resolved(tree: RenderTree) -> bool:
+    """True if *tree* holds no source inline, so that every inline in it is a
+    :data:`ResolvedInline`. A tree from :func:`~legaldown_render.render` always is."""
+    return not any(isinstance(inline, SOURCE_INLINES) for inline in iter_tree_inlines(tree))
+
+
 def assert_resolved(tree: RenderTree) -> None:
-    """Raise :class:`InternalError` if *tree* still holds a source inline: a
-    writer must never see LegalDown semantics (docs/decisions/0003)."""
+    """Raise :class:`~legaldown_render.InternalError` if *tree* still holds a
+    source inline: a writer must never see LegalDown semantics
+    (docs/decisions/0003). Every built-in writer's input passes this check; a
+    host's writer can make the same one."""
     for inline in iter_tree_inlines(tree):
         if isinstance(inline, SOURCE_INLINES):
             raise InternalError(f"an unresolved {type(inline).__name__} reached a writer. This is a bug; "

@@ -448,7 +448,8 @@ heading level that is skipped is the Core Error `heading-skip`; the plan only no
 ### 5. Write (`writers/`)
 
 > **A writer contains no LegalDown rules.** `tree.assert_resolved()` rejects a tree that still
-> holds a source inline.
+> holds a source inline. The tree's node types and this check are public
+> ([The render tree](render-tree.md)), so a host's own writer can work the same way.
 
 | Writer | Notes |
 |---|---|

@@ -130,6 +130,15 @@ cannot be assembled with its answers (`RenderRefused`) do. All of them are `Rend
 boundaries (`multiprocessing`, `concurrent.futures`) intact. `overrides=` takes dotted settings and
 may not contain `version` or `extends`, so `overrides=legaldown_render.style.style_to_dict(style)` must drop those two keys.
 
+`result.tree` is the resolved render tree: every label, designation, anchor, reference text,
+formatted value and failure marker, as the built-in writers draw them. Its node types are public in
+`legaldown_render.tree` (`RenderTree` also in `legaldown_render`), for a host that writes its own
+format, and so is `assert_resolved`, the check the built-in writers make. A patch release never
+breaks them; [The render tree](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/render-tree.md)
+has the reference and what a minor release may change. For HTML with `standalone=False`, which is
+only the `<article>`, `legaldown_render.writers.stylesheet(style)` gives the CSS of the `ld-*`
+classes that a complete page has in its `<style>`.
+
 ## DOCX
 
 `-o contract.docx` (or `--format docx`, or `render(text, format="docx")`) writes a Word document that a lawyer can
@@ -253,6 +262,7 @@ articles, 2.1-style items, numbered paragraphs), and `outline` (I. / A. / 1. / a
 |---|---|
 | [Concepts](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/concepts.md) | What a renderer is responsible for, principles, and vocabulary |
 | [Architecture](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/architecture.md) | The pipeline, the render tree, the package layout, and testing |
+| [The render tree](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/render-tree.md) | `RenderResult.tree`, the public node types, and what may change between releases |
 | [Styles and preferences](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/style-templates.md) | The style format, layering, and every setting |
 | [Conformance](https://github.com/ForLegalAI/legaldown-render/blob/main/CONFORMANCE.md) | What the Rendering level requires, and what is covered |
 | [Roadmap](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/roadmap.md) | Milestones, and the changes needed upstream |
