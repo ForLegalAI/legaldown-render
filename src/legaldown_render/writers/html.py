@@ -21,7 +21,6 @@ replaced the image with its alt text and reported it.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
 from html import escape
 
 from ..errors import OptionsError
@@ -57,8 +56,8 @@ from ..tree import (
     Text,
     Value,
     has_visible_content,
-    iter_tree_inlines,
     plain_text,
+    tree_anchors,
 )
 from ..urls import displayed_url, is_link_target, is_safe_href
 
@@ -77,30 +76,6 @@ def check_id_prefix(prefix: object) -> str | None:
         return None
     return (f"the HTML id prefix {prefix!r} is not usable: it must start with an ASCII letter and hold only letters, "
             "digits, '-' and '_'")
-
-def _tree_anchors(tree: RenderTree) -> Iterator[str]:
-    """Every anchor *tree* gives an id to."""
-    def blocks(items: tuple[Block, ...]) -> Iterator[str | None]:
-        for block in items:
-            match block:
-                case Paragraph(anchor=anchor):
-                    yield anchor
-                case List(items=list_items):
-                    for item in list_items:
-                        yield item.anchor
-                        yield from blocks(item.blocks)
-                case Quote(blocks=children) | DraftingNote(blocks=children):
-                    yield from blocks(children)
-
-    found: list[str | None] = [tree.attachments_anchor]
-    for section in tree.sections:
-        found.append(section.anchor)
-        found += blocks(section.blocks)
-    found += blocks(tree.preamble)
-    found += (attachment.anchor for attachment in tree.attachments)
-    found += (inline.anchor for inline in iter_tree_inlines(tree) if isinstance(inline, DefinedTerm))
-    return (anchor for anchor in found if anchor)
-
 
 def _text(value: str) -> str:
     return escape(value, quote=False)
@@ -126,9 +101,12 @@ class HtmlWriter:
         if (problem := check_id_prefix(id_prefix)) is not None:
             raise OptionsError(problem)
         self.id_prefix = id_prefix
-        # The anchors of the tree being written: a ``#`` link the author wrote
-        # is prefixed only when it names one of them.
-        self._anchors: frozenset[str] = frozenset()
+        # The anchors of the tree being written (:meth:`write` sets them): a
+        # ``#`` link the author wrote is prefixed only when it names one of
+        # them. None outside :meth:`write`, when the methods for a block or
+        # inlines are called on their own: every ``#`` link but a bare ``#``
+        # is then taken to name one.
+        self._anchors: frozenset[str] | None = None
         # Inside a link, references render as plain spans: HTML forbids
         # nested links.
         self._in_link = False
@@ -146,14 +124,21 @@ class HtmlWriter:
         tree (an ``{{attach:}}``, or one the author wrote) gets the prefix; any
         other, a bare ``#`` and a ``#`` link to an id of the host page included,
         is left as it is."""
-        if href.startswith("#") and href[1:] in self._anchors:
-            return self._href(href[1:])
+        fragment = href[1:] if href.startswith("#") else ""
+        if fragment and (self._anchors is None or fragment in self._anchors):
+            return self._href(fragment)
         return _attr(href)
 
     # -- document -------------------------------------------------------------
 
     def write(self, tree: RenderTree) -> str:
-        self._anchors = frozenset(_tree_anchors(tree)) if self.id_prefix else frozenset()
+        self._anchors = tree_anchors(tree)
+        try:
+            return self._write(tree)
+        finally:
+            self._anchors = None
+
+    def _write(self, tree: RenderTree) -> str:
         parts: list[str] = [f'<article class="ld-document{" ld-template" if tree.is_template else ""}">']
         parts.append(self.title_block(tree))
         if tree.contents:

@@ -150,7 +150,7 @@ values appear only as the cached results of fields. Decided in
 - **A public render tree** ([#13](https://github.com/ForLegalAI/legaldown-render/issues/13)): the node types of
   `RenderResult.tree` are public in `legaldown_render.tree` (`__all__`), and `RenderTree` in `legaldown_render`, with
   `ResolvedInline` (the inlines a resolved tree holds), `assert_resolved`, `is_resolved` and the traversal helpers
-  `iter_inlines`, `iter_tree_inlines`, `plain_text` and `has_visible_content`. A host can write its own format from
+  `iter_inlines`, `iter_tree_inlines`, `plain_text`, `has_visible_content` and `tree_anchors`. A host can write its own format from
   what the resolver computed. [The render tree](render-tree.md) says what a minor release may change; a few shapes
   are provisional. `legaldown_render.writers.stylesheet` is documented as the CSS for `standalone=False` output.
   Rendered output is unchanged

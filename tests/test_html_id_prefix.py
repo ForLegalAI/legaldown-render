@@ -3,6 +3,7 @@ link within it, carries the prefix, so that a page embedding the output keeps
 its own ids apart."""
 from __future__ import annotations
 
+import dataclasses
 import re
 
 import pytest
@@ -63,6 +64,33 @@ def test_the_writer_checks_the_prefix_itself() -> None:
 
     with pytest.raises(OptionsError, match="id prefix"):
         HtmlWriter(load_style("default"), id_prefix="my doc ")
+
+
+@pytest.mark.parametrize("name", ["features.lgd", "template.lgd"])
+def test_the_writer_gives_ids_to_the_anchors_of_the_tree_and_no_others(name: str) -> None:
+    from legaldown_render.tree import tree_anchors
+
+    result = render((DOCUMENTS / name).read_text(encoding="utf-8"), format="html")
+    assert set(IDS.findall(result.output)) == tree_anchors(result.tree)
+
+
+def test_inlines_written_on_their_own_prefix_every_fragment_but_a_bare_one() -> None:
+    from legaldown_render.style import load_style
+    from legaldown_render.tree import Link, Text
+    from legaldown_render.writers import HtmlWriter
+
+    writer = HtmlWriter(load_style("default"), id_prefix="ld-")
+    assert 'href="#ld-scope"' in writer.inlines((Link("#scope", (Text("x"),)),))
+    assert 'href="#"' in writer.inlines((Link("#", (Text("x"),)),))
+
+
+def test_the_option_comes_after_the_existing_ones() -> None:
+    from legaldown_render import RenderOptions
+
+    # RenderOptions is not keyword-only: a new field goes last, so that a positional call keeps its meaning.
+    options = RenderOptions("html", None, {}, None, False, False, None, True, "contract")
+    assert options.filename == "contract" and options.html_id_prefix == ""
+    assert [field.name for field in dataclasses.fields(RenderOptions)][-1] == "html_id_prefix"
 
 
 def test_the_tree_keeps_its_anchors() -> None:

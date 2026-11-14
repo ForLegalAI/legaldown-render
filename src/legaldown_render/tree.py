@@ -73,6 +73,7 @@ __all__ = [
     "iter_tree_inlines",
     "plain_text",
     "has_visible_content",
+    "tree_anchors",
 ]
 
 # ---------------------------------------------------------------------------
@@ -757,6 +758,36 @@ def unlinked(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:
 
 def _first_source_inline(tree: RenderTree) -> Inline | None:
     return next((inline for inline in iter_tree_inlines(tree) if isinstance(inline, SOURCE_INLINES)), None)
+
+
+def tree_anchors(tree: RenderTree) -> frozenset[str]:
+    """Every output anchor of *tree*: of its sections, list items and
+    paragraphs (wherever they are nested), defining terms, attachments and the
+    attachments heading. They are the targets of its ``CrossRef`` and
+    ``TermRef`` links, of an ``{{attach:}}`` value's ``#`` href, and the
+    anchors an authored ``#...`` link may name; a writer that gives each an id
+    or bookmark knows which ``#`` links stay within the document."""
+    found: set[str | None] = {tree.attachments_anchor}
+
+    def blocks(items: tuple[Block, ...]) -> None:
+        for block in items:
+            match block:
+                case Paragraph(anchor=anchor):
+                    found.add(anchor)
+                case List(items=list_items):
+                    for item in list_items:
+                        found.add(item.anchor)
+                        blocks(item.blocks)
+                case Quote(blocks=children) | DraftingNote(blocks=children):
+                    blocks(children)
+
+    blocks(tree.preamble)
+    for section in tree.sections:
+        found.add(section.anchor)
+        blocks(section.blocks)
+    found.update(attachment.anchor for attachment in tree.attachments)
+    found.update(inline.anchor for inline in iter_tree_inlines(tree) if isinstance(inline, DefinedTerm))
+    return frozenset(anchor for anchor in found if anchor)
 
 
 def is_resolved(tree: RenderTree) -> bool:

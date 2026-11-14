@@ -39,7 +39,7 @@ dataclasses. The docstrings in [`tree.py`](../src/legaldown_render/tree.py) desc
 | Sections | `Section`, in `RenderTree.sections`: kept flat, in document order (`level` gives the hierarchy). It is not a `Block`; its `blocks` are |
 | Blocks (`Block`) | `Paragraph`, `List`/`ListItem` (`ListFamily`), `Quote`, `DraftingNote`, `CodeBlock`, `Table`, `Rule` |
 | Inlines (`ResolvedInline`) | `Text`, `SoftBreak`, `HardBreak`, `Emphasis`, `Strong`, `Code`, `Link`, `Image`, `CrossRef`, `TermRef`, `DefinedTerm`, `Value`, `Blank`, `Choice`, `FailureMarker` |
-| Helpers | `assert_resolved`, `is_resolved`, `iter_inlines`, `iter_tree_inlines`, `plain_text`, `has_visible_content` |
+| Helpers | `assert_resolved`, `is_resolved`, `iter_inlines`, `iter_tree_inlines`, `plain_text`, `has_visible_content`, `tree_anchors` |
 
 What a writer draws, and where it comes from:
 
@@ -51,7 +51,8 @@ What a writer draws, and where it comes from:
   and `RenderTree.attachments_anchor`. A `CrossRef.target` or a `TermRef.target` is an anchor of
   the same tree (without `#`). `Value.href` is `"#"` and an anchor for `{{attach:}}`, else a URL or
   file path. A `Link.href` is as the author wrote it, so it may be an in-document `#anchor` too.
-  Anchors can contain `:` (`def:fee`, `ld:attachments`).
+  Anchors can contain `:` (`def:fee`, `ld:attachments`). `tree_anchors()` gives every anchor of the tree, so a
+  writer can tell an authored `#…` link to one of them from a link to something else.
 - **Text.** Every inline holds its display text; `plain_text()` joins it.
 - **Conditions.** `condition_label` is the text to show for a conditional unit in the template
   view, or None.
