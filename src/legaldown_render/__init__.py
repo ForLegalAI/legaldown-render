@@ -27,7 +27,7 @@ from .errors import DocumentError, InternalError, OptionsError, RenderError, Ren
 from .style import Style, builtin_styles, dump_style, load_style
 from .tree import RenderTree
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 #: The LegalDown specification version this renderer targets.
 SPEC_VERSION = "0.2"
