@@ -32,7 +32,7 @@ from .numbering import numbering_part
 from .ooxml import Bookmarks, el, serialize
 from .properties import build_app, build_core
 from .settings import build_settings
-from .styles import build_styles, language_tag
+from .styles import build_styles, language_tag, quote_indent
 
 __all__ = ["DocxWriter"]
 
@@ -85,7 +85,8 @@ class DocxWriter:
         if page.footer:
             footer_id = rels.add(pkg.REL_FOOTER, "footer1.xml")
 
-        matter = MatterSettings(text_width, settings.points, self.style.contents.depth, self.style.attachments.separator)
+        matter = MatterSettings(text_width, settings.points, self.style.contents.depth, self.style.attachments.separator,
+                                quote_indent(settings), settings.signatures_page_break)
         body = BodyWriter(tree, plan, Bookmarks(), rels, text_width, settings.link_color, matter).body(
             settings.page, header_id=header_id, footer_id=footer_id)
         document = el("document", None, body)

@@ -141,8 +141,8 @@ has the reference and what a minor release may change. For HTML with `standalone
 only the `<article>`, `legaldown_render.writers.stylesheet(style, standalone=False)` gives its CSS for a host page:
 every rule is under `.ld-document`, the style's variables, typography and white background are set on it, and there
 is no `body`, `:root`, `html` or `@page` rule, so nothing of the page outside the document is styled. Its rules
-override each other as in a complete page (`stylesheet(style)`, the default, is that page's sheet), except that in
-print the document's width limit is lifted. The page margin and the document's padding are left out, on screen and
+override each other as in a complete page (`stylesheet(style)`, the default, is that page's sheet); in print, both
+lift the document's width limit. The page margin and the document's padding are left out, on screen and
 in print: the gutter is the host container's. `scope=".preview"` places the document
 under one more selector, `:where(.preview) .ld-document`, without raising specificity, so documents of different
 styles can share a page; it is one selector of type, class and id selectors joined by a space or ` > `
@@ -204,6 +204,7 @@ the numbers and references right, as cached, and the contents without page numbe
 | `page.header`, `page.footer` | left, centre and right text with `{page}`, `{pages}`, `{title}`, `{version}`, `{date}` |
 | `docx.update_fields_on_open` | `true` (the default): Word updates every field when it opens the file; `false` writes no such request |
 | `docx.reference_text_switch` | `off`, `documented` (the default) or `guess`: how far a cross-reference may rely on Word's `\t` switch to leave the words of a number out (`Article I` shown as `I`) |
+| `elements.*`, `signatures.page_break_before` | the type of quotes, lists, tables, parties, signatures and defined terms, as Word styles (`Quote`, `List Paragraph`, `Table Text`, `Party Details`, …), and a page break before the signature blocks; HTML reads them too |
 | `contents.*`, `attachments.separator`, `signatures.enabled`, `numbering.*`, `enumeration.*`, `paragraphs.*`, `typography.*`, `headings.*` | as in the other formats; the DOCX meaning of each is in the style documentation |
 
 **Limits.** Word cannot do everything the renderer does, and the render says where, one `render-docx-*` diagnostic

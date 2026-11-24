@@ -113,7 +113,8 @@ title_block: { parties: true, effective_date: true, version: false }
 contents: { enabled: false, depth: 2, attachments: true }     # table of contents after the title block; depth 1-5
                                                               # counts number levels ("2.1" is 2); attachments listed last
 attachments: { render: placeholder, separator: page-break }   # placeholder | omit; page-break | rule | none (plain text: `---` around attachments unless none)
-signatures: { enabled: true }                                 # the document's include_signatures: false wins
+signatures: { enabled: true, page_break_before: false }      # the document's include_signatures: false wins;
+                                                              # page_break_before: a new page (HTML print, DOCX)
 template_view: { choice_separator: " / ", empty_choice: "" }
 
 labels:                      # every word the renderer generates; unset: built-in for the document language
@@ -141,6 +142,15 @@ page:
   margin: 25mm
   header: { left: "", center: "", right: "" }              # running header (DOCX; not yet HTML or PDF), see "Headers and footers"
   footer: { left: "", center: "{page} / {pages}", right: "" }
+
+elements:                    # typography of single elements, HTML and DOCX; unset (null): as drawn by default
+  quote: { font_family: null, font_size: null, color: null, line_height: null,
+           space_before: null, space_after: null, indent: null }
+  list: { font_family: null, font_size: null, color: null, line_height: null, item_spacing: null }
+  table: { font_family: null, font_size: null, color: null }          # table cells
+  parties: { font_family: null, font_size: null, color: null }        # the parties in the title block
+  signatures: { font_family: null, font_size: null, color: null }
+  defined_term: { font_family: null, font_size: null, color: null }   # "Fee" {{def: fee}}  (see "Elements")
 
 html:
   max_width: 46rem
@@ -252,6 +262,58 @@ the words. With `extends`, a label set in the parent applies to the child. An un
 and it is the value id when the choice's label is blank or another choice of the question has the same label, so that
 two conditions never read alike.
 
+### Elements
+
+`elements.*` set the type of single elements, in HTML and DOCX alike (the plain-text writer has none). Every
+field is unset by default, which keeps what the writers draw; a style changes only what it sets.
+
+| Element | Fields | HTML | DOCX (Word style) |
+|---|---|---|---|
+| `quote` | `font_family`, `font_size`, `color`, `line_height`, `space_before`, `space_after`, `indent` | `.ld-quote` (`margin-top`, `margin-bottom`, `padding-left`) | `Quote`; `indent` is the left indent of everything the quote holds |
+| `list` | `font_family`, `font_size`, `color`, `line_height`, `item_spacing` (the space after each item) | `.ld-list`, `.ld-list > li` | `List Paragraph`: the paragraphs of a list item, unless it is in a quote or a drafting note, where it keeps that style |
+| `table` | `font_family`, `font_size`, `color` | `.ld-table` | `Table Text`, the paragraphs in the cells |
+| `parties` | `font_family`, `font_size`, `color` | `.ld-parties` | `Party Side`, `Party Name`, `Party Details` (the header rows keep `Title Block Text`) |
+| `signatures` | `font_family`, `font_size`, `color` | `.ld-signatures` | `Signature Side`, `Signature Text`, `Signature Line` |
+| `defined_term` | `font_family`, `font_size`, `color` | `.ld-defined` (the defining occurrence, and its text where a heading's copy shows it) | `Defined Term` (`definitions.style` still sets its emphasis) |
+
+```yaml
+elements:
+  quote: { font_size: 10pt, indent: 2em, space_after: 1em }
+  list: { item_spacing: 3pt }
+  table: { font_family: Arial, font_size: 9pt }
+signatures: { page_break_before: true }
+```
+
+The values are CSS, held to the same grammars as `typography` in an untrusted style. A list's and a table's
+indents are the numbering's and the page's, so there is no indent for them, and no spacing for tables, parties
+and signatures, which are tables in Word. In DOCX `em` in an element is the element's own font size when it
+sets one (`indent: 2em` of a 10pt quote is 20pt), `rem` the body's; `%`, `ch` and `ex` are an error for DOCX, as
+everywhere, a space or an indent is 0 or more, and a quote's indent is at most the text width less 113.4pt (4 cm),
+the least room the DOCX body leaves any paragraph (a quote nested in a quote is held at that limit too; on a page
+narrower than that, only 0). An
+empty value is refused: leave the field out to keep the default (or what the style extends), or write `null` to
+go back to the default over what it extends.
+
+`signatures.page_break_before` starts the signature blocks on a new page: in HTML in print (`break-before:
+page`), in DOCX with an empty paragraph one point high that breaks the page before the signature table.
+
+Where the formats differ, as their models do:
+
+- **Spacing.** In HTML `item_spacing` is the space after each list item and a quote's `space_before` and
+  `space_after` are around the whole quote. In DOCX they are paragraph properties of the style, so they apply to
+  each paragraph that has it: each paragraph of an item, each paragraph of a quote (as the default spacing of a
+  quote always has).
+- **Nesting.** In HTML an element's settings reach what it holds: a table or a quote in a list item takes the
+  list's font and colour unless it sets its own, and a relative `font_size` (`em`, `%`) is relative to the element
+  it is in (a table of `0.8em` in a list item of `0.8em` is 0.64em; a quote or a list in one of its kind keeps its
+  size rather than scaling it again). In DOCX each paragraph has the one style of its kind (a table in a list item
+  is `Table Text`, not `List Paragraph`), a `font_size` in `em` is the body's, and a list in a quote keeps the
+  quote's style. Sizes in `pt`, set on each element that holds text, read alike in both, except for a list in a
+  quote, which is a list in HTML and a quote in DOCX.
+
+The DOCX always names `List Paragraph`, `Table Text` and `Party Details`, set or not, so a lawyer can restyle list
+items, table cells and the parties' details in Word.
+
 ### Headers and footers
 
 `page.header` and `page.footer` are the running text at the top and bottom of every page, each as a
@@ -310,8 +372,10 @@ at least 36 pt (0.5 inch) of text in each direction, a line height of at most 15
 number of more than 32 digits is no length at all. `html.max_width` and `html.extra_css` are never read.
 
 The writer generates Word styles from the template (`Normal`, `heading 1` to `heading 5`, `Title`,
-`Subtitle`, `Quote`, `toc 1` to `toc 5`, `Hyperlink`, `Table Grid`, and styles of its own for drafting
-notes, code, defined terms, blanks, choices, failure markers and condition labels), so a change made to a
+`Subtitle`, `Quote`, `List Paragraph`, `toc 1` to `toc 5`, `Hyperlink`, `Table Grid`, and styles of its own for
+drafting notes, code, table text (`Table Text`), the title block, the parties (`Party Side`, `Party Name`,
+`Party Details`) and the signatures, defined terms, blanks, choices, failure markers and condition labels; see
+"Elements"), so a change made to a
 style in Word applies to every paragraph that uses it.
 
 | Setting | Meaning |
@@ -341,14 +405,14 @@ The numbering and wording settings are the same as in the other formats; what th
 | `locale`, `values.*`, `placeholders.*`, `template_view.*`, `labels.*` | As in the other formats: dates, amounts, blanks, choices and labels are written as text (they are not numbers Word can compute) |
 | `html.max_width`, `html.extra_css` | Not read |
 
-The styles for this matter (`Title Block Text`, `Party Side`, `Party Name`, `Attachments Heading`, `Attachment Title`,
+The styles for this matter (`Title Block Text`, `Party Side`, `Party Name`, `Party Details`, `Attachments Heading`, `Attachment Title`,
 `Attachment File`, `Signature Side`, `Signature Text`, `Signature Line`) are Word styles like the others: a lawyer who
 changes one in Word changes every paragraph that uses it.
 
 ### Trusted input
 
 A style template, a `--set` value, and an `extends` path are the operator's, not the document
-author's. A value placed into the stylesheet (`typography`, `headings`, `page`, `html.max_width`)
+author's. A value placed into the stylesheet (`typography`, `headings`, `elements`, `page`, `html.max_width`)
 must not contain `/*`, `*/`, `</`, a backslash, a control character or a line break: the style is
 refused, naming the setting (nothing is stripped). Other CSS is accepted as written, `calc()` and
 `var()` included, and is not checked as CSS, so a value such as `12pt (` breaks the rest of the
@@ -384,11 +448,11 @@ with `RenderOptions(untrusted=True, document_root=...)` (`legaldown-render --unt
 
   | Setting | Accepted |
   |---|---|
-  | `typography.font_size`, `headings.N.size` | a length: `11pt`, `1.2em`, `0` (units `em rem ex ch pt pc px mm cm in %`) |
-  | `typography.line_height` | `normal`, a number (`1.5`), or a length |
-  | `typography.color`, `typography.link_color` | `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, a colour name, `rgb()`/`rgba()`/`hsl()`/`hsla()` of plain numbers |
+  | `typography.font_size`, `headings.N.size`, the `font_size`, spaces, `indent` and `item_spacing` of `elements.*` | a length: `11pt`, `1.2em`, `0` (units `em rem ex ch pt pc px mm cm in %`) |
+  | `typography.line_height`, `elements.quote.line_height`, `elements.list.line_height` | `normal`, a number (`1.5`), or a length |
+  | `typography.color`, `typography.link_color`, `elements.*.color` | `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, a colour name, `rgb()`/`rgba()`/`hsl()`/`hsla()` of plain numbers |
   | `headings.N.weight` | `normal`, `bold`, `bolder`, `lighter`, or 1 to 1000 |
-  | `typography.font_family` | up to ten font names separated by commas; names of more than one word quoted |
+  | `typography.font_family`, `elements.*.font_family` | up to ten font names separated by commas; names of more than one word quoted |
   | `page.size` | `auto`, `portrait`, `landscape`, a paper size (`A3` to `A5`, `B4`, `B5`, `letter`, `legal`, `ledger`) with an optional orientation, or one or two lengths |
   | `page.margin` | one to four lengths |
   | `html.max_width` | `none` or a length |

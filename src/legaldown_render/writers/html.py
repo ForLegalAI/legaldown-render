@@ -27,7 +27,7 @@ from collections.abc import Callable
 from html import escape
 
 from ..errors import OptionsError
-from ..style.model import HeadingStyle, Style, blank_has_fields
+from ..style.model import Elements, HeadingStyle, ListFormat, QuoteFormat, Style, TextFormat, blank_has_fields
 from ..tree import (
     AttachmentPart,
     Blank,
@@ -545,6 +545,48 @@ def _print_block(place: Callable[[str], str], rules: tuple[_Rule, ...] = _PRINT_
     return "@media print {\n" + "".join(f"  {_rule(rule, place)}\n" for rule in rules) + "}"
 
 
+def _element_rules(elements: Elements) -> list[_Rule]:
+    """The rules ``elements.*`` add, each only for what is set, so that a style
+    that sets nothing writes the sheet it always did. A quote or list inside
+    one of its kind keeps its size rather than scaling it again (a relative size: ``em``, ``%``)."""
+    found: list[_Rule] = []
+
+    def add(selectors: tuple[str, ...], pairs: tuple[tuple[str, str | None], ...]) -> None:
+        # Blank is unset: the loader refuses it, a Style built by hand may hold it.
+        declarations = [f"{name}: {_css(value)};" for name, value in pairs if value is not None and value.strip()]
+        if declarations:
+            found.append((selectors, " ".join(declarations)))
+
+    def text(fmt: TextFormat | QuoteFormat | ListFormat) -> tuple[tuple[str, str | None], ...]:
+        return (("font-family", fmt.font_family), ("font-size", fmt.font_size), ("color", fmt.color))
+
+    quote, items = elements.quote, elements.list
+    add((".ld-quote",), (*text(quote), ("line-height", quote.line_height), ("margin-top", quote.space_before),
+                         ("margin-bottom", quote.space_after), ("padding-left", quote.indent)))
+    if _relative(quote.font_size):
+        found.append(((".ld-quote .ld-quote",), "font-size: inherit;"))
+    add((".ld-list",), (*text(items), ("line-height", items.line_height)))
+    if _relative(items.font_size):
+        found.append(((".ld-list .ld-list",), "font-size: inherit;"))
+    add((".ld-list > li",), (("margin-bottom", items.item_spacing),))
+    add((".ld-table",), text(elements.table))
+    add((".ld-parties",), text(elements.parties))
+    add((".ld-signatures",), text(elements.signatures))
+    add((".ld-defined",), text(elements.defined_term))
+    return found
+
+
+_ABSOLUTE_SIZE = re.compile(r"(?:0|[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:pt|pc|px|mm|cm|in|q|rem))", re.IGNORECASE)
+
+
+def _relative(size: str | None) -> bool:
+    """Whether a font size may scale with the text around it: anything but a plain absolute length (``em``,
+    ``%``, ``ex``, ``ch``, ``smaller``, ``calc()``). Then an element of a kind inside one of its kind would scale
+    it again. An absolute size needs no reset, and would only be undone by one (the reset inherits from whatever
+    element is in between)."""
+    return size is not None and bool(size.strip()) and _ABSOLUTE_SIZE.fullmatch(size.strip()) is None
+
+
 def _heading_levels(style: Style) -> list[tuple[str, HeadingStyle]]:
     """The heading levels the sheet writes, in numeric order, as the digits of
     their class name (``ld-level-1``).
@@ -577,8 +619,8 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
     and there is no ``body``, ``:root``, ``html`` or ``@page`` rule, so it
     styles nothing of the page outside the document. Every rule gains the
     same specificity, so its rules override each other as in the standalone
-    sheet; the one difference is that the document's own rule comes before
-    the print rules, so that in print its width limit is lifted. The page's
+    sheet (in both, the print rules follow the document's width rule, which
+    they lift). The page's
     margin and the document's padding (a page gutter, on screen and in
     print) are left out.
 
@@ -629,16 +671,23 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
         generated.append(((".ld-attachment",), "border-top: 1px solid var(--ld-rule); padding-top: 1em;"))
     if blank_has_fields(style.placeholders.blank):
         generated.append(((".ld-blank-label",), "white-space: normal;"))
+    generated += _element_rules(style.elements)
+    # Print rules a setting adds, in a block of their own after the generated rules (none by default).
+    print_rules: tuple[_Rule, ...] = ((((".ld-signatures",), "break-before: page;"),)
+                                      if style.signatures.page_break_before else ())
 
     if standalone:
         def place(selector: str) -> str:
             return selector
         parts = [_rule(rule, place) for rule in _BASE_RULES]
-        parts.append(_print_block(place))
         parts.append(f":root {{ {variables} }}")
         parts.append(f"body {{ margin: 0; {text} }}")
         parts.append(f".ld-document {{ {max_width} }}")
+        # After the document's width, which the print rules lift (max-width: none) and so must follow.
+        parts.append(_print_block(place))
         parts += [_rule(rule, place) for rule in generated]
+        if print_rules:
+            parts.append(_print_block(place, print_rules))
         parts.append(f"@page {{ size: {_css(style.page.size)}; margin: {_css(style.page.margin)}; }}")
     else:
         # str.__str__: the value check_scope matched, whatever a str subclass formats as.
@@ -653,6 +702,8 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
         parts += [_rule(rule, place) for rule in _BASE_RULES if rule[0] != (_ROOT,)]
         parts.append(_print_block(place, _EMBEDDED_PRINT_RULES))
         parts += [_rule(rule, place) for rule in generated]
+        if print_rules:
+            parts.append(_print_block(place, print_rules))
     css = "\n".join(parts) + "\n"
     if style.html.extra_css:
         # The loader refuses ``</style``; any other ``</`` is made ``<\/`` (the same

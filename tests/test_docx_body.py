@@ -278,7 +278,7 @@ def test_a_unit_writes_numpr_only_when_the_plan_says_it_is_explicit() -> None:
                     abstracts=[abstract(0, "headings"), abstract(1)],
                     nums=[Num(1, 0), Num(2, 1), Num(3, 0, ((0, 5),))], heading=1)
     children = body(document, the_plan)
-    items = [c for c in children if pstyle(c) is None]
+    items = [c for c in children if pstyle(c) == "ListParagraph"]
     heading_live, heading_own = (c for c in children if pstyle(c) and pstyle(c).startswith("Heading"))  # type: ignore[union-attr]
     assert (pstyle(heading_live), numbering(heading_live)) == ("Heading2", None)
     assert (pstyle(heading_own), numbering(heading_own)) == ("Heading1", (0, 3))
@@ -290,7 +290,7 @@ def test_numpr_is_in_schema_order_among_the_other_properties() -> None:
     the_plan = plan(unit("u1", "item", num_id=1, ilvl=2, explicit=True, ind=(1134, 567)), abstracts=[abstract(0)],
                     nums=[Num(1, 0)])
     (paragraph,) = body(document, the_plan)
-    assert [local(child) for child in paragraph.find(f"{W}pPr")] == ["numPr", "ind"]  # type: ignore[union-attr]
+    assert [local(child) for child in paragraph.find(f"{W}pPr")] == ["pStyle", "numPr", "ind"]  # type: ignore[union-attr]
     assert [local(child) for child in paragraph.find(f"{W}pPr/{W}numPr")] == ["ilvl", "numId"]  # type: ignore[union-attr]
     assert indent(paragraph) == {"left": 1134, "hanging": 567}
 
@@ -444,7 +444,7 @@ def test_a_unit_the_plan_does_not_know_is_a_plain_paragraph() -> None:
     document = tree(para("a", unit="u9"), bullets(item("b", unit="u8")), sections=[section("H", unit="s9")])
     paragraph, listed, heading = body(document, plan())
     assert [pstyle(paragraph), numbering(paragraph), flow(paragraph)] == [None, None, "a"]
-    assert [pstyle(listed), numbering(listed), flow(listed)] == [None, None, "b"]
+    assert [pstyle(listed), numbering(listed), flow(listed)] == ["ListParagraph", None, "b"]
     assert [pstyle(heading), numbering(heading)] == ["Heading1", None]
 
 

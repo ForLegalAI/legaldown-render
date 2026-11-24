@@ -174,6 +174,8 @@ class Signatures:
     ``include_signatures: false`` always wins."""
 
     enabled: bool = True
+    #: Start the signature blocks on a new page (HTML in print, DOCX).
+    page_break_before: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,7 +278,7 @@ CSS_KINDS: dict[str, CssKind] = {
 CSS_FORBIDDEN = ("/*", "*/", "</", "\\")
 
 
-def css_field(kind: str, default: str) -> Any:
+def css_field(kind: str, default: str | None) -> Any:
     """A text setting that reaches the stylesheet, of the :data:`CSS_KINDS`
     entry *kind*. The loader checks its value (:func:`css_problem`)."""
     assert kind in CSS_KINDS, kind
@@ -391,6 +393,60 @@ class Html:
     extra_css: str = css_field("css", "")
 
 
+@dataclass(frozen=True, slots=True)
+class TextFormat:
+    """The type of one element (``elements.*``): unset (None) keeps what
+    the writers draw by default, so a style changes only what it sets."""
+
+    font_family: str | None = css_field("font-family", None)
+    #: A length. ``em`` is the size of the text around the element: in DOCX the body's, in HTML that of
+    #: the element it is in (a table in a list item of ``0.8em`` is 0.64em), so ``pt`` reads alike in both.
+    font_size: str | None = css_field("length", None)
+    color: str | None = css_field("color", None)
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteFormat:
+    """Quotes: their type, line height, the space above and below, and the
+    indent of their text (``em`` lengths are the quote's own font size)."""
+
+    font_family: str | None = css_field("font-family", None)
+    font_size: str | None = css_field("length", None)
+    color: str | None = css_field("color", None)
+    line_height: str | None = css_field("line-height", None)
+    space_before: str | None = css_field("length", None)
+    space_after: str | None = css_field("length", None)
+    indent: str | None = css_field("length", None)
+
+
+@dataclass(frozen=True, slots=True)
+class ListFormat:
+    """Lists: their type, line height, and the space after each item (their
+    indents are the numbering's)."""
+
+    font_family: str | None = css_field("font-family", None)
+    font_size: str | None = css_field("length", None)
+    color: str | None = css_field("color", None)
+    line_height: str | None = css_field("line-height", None)
+    item_spacing: str | None = css_field("length", None)
+
+
+@dataclass(frozen=True, slots=True)
+class Elements:
+    """Typography of single elements, read by the HTML and DOCX writers
+    (docs/style-templates.md, "Elements"); the plain-text writer has none."""
+
+    quote: QuoteFormat = field(default_factory=QuoteFormat)
+    list: ListFormat = field(default_factory=ListFormat)
+    #: Table cells.
+    table: TextFormat = field(default_factory=TextFormat)
+    #: The parties in the title block: side labels, names and details.
+    parties: TextFormat = field(default_factory=TextFormat)
+    signatures: TextFormat = field(default_factory=TextFormat)
+    #: The defining occurrence of a term (``"Fee" {{def: fee}}``); ``definitions.style`` still sets its emphasis.
+    defined_term: TextFormat = field(default_factory=TextFormat)
+
+
 def _default_headings() -> dict[int, HeadingStyle]:
     return {
         1: HeadingStyle(size="1.15em", transform="uppercase"),
@@ -428,6 +484,7 @@ class Style:
     typography: Typography = field(default_factory=Typography)
     headings: dict[int, HeadingStyle] = field(default_factory=_default_headings)
     page: Page = field(default_factory=Page)
+    elements: Elements = field(default_factory=Elements)
     html: Html = field(default_factory=Html)
     docx: Docx = field(default_factory=Docx)
 
