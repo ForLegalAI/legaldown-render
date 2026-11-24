@@ -56,3 +56,6 @@ The leading option is WeasyPrint. It will be decided with a spike when v0.4 star
   [roadmap](../roadmap.md)), so `pdf` moves to v0.8. The open question's PDF spike now reads v0.8.
 - 2026-11-24: v0.8 became the release built on legaldown-validator 0.6.0 (see the
   [roadmap](../roadmap.md)), so `pdf` moves to v0.9. The open question's PDF spike now reads v0.9.
+- 2026-11-24: v0.9 became the release for hosts and styles (the embedded stylesheet, the template view wording,
+  element typography; see the [roadmap](../roadmap.md)), so `pdf` moves to v0.10. The open question's PDF spike now
+  reads v0.10.
