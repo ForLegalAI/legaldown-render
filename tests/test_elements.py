@@ -90,14 +90,14 @@ def test_each_element_gets_its_rule() -> None:
     css = stylesheet(style(**EVERYTHING))
     assert (".ld-quote { font-family: Arial; font-size: 10pt; color: #333333; line-height: 1.2; margin-top: 6pt; "
             "margin-bottom: 1em; padding-left: 2em; }") in css
-    assert ".ld-quote .ld-quote { font-size: inherit; }" in css
+    assert ".ld-quote .ld-quote" not in css  # 10pt: an absolute size needs no reset
     assert ".ld-list { font-family: Georgia; font-size: 0.9em; color: navy; line-height: 14pt; }" in css
     assert ".ld-list .ld-list { font-size: inherit; }" in css
     assert ".ld-list > li { margin-bottom: 3pt; }" in css
     assert ".ld-table { font-family: Verdana; font-size: 9pt; color: #444; }" in css
     assert ".ld-parties { font-family: Calibri; font-size: 12pt; color: teal; }" in css
     assert ".ld-signatures { font-family: Times; font-size: 10pt; color: maroon; }" in css
-    assert "dfn.ld-defined { font-family: Courier; font-size: 11pt; color: #990000; }" in css
+    assert ".ld-defined { font-family: Courier; font-size: 11pt; color: #990000; }" in css
     assert "@media print {\n  .ld-signatures { break-before: page; }\n}" in css
 
 
@@ -116,7 +116,7 @@ def test_no_size_no_nested_reset() -> None:
 def test_the_element_rules_are_scoped_in_the_embedded_sheet() -> None:
     css = stylesheet(style(**EVERYTHING), standalone=False, scope=".preview")
     assert ":where(.preview) .ld-document .ld-quote { font-family: Arial;" in css
-    assert ":where(.preview) .ld-document dfn.ld-defined {" in css
+    assert ":where(.preview) .ld-document .ld-defined {" in css
     assert "  :where(.preview) .ld-document .ld-signatures { break-before: page; }" in css
 
 
@@ -324,7 +324,7 @@ def test_a_quote_indent_reaches_the_quote_paragraphs() -> None:
 @pytest.mark.parametrize(("overrides", "problem"), [
     ({"elements.quote.line_height": "0"}, "elements.quote.line_height: a number must be greater than 0"),
     ({"elements.quote.space_before": "23in"}, "elements.quote.space_before: must be 0 or more and at most 1584pt"),
-    ({"elements.quote.indent": "10in"}, "elements.quote.indent: leaves less than 36pt of the text width"),
+    ({"elements.quote.indent": "10in"}, "elements.quote.indent: leaves less than 113.4pt of the text width"),
 ])
 def test_docx_limits_name_their_setting(overrides: dict, problem: str) -> None:
     with pytest.raises(StyleError) as caught:
@@ -357,3 +357,49 @@ def test_the_page_break_paragraph_is_a_signature_paragraph() -> None:
     body = docx_parts(**{"signatures.page_break_before": True})["word/document.xml"].find(f"{W}body")
     breaking = next(p for p in body if p.find(f"{W}pPr/{W}pageBreakBefore") is not None)
     assert breaking.find(f"{W}pPr/{W}pStyle").get(f"{W}val") == "SignatureText"
+
+
+def test_a_quote_indent_up_to_what_the_body_draws_is_taken() -> None:
+    """A4 at 25mm margins: 9072 twips of text, of which the body leaves a paragraph at least 2268."""
+    from legaldown_render.style.docx import docx_settings
+
+    assert docx_settings(style(**{"elements.quote.indent": f"{(9072 - 2268) / 20}pt"})).elements["quote"].indent == 6804
+    with pytest.raises(StyleError, match="elements.quote.indent"):
+        docx_settings(style(**{"elements.quote.indent": f"{(9072 - 2268 + 1) / 20}pt"}))
+
+
+def test_zero_is_a_value_not_the_default() -> None:
+    by_id = styles_by_id(docx_parts(**{"elements.quote.indent": "0", "elements.quote.space_before": "0",
+                                       "elements.quote.space_after": "0pt", "elements.list.item_spacing": "0"})[
+        "word/styles.xml"])
+    quote = by_id["Quote"].find(f"{W}pPr")
+    assert quote.find(f"{W}ind").get(f"{W}left") == "0"
+    assert (quote.find(f"{W}spacing").get(f"{W}before"), quote.find(f"{W}spacing").get(f"{W}after")) == ("0", "0")
+    assert by_id["ListParagraph"].find(f"{W}pPr/{W}spacing").get(f"{W}after") == "0"
+    css = stylesheet(style(**{"elements.quote.indent": "0", "elements.list.item_spacing": "0"}))
+    assert ".ld-quote { padding-left: 0; }" in css and ".ld-list > li { margin-bottom: 0; }" in css
+
+
+@pytest.mark.parametrize(("size", "reset"), [("10pt", False), ("12px", False), ("1rem", False), ("0.9em", True),
+                                             ("90%", True)])
+def test_only_a_relative_size_resets_inside_its_kind(size: str, reset: bool) -> None:
+    """An absolute size applies at every depth by its own rule; a reset would inherit whatever is in between
+    (a quote in a list in a quote would take the list's size)."""
+    css = stylesheet(style(**{"elements.quote.font_size": size, "elements.list.font_size": size}))
+    assert (".ld-quote .ld-quote { font-size: inherit; }" in css) is reset
+    assert (".ld-list .ld-list { font-size: inherit; }" in css) is reset
+
+
+def test_a_blank_value_of_a_style_built_by_hand_is_unset() -> None:
+    from legaldown_render.style.docx import docx_settings
+    from legaldown_render.style.model import Elements, QuoteFormat, Style
+
+    built = Style(elements=Elements(quote=QuoteFormat(color=" ", font_size="", indent="")))
+    assert ".ld-quote { color" not in stylesheet(built) and ": ;" not in stylesheet(built)
+    assert docx_settings(built).elements["quote"].color is None
+
+
+def test_a_quote_in_a_list_item_is_a_quote_in_docx() -> None:
+    source = SOURCE.replace("  a second paragraph of item one\n", "  > quoted in an item\n")
+    used = paragraph_styles(ET.fromstring(parts(render(source, format="docx").binary)["word/document.xml"]))
+    assert ("Quote", "quoted in an item") in used

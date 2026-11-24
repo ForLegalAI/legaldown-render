@@ -549,7 +549,7 @@ def _element_problems(style: Style, reported: list[str]) -> list[str]:
             if isinstance(value, str) and not value.strip() and not any(
                     problem.startswith(f"{key}:") for problem in reported):
                 problems.append(f"elements.{element.name}.{item.name}: is empty; leave it out (or write null) "
-                                "to keep the default")
+                                "to keep the default")  # with extends, leaving it out keeps the parent's
     return problems
 
 

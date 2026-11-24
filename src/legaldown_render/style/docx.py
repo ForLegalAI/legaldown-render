@@ -81,6 +81,9 @@ _MAX_TWIPS = 31680
 _MIN_PAGE_TWIPS = 144
 #: The least width and height of the text area, so that no tab stop or text width is negative or absurd.
 _MIN_TEXT_TWIPS = 720
+#: The least room the DOCX body leaves a paragraph for its text, in twips (4 cm): a deeper indent is drawn at
+#: this one. A quote's indent is checked against it, so that what the style asks for is what Word draws.
+MIN_PARAGRAPH_TWIPS = 2268
 #: A number of more characters than this is no length (and is not converted: ``float`` of a
 #: few hundred digits is infinity); a length over this many twips is refused before it is used.
 _MAX_NUMBER_CHARS = 32
@@ -228,9 +231,9 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
     elements = {item.name: _element(getattr(style.elements, item.name), f"elements.{item.name}", font_points, problems)
                 for item in fields(style.elements)}
     indent = elements["quote"].indent
-    if indent is not None and indent > page.text_width - _MIN_TEXT_TWIPS:
-        problems.add("elements.quote.indent", f"leaves less than {_MIN_TEXT_TWIPS // 20}pt of the text width for the "
-                                              "quote's text")
+    if indent is not None and indent > page.text_width - MIN_PARAGRAPH_TWIPS:
+        problems.add("elements.quote.indent", f"leaves less than {MIN_PARAGRAPH_TWIPS / 20:g}pt of the text width "
+                                              "for the quote's text")
 
     problems.items.extend(docx_style_errors(style))
     if problems.items:
@@ -246,13 +249,17 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
 def _element(fmt: object, key: str, body_points: float, problems: _Problems) -> ElementFormat:
     """*fmt* (an ``elements.*`` entry) in Word units. Its ``em`` lengths are its own font size when it sets one,
     the body's otherwise (``rem`` is always the body's). A space or an indent is 0 or more, and at most Word's 22 inches."""
-    size = getattr(fmt, "font_size", None)
+    def given(name: str) -> str | None:
+        """A field's value; blank is unset (the loader refuses it; a Style built by hand may hold it)."""
+        value = getattr(fmt, name, None)
+        return value if isinstance(value, str) and value.strip() else None
+    size = given("font_size")
     points = _font_points(size, f"{key}.font_size", body_points, problems) if size is not None else None
     em_points = points if points is not None else body_points
-    family, color, line = (getattr(fmt, name, None) for name in ("font_family", "color", "line_height"))
+    family, color, line = (given(name) for name in ("font_family", "color", "line_height"))
 
     def length(name: str) -> int | None:
-        value = getattr(fmt, name, None)
+        value = given(name)
         if value is None:
             return None
         twips = _length(value, f"{key}.{name}", body_points if value.strip().lower().endswith("rem") else em_points,

@@ -28,7 +28,7 @@ from dataclasses import dataclass, replace
 
 from ...errors import InternalError
 from ...resolve.docx_plan import AltNumber, DocxPlan, UnitPlan
-from ...style.docx import PageGeometry
+from ...style.docx import MIN_PARAGRAPH_TWIPS, PageGeometry
 from ...tree import (
     Block,
     CodeBlock,
@@ -68,7 +68,7 @@ from .styles import (
 #: Limits on what a plan's indents can do to the page, in twips: Word does not take a left indent past 31680
 #: (22 inches), and a paragraph needs room to be read in; a column needs room for a word.
 _MAX_INDENT = 31680
-_MIN_TEXT = 2268
+_MIN_TEXT = MIN_PARAGRAPH_TWIPS
 _MIN_COLUMN = 1134
 
 _RULE_COLOR = "C8C8C8"

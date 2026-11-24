@@ -548,11 +548,12 @@ def _print_block(place: Callable[[str], str], rules: tuple[_Rule, ...] = _PRINT_
 def _element_rules(elements: Elements) -> list[_Rule]:
     """The rules ``elements.*`` add, each only for what is set, so that a style
     that sets nothing writes the sheet it always did. A quote or list inside
-    one of its kind keeps its size rather than scaling it again (``em``)."""
+    one of its kind keeps its size rather than scaling it again (a relative size: ``em``, ``%``)."""
     found: list[_Rule] = []
 
     def add(selectors: tuple[str, ...], pairs: tuple[tuple[str, str | None], ...]) -> None:
-        declarations = [f"{name}: {_css(value)};" for name, value in pairs if value is not None]
+        # Blank is unset: the loader refuses it, a Style built by hand may hold it.
+        declarations = [f"{name}: {_css(value)};" for name, value in pairs if value is not None and value.strip()]
         if declarations:
             found.append((selectors, " ".join(declarations)))
 
@@ -562,17 +563,24 @@ def _element_rules(elements: Elements) -> list[_Rule]:
     quote, items = elements.quote, elements.list
     add((".ld-quote",), (*text(quote), ("line-height", quote.line_height), ("margin-top", quote.space_before),
                          ("margin-bottom", quote.space_after), ("padding-left", quote.indent)))
-    if quote.font_size is not None:
+    if _relative(quote.font_size):
         found.append(((".ld-quote .ld-quote",), "font-size: inherit;"))
     add((".ld-list",), (*text(items), ("line-height", items.line_height)))
-    if items.font_size is not None:
+    if _relative(items.font_size):
         found.append(((".ld-list .ld-list",), "font-size: inherit;"))
     add((".ld-list > li",), (("margin-bottom", items.item_spacing),))
     add((".ld-table",), text(elements.table))
     add((".ld-parties",), text(elements.parties))
     add((".ld-signatures",), text(elements.signatures))
-    add(("dfn.ld-defined",), text(elements.defined_term))
+    add((".ld-defined",), text(elements.defined_term))
     return found
+
+
+def _relative(size: str | None) -> bool:
+    """Whether a font size scales with the text around it (``em``, ``%``): then an element of a kind inside one of
+    its kind would scale it again. An absolute size needs no reset, and would only be undone by one (the reset
+    inherits from whatever element is in between)."""
+    return size is not None and size.strip().lower().endswith(("em", "%")) and not size.strip().lower().endswith("rem")
 
 
 def _heading_levels(style: Style) -> list[tuple[str, HeadingStyle]]:
