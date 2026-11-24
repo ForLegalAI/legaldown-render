@@ -162,28 +162,6 @@ Only additions: no existing name, field or output changes.
   for output embedded in a host page. An unusable prefix is an `OptionsError` (exit 2); `--id-prefix` with another
   format is a usage error. Without it, the output is unchanged
 
-### Unreleased
-
-- **Print width**: a printed HTML page no longer keeps the screen's width limit (`html.max_width`); the print rule that
-  lifts it came before the screen rule it overrides
-- **Typography of single elements** ([#14](https://github.com/ForLegalAI/legaldown-render/issues/14)): `elements.quote`,
-  `list`, `table`, `parties`, `signatures` and `defined_term` set font, size and colour (quotes also line height, space
-  and indent; lists line height and the space after each item), in HTML and DOCX; `signatures.page_break_before` starts
-  the signature blocks on a new page. Unset, nothing changes, except that the DOCX now names `List Paragraph`,
-  `Table Text` and `Party Details` for list items, table cells and the parties' details
-- **Template view wording** ([#15](https://github.com/ForLegalAI/legaldown-render/issues/15)): `placeholders.blank`
-  takes `{id}`, `{name}` and `{prompt}`, so `"[{name}]"` labels each blank (`[Purchase price]`); a blank's `note=` stays
-  out of the output (§13.5 rule 4). `labels.condition_true`, `_false`, `_is` and `_is_not` label each shape of condition
-  with `{question}` and the choice's `{answer}` ("Only if: forum = State courts"). Nothing changes unless a style sets
-  them, except that a blank which held `{id}`, `{name}` or `{prompt}` as text now fills them
-- **An embedded stylesheet** ([#18](https://github.com/ForLegalAI/legaldown-render/issues/18)):
-  `stylesheet(style, standalone=False)` is the CSS for `standalone=False` output in a host page. Every rule is under
-  `.ld-document`, the variables, typography and background are set on it, and there is no `body`, `:root`, `html` or
-  `@page` rule; the rules override each other as in the standalone sheet (`html.extra_css` stays unscoped: its overrides
-  apply there when written under `.ld-document`). `scope=` places the document under one more
-  selector (`:where(scope) .ld-document`); an unusable scope is an `OptionsError`. `stylesheet(style)` and rendered
-  output are unchanged
-
 ### v0.8 — Validator 0.6.0 (released)
 
 - Built on `legaldown-validator` 0.6.0 (`>=0.6.0,<0.7`), which deprecates and removes no API; the renderer needed no
@@ -195,7 +173,33 @@ Only additions: no existing name, field or output changes.
   written twice, merged or aliased ([#133](https://github.com/ForLegalAI/legaldown-validator/issues/133)). Rendered
   output is unchanged
 
-### v0.9 — PDF
+### v0.9 — Hosts and styles (this release)
+
+For hosts that embed the HTML, for template views that read well, and for styles that set more than the body text.
+Only additions: unset, every new setting leaves the output as it was, apart from the print width fix and three
+Word styles the DOCX now names.
+
+- **An embedded stylesheet** ([#18](https://github.com/ForLegalAI/legaldown-render/issues/18)):
+  `stylesheet(style, standalone=False)` is the CSS for `standalone=False` output in a host page. Every rule is under
+  `.ld-document`, the variables, typography and background are set on it, and there is no `body`, `:root`, `html` or
+  `@page` rule; the rules override each other as in the standalone sheet (`html.extra_css` stays unscoped: its overrides
+  apply there when written under `.ld-document`). `scope=` places the document under one more
+  selector (`:where(scope) .ld-document`); an unusable scope is an `OptionsError`. `stylesheet(style)` and rendered
+  output are unchanged
+- **Template view wording** ([#15](https://github.com/ForLegalAI/legaldown-render/issues/15)): `placeholders.blank`
+  takes `{id}`, `{name}` and `{prompt}`, so `"[{name}]"` labels each blank (`[Purchase price]`); a blank's `note=` stays
+  out of the output (§13.5 rule 4). `labels.condition_true`, `_false`, `_is` and `_is_not` label each shape of condition
+  with `{question}` and the choice's `{answer}` ("Only if: forum = State courts"). Nothing changes unless a style sets
+  them, except that a blank which held `{id}`, `{name}` or `{prompt}` as text now fills them
+- **Typography of single elements** ([#14](https://github.com/ForLegalAI/legaldown-render/issues/14)): `elements.quote`,
+  `list`, `table`, `parties`, `signatures` and `defined_term` set font, size and colour (quotes also line height, space
+  and indent; lists line height and the space after each item), in HTML and DOCX; `signatures.page_break_before` starts
+  the signature blocks on a new page. Unset, nothing changes, except that the DOCX now names `List Paragraph`,
+  `Table Text` and `Party Details` for list items, table cells and the parties' details
+- **Print width**: a printed HTML page no longer keeps the screen's width limit (`html.max_width`); the print rule that
+  lifts it came before the screen rule it overrides
+
+### v0.10 — PDF
 
 - Choose the engine ([ADR 0004](decisions/0004-html-first.md)). The leading option is WeasyPrint
   on the HTML writer; its print stylesheet already exists
