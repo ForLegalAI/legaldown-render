@@ -3,7 +3,9 @@
 It writes one self-contained HTML5 file, or only its ``<article>`` with
 ``standalone=False`` (the CLI's ``--fragment``): semantic markup
 (``<section>``, ``<ol>``, ``<dfn>``, ``<a href>``) and a stylesheet generated
-from the style template's presentation settings. Every label a reader sees —
+from the style template's presentation settings: :func:`stylesheet` writes the
+page's sheet, and with ``standalone=False`` the sheet for the ``<article>`` in a
+host page, every rule under ``.ld-document``. Every label a reader sees —
 "4.2", "(b)" — is real text in the markup rather than a CSS counter, so the
 numbers are the ones resolution computed and survive copying and printing.
 

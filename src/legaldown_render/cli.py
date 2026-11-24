@@ -106,7 +106,8 @@ def _parser() -> argparse.ArgumentParser:
                              "name or YAML text (--style takes no file path), with no raw CSS (html.extra_css), "
                              "plain CSS values and short labels. With --print-style it checks the style the "
                              "same way and needs no --root")
-    parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet")
+    parser.add_argument("--fragment", action="store_true", help="HTML: write only the <article>, without page and stylesheet (its CSS for a host page is "
+                             "legaldown_render.writers.stylesheet(style, standalone=False))")
     parser.add_argument("--id-prefix", metavar="PREFIX", default="",
                         help="HTML: put PREFIX before every id and in-document link, so that a page embedding the "
                              "output keeps its own ids apart (ld- makes id=\"scope\" id=\"ld-scope\"): an ASCII "

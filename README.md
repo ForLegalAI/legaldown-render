@@ -67,6 +67,7 @@ legaldown-render upload.lgd --untrusted --root uploads/ --style continental   # 
 legaldown-render contract.lgd --final --strict                  # refuse if blanks or template constructs remain
 legaldown-render template.lgd --answers answers.yaml -o nda.html # fill in a template, then render it
 legaldown-render contract.lgd --fragment --id-prefix ld-       # an <article> to embed: id="ld-scope", href="#ld-scope"
+                                                                # (its CSS: writers.stylesheet(style, standalone=False), see "Python")
 legaldown-render --print-style --style continental              # every setting, as YAML
 ```
 

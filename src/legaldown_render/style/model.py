@@ -367,9 +367,11 @@ class Docx:
 @dataclass(frozen=True, slots=True)
 class Html:
     max_width: str = css_field("max-width", "46rem")
-    #: Appended to the generated stylesheet. Raw CSS, so trusted configuration:
-    #: it may not contain ``</style``, and an untrusted style may not set it
-    #: (``load_style(trusted=False)``).
+    #: Appended to the generated stylesheet, the page's and the embedded one
+    #: (``stylesheet(standalone=False)``), as written: it is not scoped there,
+    #: so an override of a base rule applies in it only under ``.ld-document``.
+    #: Raw CSS, so trusted configuration: it may not contain ``</style``, and an
+    #: untrusted style may not set it (``load_style(trusted=False)``).
     extra_css: str = css_field("css", "")
 
 

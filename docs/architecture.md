@@ -629,8 +629,9 @@ out when the validator reported the same path at the same line, or at none (`dia
     from `style/loader.py:_convert` for every field declared with `css_field`). It is rejected,
     never stripped: removing one token can form another (`/` + `/**/` + `*` is `/*`). Anything else
     is the operator's, so `calc()` and `var()` load. A value is not validated as CSS, though, so
-    `12pt (` is emitted as written and leaves the rest of the stylesheet unparsable.
-  - `html.extra_css` is raw CSS, appended as written, but it may not contain `</style` in any case;
+    `12pt (` is emitted as written and leaves the rest of the stylesheet unparsable. Embedded in a
+    host page, the sheet belongs in a `<style>` element of its own for that reason (README).
+  - `html.extra_css` is raw CSS, appended as written (in the embedded sheet too, unscoped), but it may not contain `</style` in any case;
     `stylesheet()` also writes any `</` in it as `<\/` (the same inside a CSS string), for a `Style`
     built by hand.
   - `values.date` is a CLDR pattern handed to Babel, which raises on one it does not know, at every
@@ -706,6 +707,7 @@ its file is named). `pytest -n auto` (pytest-xdist, in the `dev` extra) runs the
 | `tests/test_file_references.py` | File references (§2.3): the lexical check (relative, `../`, scheme, drive, backslash, encoding), each kind of reference with and without a root and from a subdirectory, what is shown instead, the options and `--root`, strict, and the lines |
 | `tests/test_text_writer.py` | The plain-text layout: attachment separators, tables, quotes, list items and indent, blanked labels |
 | `tests/test_html.py` | The HTML writer's print stylesheet for attachments |
+| `tests/test_embedded_stylesheet.py` | The embedded stylesheet (`standalone=False`): every rule under the root, no page rules, the standalone cascade, `scope` and its allowlist, `extra_css`, heading keys of a `Style` built by hand, and golden CSS of every built-in style in both modes (`tests/golden/stylesheet.*.css`) |
 | `tests/test_labels.py` | The built-in labels of parties, per language |
 | `tests/test_style.py` | Built-in styles, `extends`, dotted overrides, problem reporting, dumping a style, typing of command-line values |
 | `tests/test_style_validation.py` | Template field validation, `extends` cycles, self-contained dumps, `version` and `extends` not overridable, YAML errors in `--set`, the empty-blank fallback |
