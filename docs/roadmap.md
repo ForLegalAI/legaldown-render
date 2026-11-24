@@ -164,6 +164,11 @@ Only additions: no existing name, field or output changes.
 
 ### Unreleased
 
+- **Typography of single elements** ([#14](https://github.com/ForLegalAI/legaldown-render/issues/14)): `elements.quote`,
+  `list`, `table`, `parties`, `signatures` and `defined_term` set font, size and colour (quotes also line height, space
+  and indent; lists line height and the space after each item), in HTML and DOCX; `signatures.page_break_before` starts
+  the signature blocks on a new page. Unset, nothing changes, except that the DOCX now names `List Paragraph`,
+  `Table Text` and `Party Details` for list items, table cells and the parties' details
 - **Template view wording** ([#15](https://github.com/ForLegalAI/legaldown-render/issues/15)): `placeholders.blank`
   takes `{id}`, `{name}` and `{prompt}`, so `"[{name}]"` labels each blank (`[Purchase price]`); a blank's `note=` stays
   out of the output (§13.5 rule 4). `labels.condition_true`, `_false`, `_is` and `_is_not` label each shape of condition

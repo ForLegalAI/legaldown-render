@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from ...style import Style
-from ...style.docx import DocxSettings, HeadingFormat
+from ...style.docx import DocxSettings, ElementFormat, HeadingFormat
 from .ooxml import el, ppr, rpr, serialize, val
 
 # Style ids. A paragraph or a run names a style by id; Word shows the name.
@@ -48,6 +48,12 @@ ATTACHMENT_FILE = "AttachmentFile"
 SIGNATURE_SIDE = "SignatureSide"
 SIGNATURE_TEXT = "SignatureText"
 SIGNATURE_LINE = "SignatureLine"
+#: A list item's paragraphs (Word's "List Paragraph", with no indent of its own: the numbering's is the item's).
+LIST_PARAGRAPH = "ListParagraph"
+#: The paragraphs in a table's cells.
+TABLE_TEXT = "TableText"
+#: A party's details in the title block (the header rows keep ``TitleBlockText``).
+PARTY_DETAILS = "PartyDetails"
 
 
 def heading_style(level: int) -> str:
@@ -157,6 +163,32 @@ def _heading_run(heading: HeadingFormat | None, settings: DocxSettings) -> list[
             heading.caps and el("caps"), heading.small_caps and el("smallCaps"), _size(heading.half_points)]
 
 
+def _element_run(fmt: ElementFormat) -> list[Any]:
+    """The run properties an ``elements.*`` entry sets: font, colour, size."""
+    return [fmt.font and _fonts(fmt.font), fmt.color and el("color", {"val": fmt.color}),
+            fmt.half_points and _size(fmt.half_points)]
+
+
+def _spacing(fmt: ElementFormat | None = None, **defaults: int) -> ET.Element | None:
+    """``w:spacing`` of *defaults* (``before``, ``after``) with what *fmt* sets: its line height, and its
+    space before and after where it has them; None when there is nothing to write."""
+    values: dict[str, Any] = dict(defaults)
+    if fmt is not None:
+        if fmt.before is not None:
+            values["before"] = fmt.before
+        if fmt.after is not None:
+            values["after"] = fmt.after
+        if fmt.line is not None:
+            values["line"], values["lineRule"] = fmt.line
+    return el("spacing", values) if values else None
+
+
+def quote_indent(settings: DocxSettings) -> int:
+    """The left indent of a quote's text, in twips: ``elements.quote.indent``, else :data:`QUOTE_INDENT`."""
+    quote = settings.elements.get("quote")
+    return quote.indent if quote is not None and quote.indent is not None else QUOTE_INDENT
+
+
 def build_styles(style: Style, settings: DocxSettings, language: str, *, heading_num_id: int | None = None) -> bytes:
     """``word/styles.xml`` for *style*, converted to Word units as *settings*, in the
     document *language* (``w:lang``). *heading_num_id* links ``heading 1`` to ``heading 5``
@@ -172,6 +204,10 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
         return max(2, round(factor * settings.half_points))
 
     text_width = settings.page.text_width
+    elements = settings.elements
+    blank = ElementFormat()
+    quote, items, table = (elements.get(name, blank) for name in ("quote", "list", "table"))
+    parties, signatures, defined = (elements.get(name, blank) for name in ("parties", "signatures", "defined_term"))
     defaults = el(
         "docDefaults",
         None,
@@ -222,7 +258,13 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                run=[el("i"), el("iCs"), el("color", {"val": _MUTED}), _size(half_points(1.1))]),
         _style(QUOTE, "Quote", based_on=NORMAL, next_style=NORMAL, priority=29, quick=True,
                props=[el("pBdr", None, _border("left", _RULE, 18, 10)),
-                      el("spacing", {"before": em(0.5), "after": em(0.5)}), el("ind", {"left": QUOTE_INDENT, "right": 567})]),
+                      _spacing(quote, before=em(0.5), after=em(0.5)),
+                      el("ind", {"left": quote_indent(settings), "right": 567})],
+               run=_element_run(quote)),
+        _style(LIST_PARAGRAPH, "List Paragraph", based_on=NORMAL, priority=34, quick=True,
+               props=[_spacing(items, **({"after": items.item_spacing} if items.item_spacing is not None else {}))],
+               run=_element_run(items)),
+        _style(TABLE_TEXT, "Table Text", based_on=NORMAL, priority=50, custom=True, run=_element_run(table)),
         _style(CONTENTS_HEADING, "Contents Heading", based_on=NORMAL, next_style=NORMAL, priority=39, custom=True,
                props=[el("keepNext"), el("spacing", {"before": em(1.2), "after": em(0.4)}),
                       el("jc", {"val": first.align if first else "left"})],
@@ -233,9 +275,13 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                props=[el("spacing", {"before": 0, "after": em(0.2)}), el("jc", {"val": "left"})]),
         _style(PARTY_SIDE, "Party Side", based_on=NORMAL, next_style=NORMAL, priority=42, custom=True,
                props=[el("keepNext"), el("spacing", {"before": em(1), "after": em(0.2)}), el("jc", {"val": "left"})],
-               run=[el("b"), el("bCs")]),
+               run=[el("b"), el("bCs"), _element_run(parties)]),
         _style(PARTY_NAME, "Party Name", based_on=NORMAL, priority=43, custom=True,
-               props=[el("keepNext"), el("spacing", {"before": em(0.5), "after": em(0.2)}), el("jc", {"val": "left"})]),
+               props=[el("keepNext"), el("spacing", {"before": em(0.5), "after": em(0.2)}), el("jc", {"val": "left"})],
+               run=_element_run(parties)),
+        _style(PARTY_DETAILS, "Party Details", based_on=NORMAL, priority=43, custom=True,
+               props=[el("spacing", {"before": 0, "after": em(0.2)}), el("jc", {"val": "left"})],
+               run=_element_run(parties)),
         _style(ATTACHMENTS_HEADING, "Attachments Heading", based_on=NORMAL, next_style=NORMAL, priority=44,
                custom=True, props=[el("keepNext"), el("keepLines"), el("spacing", {"before": em(1.2), "after": em(0.4)}),
                                    el("jc", {"val": first.align if first else "left"}),
@@ -249,12 +295,14 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                run=[el("color", {"val": _MUTED})]),
         _style(SIGNATURE_SIDE, "Signature Side", based_on=NORMAL, priority=47, custom=True,
                props=[el("keepLines"), el("spacing", {"before": em(1.5), "after": em(0.2)}), el("jc", {"val": "left"})],
-               run=[el("b"), el("bCs")]),
+               run=[el("b"), el("bCs"), _element_run(signatures)]),
         _style(SIGNATURE_TEXT, "Signature Text", based_on=NORMAL, priority=48, custom=True,
-               props=[el("keepLines"), el("spacing", {"before": 0, "after": em(0.2)}), el("jc", {"val": "left"})]),
+               props=[el("keepLines"), el("spacing", {"before": 0, "after": em(0.2)}), el("jc", {"val": "left"})],
+               run=_element_run(signatures)),
         _style(SIGNATURE_LINE, "Signature Line", based_on=NORMAL, priority=49, custom=True,
                props=[el("keepLines"), el("pBdr", None, _border("bottom", "auto", 4, 1)),
-                      el("spacing", {"before": SIGNATURE_SPACE, "after": em(0.3)})]),
+                      el("spacing", {"before": SIGNATURE_SPACE, "after": em(0.3)})],
+               run=_element_run(signatures)),
         _style(DRAFTING_NOTE, "Drafting Note", based_on=NORMAL, priority=30, custom=True,
                props=[el("keepLines"), el("pBdr", None, _border("left", _NOTE_RULE, 24, 8)), _shade(_NOTE_FILL),
                       el("spacing", {"before": em(0.4), "after": em(0.4)}), el("ind", {"left": NOTE_INDENT, "right": 113})]),
@@ -286,7 +334,7 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
         _style(INLINE_CODE, "Inline Code", kind="character", priority=32, custom=True,
                run=[_fonts(_MONOSPACE), _size(half_points(0.9))]),
         _style(DEFINED_TERM, "Defined Term", kind="character", priority=33, custom=True,
-               run=_text_style(style.definitions.style)),
+               run=[_text_style(style.definitions.style), _element_run(defined)]),
         _style(TERM_REFERENCE, "Term Reference", kind="character", priority=34, custom=True,
                run=_text_style(style.definitions.term_style)),
         _style(BLANK, "Blank", kind="character", priority=35, custom=True, run=[el("noProof")]),

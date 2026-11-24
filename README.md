@@ -204,6 +204,7 @@ the numbers and references right, as cached, and the contents without page numbe
 | `page.header`, `page.footer` | left, centre and right text with `{page}`, `{pages}`, `{title}`, `{version}`, `{date}` |
 | `docx.update_fields_on_open` | `true` (the default): Word updates every field when it opens the file; `false` writes no such request |
 | `docx.reference_text_switch` | `off`, `documented` (the default) or `guess`: how far a cross-reference may rely on Word's `\t` switch to leave the words of a number out (`Article I` shown as `I`) |
+| `elements.*`, `signatures.page_break_before` | the type of quotes, lists, tables, parties, signatures and defined terms, as Word styles (`Quote`, `List Paragraph`, `Table Text`, `Party Details`, …), and a page break before the signature blocks; HTML reads them too |
 | `contents.*`, `attachments.separator`, `signatures.enabled`, `numbering.*`, `enumeration.*`, `paragraphs.*`, `typography.*`, `headings.*` | as in the other formats; the DOCX meaning of each is in the style documentation |
 
 **Limits.** Word cannot do everything the renderer does, and the render says where, one `render-docx-*` diagnostic

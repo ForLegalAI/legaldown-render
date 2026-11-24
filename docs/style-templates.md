@@ -113,7 +113,8 @@ title_block: { parties: true, effective_date: true, version: false }
 contents: { enabled: false, depth: 2, attachments: true }     # table of contents after the title block; depth 1-5
                                                               # counts number levels ("2.1" is 2); attachments listed last
 attachments: { render: placeholder, separator: page-break }   # placeholder | omit; page-break | rule | none (plain text: `---` around attachments unless none)
-signatures: { enabled: true }                                 # the document's include_signatures: false wins
+signatures: { enabled: true, page_break_before: false }      # the document's include_signatures: false wins;
+                                                              # page_break_before: a new page (HTML print, DOCX)
 template_view: { choice_separator: " / ", empty_choice: "" }
 
 labels:                      # every word the renderer generates; unset: built-in for the document language
@@ -141,6 +142,15 @@ page:
   margin: 25mm
   header: { left: "", center: "", right: "" }              # running header (DOCX; not yet HTML or PDF), see "Headers and footers"
   footer: { left: "", center: "{page} / {pages}", right: "" }
+
+elements:                    # typography of single elements, HTML and DOCX; unset (null): as drawn by default
+  quote: { font_family: null, font_size: null, color: null, line_height: null,
+           space_before: null, space_after: null, indent: null }
+  list: { font_family: null, font_size: null, color: null, line_height: null, item_spacing: null }
+  table: { font_family: null, font_size: null, color: null }          # table cells
+  parties: { font_family: null, font_size: null, color: null }        # the parties in the title block
+  signatures: { font_family: null, font_size: null, color: null }
+  defined_term: { font_family: null, font_size: null, color: null }   # "Fee" {{def: fee}}  (see "Elements")
 
 html:
   max_width: 46rem
@@ -252,6 +262,40 @@ the words. With `extends`, a label set in the parent applies to the child. An un
 and it is the value id when the choice's label is blank or another choice of the question has the same label, so that
 two conditions never read alike.
 
+### Elements
+
+`elements.*` set the type of single elements, in HTML and DOCX alike (the plain-text writer has none). Every
+field is unset by default, which keeps what the writers draw; a style changes only what it sets.
+
+| Element | Fields | HTML | DOCX (Word style) |
+|---|---|---|---|
+| `quote` | `font_family`, `font_size`, `color`, `line_height`, `space_before`, `space_after`, `indent` | `.ld-quote` (`margin-top`, `margin-bottom`, `padding-left`) | `Quote`; `indent` is the left indent of everything the quote holds |
+| `list` | `font_family`, `font_size`, `color`, `line_height`, `item_spacing` (the space after each item) | `.ld-list`, `.ld-list > li` | `List Paragraph`: the paragraphs of a list item, unless it is in a quote or a drafting note, where it keeps that style |
+| `table` | `font_family`, `font_size`, `color` | `.ld-table` | `Table Text`, the paragraphs in the cells |
+| `parties` | `font_family`, `font_size`, `color` | `.ld-parties` | `Party Side`, `Party Name`, `Party Details` (the header rows keep `Title Block Text`) |
+| `signatures` | `font_family`, `font_size`, `color` | `.ld-signatures` | `Signature Side`, `Signature Text`, `Signature Line` |
+| `defined_term` | `font_family`, `font_size`, `color` | `dfn.ld-defined` | `Defined Term` (`definitions.style` still sets its emphasis) |
+
+```yaml
+elements:
+  quote: { font_size: 10pt, indent: 2em, space_after: 1em }
+  list: { item_spacing: 3pt }
+  table: { font_family: Arial, font_size: 9pt }
+signatures: { page_break_before: true }
+```
+
+The values are CSS, held to the same grammars as `typography` in an untrusted style. A list's and a table's
+indents are the numbering's and the page's, so there is no indent for them, and no spacing for tables, parties
+and signatures, which are tables in Word. In DOCX `em` in an element is the element's own font size when it
+sets one (`indent: 2em` of a 10pt quote is 20pt), `rem` the body's; `%`, `ch` and `ex` are an error for DOCX, as
+everywhere, and a space or an indent is 0 or more. In HTML a quote or a list inside one of its kind keeps its
+size rather than scaling it again. `signatures.page_break_before` starts the signature blocks on a new page: in
+HTML in print (`break-before: page`), in DOCX with an empty paragraph one point high that breaks the page before
+the signature table.
+
+The DOCX always names `List Paragraph`, `Table Text` and `Party Details`, set or not, so a lawyer can restyle list
+items, table cells and the parties' details in Word.
+
 ### Headers and footers
 
 `page.header` and `page.footer` are the running text at the top and bottom of every page, each as a
@@ -310,8 +354,9 @@ at least 36 pt (0.5 inch) of text in each direction, a line height of at most 15
 number of more than 32 digits is no length at all. `html.max_width` and `html.extra_css` are never read.
 
 The writer generates Word styles from the template (`Normal`, `heading 1` to `heading 5`, `Title`,
-`Subtitle`, `Quote`, `toc 1` to `toc 5`, `Hyperlink`, `Table Grid`, and styles of its own for drafting
-notes, code, defined terms, blanks, choices, failure markers and condition labels), so a change made to a
+`Subtitle`, `Quote`, `List Paragraph`, `toc 1` to `toc 5`, `Hyperlink`, `Table Grid`, and styles of its own for
+drafting notes, code, table text, the title block, the parties and the signatures, defined terms, blanks, choices,
+failure markers and condition labels; see "Elements"), so a change made to a
 style in Word applies to every paragraph that uses it.
 
 | Setting | Meaning |

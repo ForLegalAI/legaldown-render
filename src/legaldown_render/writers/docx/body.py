@@ -54,18 +54,19 @@ from .styles import (
     CONDITION_LABEL,
     DRAFTING_NOTE,
     DRAFTING_NOTE_LABEL,
+    LIST_PARAGRAPH,
     NOTE_INDENT,
     QUOTE,
-    QUOTE_INDENT,
     SUBTITLE,
     TABLE_GRID,
+    TABLE_TEXT,
     TITLE,
     container_bar,
     heading_style,
 )
 
 #: The left indent the paragraph styles set, in twips: what a paragraph in that style has without an indent of its own.
-_STYLE_LEFT = {QUOTE: QUOTE_INDENT, DRAFTING_NOTE: NOTE_INDENT}
+
 
 #: Limits on what a plan's indents can do to the page, in twips: Word does not take a left indent past 31680
 #: (22 inches), and a paragraph needs room to be read in; a column needs room for a word.
@@ -130,6 +131,8 @@ class BodyWriter:
         self.text_width = text_width
         self.link_color = link_color
         self.matter_settings = matter if matter is not None else MatterSettings(text_width)
+        #: The left indent a quote's style gives its text (``elements.quote.indent``), and a drafting note's.
+        self._style_left = {QUOTE: self.matter_settings.quote_indent, DRAFTING_NOTE: NOTE_INDENT}
         abstracts = {abstract.id: abstract for abstract in plan.abstract_nums}
         self._levels = {num.id: abstracts[num.abstract_id].levels for num in plan.nums if num.abstract_id in abstracts}
         attachment_titles = {a.anchor: plain_text(a.title) for a in tree.attachments if a.anchor}
@@ -226,8 +229,9 @@ class BodyWriter:
                 for item in items:
                     yield from self._item(item, context)
             case Quote(blocks=blocks):
-                yield from self.blocks(blocks, replace(context, style=QUOTE, left=context.left + QUOTE_INDENT,
-                                                       extra=context.extra + QUOTE_INDENT))
+                indent = self.matter_settings.quote_indent
+                yield from self.blocks(blocks, replace(context, style=QUOTE, left=context.left + indent,
+                                                       extra=context.extra + indent))
             case DraftingNote(blocks=blocks, label=label):
                 inner = replace(context, style=DRAFTING_NOTE, left=context.left + NOTE_INDENT,
                                 extra=context.extra + NOTE_INDENT)
@@ -258,7 +262,7 @@ class BodyWriter:
     def _plain_indent(self, context: Context) -> ET.Element | None:
         """``w:ind`` for a plain paragraph in *context*, unless its style already indents so far."""
         left = self._left(context.left)
-        return el("ind", {"left": left}) if left != _STYLE_LEFT.get(context.style or "", 0) else None
+        return el("ind", {"left": left}) if left != self._style_left.get(context.style or "", 0) else None
 
     def _paragraph(self, block: Paragraph, context: Context) -> ET.Element:
         content = self.inlines.runs(block.inlines)
@@ -275,8 +279,11 @@ class BodyWriter:
         rest = item.blocks[1:] if first is not None else item.blocks
         conditions = (item.condition_label, first.condition_label if first is not None else None)
         content = self.inlines.runs(first.inlines) if first is not None else []
-        yield self._unit(item.unit, content, style=context.style, context=context, conditions=conditions)
-        inner = replace(context, left=self._text_left(self.plan.units.get(item.unit or ""), context))
+        # In a quote or a drafting note the item keeps the container's style (its bar, shading and indent);
+        # elsewhere it and its continuation blocks are list paragraphs, as the whole item is in HTML.
+        style = context.style or LIST_PARAGRAPH
+        yield self._unit(item.unit, content, style=style, context=context, conditions=conditions)
+        inner = replace(context, style=style, left=self._text_left(self.plan.units.get(item.unit or ""), context))
         yield from self.blocks(rest, inner)
 
     # -- numbered paragraphs --------------------------------------------------------------
@@ -372,7 +379,7 @@ class BodyWriter:
             padded = (*cells, *[()] * (columns - len(cells)))
             return el("tr", None, tr_pr(header and el("tblHeader")), [
                 el("tc", None, tc_pr(el("tcW", {"w": size, "type": "dxa"})),
-                   p(self.inlines.runs(cell), props=[
+                   p(self.inlines.runs(cell), style=TABLE_TEXT, props=[
                        el("spacing", {"before": 0, "after": 0}), el("jc", {"val": alignment or "left"})]))
                 for cell, size, alignment in zip(padded, grid, align, strict=True)])
 

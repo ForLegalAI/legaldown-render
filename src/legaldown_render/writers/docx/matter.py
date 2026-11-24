@@ -60,8 +60,10 @@ from .styles import (
     ATTACHMENTS_HEADING,
     CONDITION_LABEL,
     CONTENTS_HEADING,
+    PARTY_DETAILS,
     PARTY_NAME,
     PARTY_SIDE,
+    QUOTE_INDENT,
     SIGNATURE_LINE,
     SIGNATURE_SIDE,
     SIGNATURE_TEXT,
@@ -96,6 +98,11 @@ class MatterSettings:
     depth: int = 2
     #: ``attachments.separator``: ``page-break``, ``rule`` or ``none``.
     separator: str = "page-break"
+    #: The left indent of a quote's text in twips (``elements.quote.indent``), which the body adds to what a
+    #: quote holds.
+    quote_indent: int = QUOTE_INDENT
+    #: ``signatures.page_break_before``.
+    signatures_page_break: bool = False
 
 
 class MatterWriter:
@@ -146,18 +153,18 @@ class MatterWriter:
     def _party(self, party: PartyInfo) -> list[ET.Element]:
         content = [p(self.inlines.runs(party.name), style=PARTY_NAME)]
         if party.details:
-            content.append(self._rows(list(party.details)))
+            content.append(self._rows(list(party.details), style=PARTY_DETAILS))
         return content
 
-    def _rows(self, rows: Sequence[tuple[str, tuple[Inline, ...]]]) -> ET.Element:
-        """A borderless table of label and value rows: the label in italics (a style blanked by the label
-        leaves its cell empty, as the ``dt`` is)."""
+    def _rows(self, rows: Sequence[tuple[str, tuple[Inline, ...]]], *, style: str = TITLE_BLOCK_TEXT) -> ET.Element:
+        """A borderless table of label and value rows of paragraph *style* (the header rows', or a party's
+        details): the label in italics (a style blanked by the label leaves its cell empty, as the ``dt`` is)."""
         label = self.settings.text_width * _LABEL_SHARE // 100
         widths = (label, self.settings.text_width - label)
         return _table(widths, [
-            [[p(text_run(name, style=TITLE_BLOCK_LABEL), style=TITLE_BLOCK_TEXT)] if name
-             else [p(style=TITLE_BLOCK_TEXT)],
-             [p(self.inlines.runs(value), style=TITLE_BLOCK_TEXT)]]
+            [[p(text_run(name, style=TITLE_BLOCK_LABEL), style=style)] if name
+             else [p(style=style)],
+             [p(self.inlines.runs(value), style=style)]]
             for name, value in rows])
 
     # -- table of contents ----------------------------------------------------------------
@@ -308,7 +315,14 @@ class MatterWriter:
         # Keep the table on one page: every paragraph of it but the last keeps with the next.
         for paragraph in [paragraph for row in rows for blocks in row for paragraph in blocks][:-1]:
             _keep_next(paragraph)
-        return [_table((cell,) * columns, rows)]
+        table = _table((cell,) * columns, rows)
+        if not self.settings.signatures_page_break:
+            return [table]
+        # signatures.page_break_before: an empty paragraph that starts the page, one point high, so that the
+        # table follows at the top (Word moves no table row by a page break of its own). Word adds no page
+        # when the paragraph is at the top of one already.
+        return [p(style=SIGNATURE_TEXT, props=[el("pageBreakBefore"), el("spacing", {
+            "before": 0, "after": 0, "line": 20, "lineRule": "exact"})]), table]
 
     def _signature(self, signature: SignatureParty, cell: int) -> list[ET.Element]:
         """One party's block: its side, its name, a signing line with the signatory's name and title (one blank

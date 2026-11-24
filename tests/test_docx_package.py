@@ -157,7 +157,8 @@ def test_the_styles_the_body_and_word_need_exist_under_the_names_word_knows() ->
         "DefinedTerm": "Defined Term", "TermReference": "Term Reference", "Blank": "Blank", "Choice": "Choice",
         "FailureMarker": "Failure Marker", "ConditionLabel": "Condition Label",
         "DraftingNoteLabel": "Drafting Note Label", "TitleBlockText": "Title Block Text", "TitleBlockLabel": "Title Block Label",
-        "PartySide": "Party Side", "PartyName": "Party Name", "AttachmentsHeading": "Attachments Heading",
+        "PartySide": "Party Side", "PartyName": "Party Name", "PartyDetails": "Party Details",
+        "ListParagraph": "List Paragraph", "TableText": "Table Text", "AttachmentsHeading": "Attachments Heading",
         "AttachmentTitle": "Attachment Title", "AttachmentFile": "Attachment File",
         "SignatureSide": "Signature Side", "SignatureText": "Signature Text", "SignatureLine": "Signature Line"}
     assert by_id["Normal"].get(f"{W}default") == "1"
@@ -417,7 +418,7 @@ def test_the_body_without_a_plan_has_the_title_headings_and_text_and_no_numbers(
                                ("TitleBlockText", "Datum účinnosti"), ("TitleBlockText", "4. března 2026"),
                                (None, "Preamble text."), ("Heading1", "First"), (None, "Body one.")]
     assert ("Heading2", "Nested") in styles_used
-    assert (None, "item a") in styles_used and ("Quote", "quoted") in styles_used
+    assert ("ListParagraph", "item a") in styles_used and ("Quote", "quoted") in styles_used
     assert [text for style, text in styles_used if style == "Code"] == ["code 1", "code 2"]
     # The cells of the table, then the paragraph of the rule that ends the document.
     assert [text for _, text in styles_used][-5:] == ["A", "B", "1", "2", ""]
@@ -846,9 +847,9 @@ GOLDEN = {
     '_rels/.rels': 'd6f21829c0081670bdb417d3e3f644b81134a121e074fb153c7686faaa8b167b',
     'docProps/core.xml': '159ed0e537106ab29739fd357a5f6d89a2c0b0154daefd4c13d878bd16dff47e',
     'docProps/app.xml': 'b285204d159fd58da80b6a0242cef523448f9c3a598b357b15faf4627160dcc3',
-    'word/document.xml': '39cbe0403104ccefefb9b936e3e432b266d651e54628873ff2d71a57dde798c8',
+    'word/document.xml': '209c109d2ef6a3a73d38a9fe9bf4010c1e6496c81a65a45ce32602d45e7fa7b5',
     'word/_rels/document.xml.rels': 'ada136c2e7d05a317579c9503c1f0dd8dfaa8f0cce687df86fe59e36d5fa5d57',
-    'word/styles.xml': 'eec93405688edd872f0c341deeea171d8c5b72a6c83aeea3ff8cd01646c78bc1',
+    'word/styles.xml': '9ebd8010afa87f0f2adc39d5d02b344a687a973862b4932a6687e26c67d03507',
     'word/numbering.xml': '368f179b5e26a34c1f23db597966dfd96b43dc96801a9a7ded728c379db07f59',
     'word/settings.xml': 'b3c72bc5720862c1a9c1449d89903673777f30df6ff38ceb23da73e21cad22e1',
     'word/footer1.xml': 'e693781f92e5a7ccf747fd2ed3facb627e448f389b021882cac589d746aa709b',

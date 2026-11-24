@@ -30,7 +30,7 @@ from __future__ import annotations
 import colorsys
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from typing import Literal
 
 from ..errors import StyleError
@@ -137,6 +137,23 @@ class HeadingFormat:
 
 
 @dataclass(frozen=True, slots=True)
+class ElementFormat:
+    """One ``elements.*`` entry in Word units; None where the style sets nothing."""
+
+    font: str | None = None
+    #: Half-points, the unit of ``w:sz``.
+    half_points: int | None = None
+    color: str | None = None
+    #: ``w:spacing/@w:line`` and its rule.
+    line: tuple[int, str] | None = None
+    #: Twips: the space above and below a paragraph, a quote's left indent, the space after a list item.
+    before: int | None = None
+    after: int | None = None
+    indent: int | None = None
+    item_spacing: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DocxSettings:
     """Every presentation setting the DOCX writer reads, in Word's units."""
 
@@ -156,6 +173,10 @@ class DocxSettings:
     update_fields_on_open: bool
     #: ``off``, ``documented`` or ``guess``: what a cross-reference may expect of Word's ``\t`` switch.
     reference_text_switch: Literal["off", "documented", "guess"]
+    #: ``elements.*`` by name (``quote``, ``list``, ``table``, ``parties``, ``signatures``, ``defined_term``).
+    elements: dict[str, ElementFormat] = field(default_factory=dict)
+    #: ``signatures.page_break_before``.
+    signatures_page_break: bool = False
 
     @property
     def points(self) -> float:
@@ -204,6 +225,9 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
             half_points=round((size if size is not None else font_points) * 2), bold=bold, italic=heading.italic,
             caps=heading.transform == "uppercase", small_caps=heading.transform == "small-caps", align=heading.align)
 
+    elements = {item.name: _element(getattr(style.elements, item.name), f"elements.{item.name}", font_points, problems)
+                for item in fields(style.elements)}
+
     problems.items.extend(docx_style_errors(style))
     if problems.items:
         raise StyleError(f"'{style.name}'" if trusted else "'untrusted style'", problems.items)
@@ -211,7 +235,36 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
         page=page, font=_family(typography.font_family), half_points=half_points, line=line, line_rule=rule,
         color=color, link_color=link_color, justify=typography.justify, headings=headings,
         update_fields_on_open=style.docx.update_fields_on_open,
-        reference_text_switch=style.docx.reference_text_switch)
+        reference_text_switch=style.docx.reference_text_switch, elements=elements,
+        signatures_page_break=style.signatures.page_break_before)
+
+
+def _element(fmt: object, key: str, body_points: float, problems: _Problems) -> ElementFormat:
+    """*fmt* (an ``elements.*`` entry) in Word units. Its ``em`` lengths are its own font size when it sets one,
+    the body's otherwise (``rem`` is always the body's). A space or an indent is 0 or more, and at most Word's 22 inches."""
+    size = getattr(fmt, "font_size", None)
+    points = _font_points(size, f"{key}.font_size", body_points, problems) if size is not None else None
+    em_points = points if points is not None else body_points
+    family, color, line = (getattr(fmt, name, None) for name in ("font_family", "color", "line_height"))
+
+    def length(name: str) -> int | None:
+        value = getattr(fmt, name, None)
+        if value is None:
+            return None
+        twips = _length(value, f"{key}.{name}", body_points if value.strip().lower().endswith("rem") else em_points,
+                        problems)
+        if twips is not None and not 0 <= twips <= _MAX_TWIPS:
+            problems.add(f"{key}.{name}", f"must be 0 or more and at most {_MAX_TWIPS // 20}pt in a Word document")
+            return None
+        return twips
+
+    return ElementFormat(
+        font=_family(family) if family is not None else None,
+        half_points=round(points * 2) if points is not None else None,
+        color=_color(color, f"{key}.color", problems) if color is not None else None,
+        line=_line_height(line, em_points, problems, f"{key}.line_height") if line is not None else None,
+        before=length("space_before"), after=length("space_after"), indent=length("indent"),
+        item_spacing=length("item_spacing"))
 
 
 # -- Lengths ----------------------------------------------------------------------
@@ -256,7 +309,8 @@ def _font_points(value: str, key: str, em_points: float, problems: _Problems,
     return points
 
 
-def _line_height(value: str, font_points: float, problems: _Problems) -> tuple[int, str]:
+def _line_height(value: str, font_points: float, problems: _Problems,
+                 key: str = "typography.line_height") -> tuple[int, str]:
     """``w:spacing``'s ``line`` and ``lineRule``: ``normal`` is single spacing, a
     number multiplies the font size (``auto``, 240 to the line), a length is
     the least height of a line (``atLeast``: ``exact`` would cut off tall text)."""
@@ -266,13 +320,13 @@ def _line_height(value: str, font_points: float, problems: _Problems) -> tuple[i
     if _NUMBER_RE.match(text):
         factor = float(text)
         if not 0 < factor <= 100:  # also false for infinity
-            problems.add("typography.line_height", "a number must be greater than 0 and at most 100")
+            problems.add(key, "a number must be greater than 0 and at most 100")
             return 240, "auto"
         return round(factor * 240), "auto"
-    twips = _length(text, "typography.line_height", font_points, problems)
+    twips = _length(text, key, font_points, problems)
     if twips is None or not 0 < twips <= _MAX_TWIPS:
         if twips is not None:
-            problems.add("typography.line_height", f"must be greater than 0 and at most {_MAX_TWIPS // 20}pt")
+            problems.add(key, f"must be greater than 0 and at most {_MAX_TWIPS // 20}pt")
         return 240, "auto"
     return twips, "atLeast"
 

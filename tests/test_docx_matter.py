@@ -920,8 +920,8 @@ def test_a_heading_inserted_in_the_editor_is_listed_once_the_contents_is_updated
 #: SHA-256 of the document part and the styles part of :data:`FRONT` with a contents (uncompressed: the ZIP's bytes
 #: depend on the zlib). When the matter changes on purpose, run this test, review the change, and replace the digests.
 MATTER_GOLDEN = {
-    "word/document.xml": "d67511803cd53640fbd96c3c2f6531cc5cf649158c7f56a0d0681db4da5c1b98",
-    "word/styles.xml": "458e86ca2ad045ce3a714a7e5ba7f3c714e8ab41edf35afb754611046c082d98",
+    "word/document.xml": "dac48f9d1d1c88451b3ade7c67029e1a3c4d7250d8659c6288fc01480086af53",
+    "word/styles.xml": "8362e5df0e7349fa90a17dbe4eb2a579e8400e76673e0a5d7291564f0e700957",
 }
 
 

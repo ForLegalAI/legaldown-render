@@ -69,7 +69,7 @@ def test_an_item_on_the_heading_list_is_numbered_at_the_level_after_its_section_
     one, two = paragraph_with(parts_["word/document.xml"], "clause one"), paragraph_with(
         parts_["word/document.xml"], "clause two")
     assert numbering_of(one) == numbering_of(two) == (1, 2)
-    assert one.find(f"{W}pPr/{W}pStyle") is None  # no heading style: it is no heading
+    assert one.find(f"{W}pPr/{W}pStyle").get(f"{W}val") == "ListParagraph"  # no heading style: it is no heading
     assert indent(one) == indent(two) is not None
     level = levels(parts_["word/numbering.xml"], 0)[1]
     assert level.find(f"{W}lvlText").get(f"{W}val") == "%1.%2" and level.find(f"{W}pStyle").get(f"{W}val") == "Heading2"
