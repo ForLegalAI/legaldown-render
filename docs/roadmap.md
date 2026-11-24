@@ -162,7 +162,16 @@ Only additions: no existing name, field or output changes.
   for output embedded in a host page. An unusable prefix is an `OptionsError` (exit 2); `--id-prefix` with another
   format is a usage error. Without it, the output is unchanged
 
-### v0.8 — Validator 0.6.0 (this release)
+### Unreleased
+
+- **An embedded stylesheet** ([#18](https://github.com/ForLegalAI/legaldown-render/issues/18)):
+  `stylesheet(style, standalone=False)` is the CSS for `standalone=False` output in a host page. Every rule is under
+  `.ld-document`, the variables, typography and background are set on it, and there is no `body`, `:root`, `html` or
+  `@page` rule; the rules override each other as in the standalone sheet. `scope=` places the document under one more
+  selector (`:where(scope) .ld-document`); an unusable scope is an `OptionsError`. `stylesheet(style)` and rendered
+  output are unchanged
+
+### v0.8 — Validator 0.6.0 (released)
 
 - Built on `legaldown-validator` 0.6.0 (`>=0.6.0,<0.7`), which deprecates and removes no API; the renderer needed no
   change. PyYAML 6.0.4 or later, which validator 0.6.0 requires

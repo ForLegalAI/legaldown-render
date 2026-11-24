@@ -137,8 +137,17 @@ formatted value and failure marker, as the built-in writers draw them. Its node 
 format, and so is `assert_resolved`, the check the built-in writers make. A patch release never
 breaks them; [The render tree](https://github.com/ForLegalAI/legaldown-render/blob/main/docs/render-tree.md)
 has the reference and what a minor release may change. For HTML with `standalone=False`, which is
-only the `<article>`, `legaldown_render.writers.stylesheet(style)` gives the CSS of the `ld-*`
-classes that a complete page has in its `<style>`, and `html_id_prefix=` (`--id-prefix`) puts a prefix before
+only the `<article>`, `legaldown_render.writers.stylesheet(style, standalone=False)` gives its CSS for a host page:
+every rule is under `.ld-document`, the style's variables, typography and white background are set on it, and there
+is no `body`, `:root`, `html` or `@page` rule, so nothing of the page outside the document is styled. Its rules
+override each other as in a complete page (`stylesheet(style)`, the default, is that page's sheet). The page margin
+and the document's padding are left out: the gutter is the host container's. `scope=".preview"` places the document
+under one more selector, `:where(.preview) .ld-document`, without raising specificity, so documents of different
+styles can share a page; it is one selector of type, class and id selectors joined by a space or ` > `
+(`OptionsError` otherwise, and with the default `standalone=True`). Two limits: `html.extra_css` is the style
+author's raw CSS and is appended as written, not scoped (an untrusted style may not set it); and the sheet does not
+isolate the document from the host's own CSS, so a reset that styles `h1`, `ul` or `th` reaches the document's
+unclassed elements too. `html_id_prefix=` (`--id-prefix`) puts a prefix before
 every `id` and every in-document `#` link of the output (`"ld-"` makes `id="scope"` `id="ld-scope"`, and
 `href="#def:fee"` `href="#ld-def:fee"`), so that the document's anchors cannot collide with the page's own. It is an ASCII letter and then letters,
 digits, `-` and `_` (an `OptionsError` otherwise). A link the author wrote as `#…` is prefixed when it names an anchor
