@@ -11,9 +11,10 @@ from __future__ import annotations
 import re
 
 import pytest
+from conftest import GOLDEN
 
 from legaldown_render import OptionsError
-from legaldown_render.style import HeadingStyle, Html, Page, Style, Typography, builtin_styles, load_style
+from legaldown_render.style import HeadingStyle, Html, Style, Typography, builtin_styles, load_style
 from legaldown_render.writers import stylesheet
 from legaldown_render.writers.html import check_scope
 
@@ -71,14 +72,24 @@ def specificity(selector: str) -> tuple[int, int, int]:
     return ids, classes, types
 
 
-def _sign(a: tuple[int, int, int], b: tuple[int, int, int]) -> int:
-    return (a > b) - (a < b)
-
-
 PAGE_SELECTORS = {":root", "body", "html"}
 
 
 # -- Standalone is unchanged -------------------------------------------------------
+
+@pytest.mark.parametrize("standalone", [True, False], ids=["standalone", "embedded"])
+def test_golden_stylesheet(standalone: bool, update_golden: bool) -> None:
+    """Both sheets of a style that writes every optional rule, byte for byte: the
+    HTML goldens hold only the default style's sheet. Regenerate with
+    ``pytest --update-golden`` and review the diff."""
+    css = stylesheet(_every_branch(), standalone=standalone)
+    golden = GOLDEN / f"stylesheet.every-branch.{'standalone' if standalone else 'embedded'}.css"
+    if update_golden or not golden.exists():
+        golden.write_text(css, encoding="utf-8", newline="\n")
+        if not update_golden:
+            pytest.fail(f"{golden.name} did not exist and was written; review it and run again")
+    assert css == golden.read_bytes().decode("utf-8")
+
 
 @pytest.mark.parametrize("style", STYLES, ids=IDS)
 def test_the_default_is_the_standalone_sheet(style: Style) -> None:
@@ -129,21 +140,21 @@ def test_the_embedded_rules_override_each_other_as_the_standalone_ones(style: St
 
     standalone = body(rules(stylesheet(style)))
     embedded = body(rules(stylesheet(style, standalone=False, scope=scope)))
+    # The same rules in the same order, each selector the standalone one under the
+    # root: every selector gains the same specificity, so no pair changes order.
     assert [(b, tuple(f"{root} {s}" for s in sel), d) for b, sel, d in standalone] == embedded
-    pairs_a = [s for _, selectors, _ in standalone for s in selectors]
-    pairs_b = [s for _, selectors, _ in embedded for s in selectors]
-    for i, (a, b) in enumerate(zip(pairs_a, pairs_b, strict=True)):
-        for c, d in zip(pairs_a[i + 1:], pairs_b[i + 1:], strict=True):
-            assert _sign(specificity(a), specificity(c)) == _sign(specificity(b), specificity(d)), (a, c)
 
 
-def test_an_italic_defined_term_stays_italic() -> None:
-    css = stylesheet(Style(), standalone=False)
-    dfn = specificity(".ld-document dfn")
-    italic = specificity(".ld-document .ld-style-italic")
-    assert ".ld-document dfn { font-style: normal; }" in css
-    assert ".ld-document .ld-style-italic { font-style: italic; }" in css
-    assert italic > dfn
+@pytest.mark.parametrize("standalone", [True, False])
+def test_an_italic_defined_term_stays_italic(standalone: bool) -> None:
+    """``<dfn class="ld-defined ld-style-italic">``: the class beats the element rule."""
+    found = {selector: (position, declarations)
+             for position, (_, selectors, declarations) in enumerate(rules(stylesheet(Style(), standalone=standalone)))
+             for selector in selectors}
+    dfn = next(s for s in found if s.split()[-1] == "dfn")
+    italic = next(s for s in found if s.split()[-1] == ".ld-style-italic")
+    assert found[dfn][1] == "font-style: normal;" and found[italic][1] == "font-style: italic;"
+    assert (specificity(italic), found[italic][0]) > (specificity(dfn), found[dfn][0])
 
 
 def test_the_specificity_counter() -> None:
@@ -203,13 +214,15 @@ def test_values_cannot_leave_their_declaration_in_the_embedded_sheet() -> None:
     style = Style(
         typography=Typography(font_family=hostile, font_size=hostile, line_height=hostile, color=hostile,
                               link_color=hostile),
-        headings={1: HeadingStyle(size=hostile, weight=hostile)},
-        page=Page(size=hostile, margin=hostile),
+        headings={1: HeadingStyle(size=hostile, weight=hostile, align=hostile),  # type: ignore[arg-type]
+                  "1, body": HeadingStyle()},  # type: ignore[dict-item]
         html=Html(max_width=hostile),
     )
     css = stylesheet(style, standalone=False)
     assert "<" not in css and "@import" not in css and "/*" not in css and "\\" not in css
-    rules(css)
+    assert "body" not in css
+    for _, selectors, _ in rules(css):
+        assert all(selector.startswith(".ld-document") for selector in selectors)
 
 
 # -- The scope ---------------------------------------------------------------------
@@ -222,7 +235,7 @@ def test_usable_scopes(scope: str) -> None:
 
 
 @pytest.mark.parametrize("scope", ["a, b", ":not(", '[a="', ".a >", "> .a", ".a  .b", "x{", "x;", "/*", "</style",
-                                   "@media", ".a\n.b", " .a", ".a ", "#1", ".1a", ".a:hover", "*", ".a~.b", "é", "_x"])
+                                   "@media", ".a\n.b", " .a", ".a ", "#1", ".1a", ".a:hover", "*", ".a~.b", "é", "_x", ".a\n", ".a\t"])
 def test_unusable_scopes_are_refused(scope: str) -> None:
     assert check_scope(scope) is not None
     with pytest.raises(OptionsError, match="scope"):

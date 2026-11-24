@@ -493,6 +493,13 @@ _PRINT_RULES: tuple[_Rule, ...] = (
     (("a",), "color: inherit;"),
 )
 
+#: The print rules of the embedded sheet: the document drops its width limit,
+#: and its padding stays the host's, as on screen.
+_EMBEDDED_PRINT_RULES: tuple[_Rule, ...] = (
+    ((_ROOT,), "max-width: none;"),
+    *(rule for rule in _PRINT_RULES if rule[0] != (_ROOT,)),
+)
+
 _CONTENTS_RULES: tuple[_Rule, ...] = (
     ((".ld-contents",), "margin: 2em 0;"),
     ((".ld-contents-list",), "list-style: none; padding-left: 0;"),
@@ -529,8 +536,8 @@ def _rule(rule: _Rule, place: Callable[[str], str]) -> str:
     return f"{', '.join(place(selector) for selector in selectors)} {{ {declarations} }}"
 
 
-def _print_block(place: Callable[[str], str]) -> str:
-    return "@media print {\n" + "".join(f"  {_rule(rule, place)}\n" for rule in _PRINT_RULES) + "}"
+def _print_block(place: Callable[[str], str], rules: tuple[_Rule, ...] = _PRINT_RULES) -> str:
+    return "@media print {\n" + "".join(f"  {_rule(rule, place)}\n" for rule in rules) + "}"
 
 
 def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str:
@@ -546,8 +553,10 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
     and there is no ``body``, ``:root``, ``html`` or ``@page`` rule, so it
     styles nothing of the page outside the document. Every rule gains the
     same specificity, so its rules override each other as in the standalone
-    sheet. The page's margin and the document's padding (a page gutter) are
-    left out. ``html.extra_css`` is appended as written in both modes: it is
+    sheet; the one difference is that the document's own rule comes before
+    the print rules, so that in print its width limit is lifted. The page's
+    margin and the document's padding (a page gutter, on screen and in
+    print) are left out. ``html.extra_css`` is appended as written in both modes: it is
     the style author's own CSS, and is not scoped.
 
     *scope*, with ``standalone=False`` only, places the document under one
@@ -573,9 +582,13 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
     generated: list[_Rule] = []
     if typography.justify:
         generated.append(((".ld-p", ".ld-item > p"), "text-align: justify; hyphens: auto;"))
-    for level, heading in sorted(style.headings.items()):
+    # The loader reads levels as numbers; a key of a Style built by hand becomes
+    # part of a selector, so only a number is written.
+    levels = {level: heading for level, heading in style.headings.items()
+              if isinstance(level, int) and not isinstance(level, bool)}
+    for level, heading in sorted(levels.items()):
         rules = [f"font-size: {_css(heading.size)}", f"font-weight: {_css(heading.weight)}",
-                 f"text-align: {heading.align}", f"font-style: {'italic' if heading.italic else 'normal'}"]
+                 f"text-align: {_css(heading.align)}", f"font-style: {'italic' if heading.italic else 'normal'}"]
         if heading.transform == "uppercase":
             rules.append("text-transform: uppercase")
         elif heading.transform == "small-caps":
@@ -606,7 +619,7 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
         # it (in the block below) comes after it and takes effect.
         parts = [f"{root} {{ {variables} {text} margin: 0 auto; {max_width} }}"]
         parts += [_rule(rule, place) for rule in _BASE_RULES if rule[0] != (_ROOT,)]
-        parts.append(_print_block(place))
+        parts.append(_print_block(place, _EMBEDDED_PRINT_RULES))
         parts += [_rule(rule, place) for rule in generated]
     css = "\n".join(parts) + "\n"
     if style.html.extra_css:
