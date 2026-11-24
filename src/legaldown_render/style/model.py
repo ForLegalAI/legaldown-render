@@ -129,6 +129,11 @@ class Values:
 class Placeholders:
     """How fillable blanks render (§10.7, §13.5)."""
 
+    #: The blank's text. It may hold ``{id}`` (the placeholder id), ``{name}``
+    #: (the id as words: ``purchase-price`` is "Purchase price") and
+    #: ``{prompt}`` (the declared question's prompt, else ``{name}``), so that
+    #: ``"[{name}]"`` labels each blank; any other braces are text. A blank's
+    #: ``note=`` is never shown (§10.1, §13.5 rule 4).
     blank: str = "[_____]"
     #: Show the question's ``prompt`` next to the blank (§15.8).
     show_prompt: bool = False
@@ -190,6 +195,17 @@ class Labels:
     drafting_note: str | None = None
     #: ``{condition}`` is the condition as written, e.g. ``forum:courts``.
     condition: str | None = None
+    #: The label of one shape of condition, when set; ``condition`` otherwise.
+    #: ``{question}`` is the question id, ``{answer}`` (for ``q:v`` and
+    #: ``!q:v``) the label the question gives the value in ``choices``, and
+    #: ``{condition}`` the condition as written. ``q``, ``!q``, ``q:v`` and
+    #: ``!q:v`` in turn: "Only if: {question}", "Only if not: {question}",
+    #: "Only if: {question} = {answer}", "Only if: {question} ≠ {answer}". No
+    #: built-in label sets them.
+    condition_true: str | None = None
+    condition_false: str | None = None
+    condition_is: str | None = None
+    condition_is_not: str | None = None
     identification_number: str | None = None
     date_of_birth: str | None = None
     address: str | None = None
@@ -437,6 +453,9 @@ class TemplateFields:
     required: frozenset[str] = frozenset()
     why: str = ""
     empty_falls_back: bool = False
+    #: Groups of fields of which the template must contain at least one each
+    #: (``{question}`` or ``{condition}``), with ``why``.
+    required_any: tuple[frozenset[str], ...] = ()
 
 
 #: The designation-building settings are read in :mod:`..resolve.numbering`
@@ -463,12 +482,40 @@ LABEL_FIELDS: dict[str, TemplateFields] = {
     # Resolver: ``self.labels.attachment_file or "{file}"``; it requires nothing, so the fallback is moot.
     "attachment_file": TemplateFields(frozenset({"file"}), empty_falls_back=True),
 }
+_SHOWS_QUESTION = frozenset({"question", "condition"})
+_SHOWS_ANSWER = frozenset({"answer", "condition"})
+_CONDITION_WHY = "a conditional unit's condition must be shown (§15.8)"
+#: One shape of condition each (``q``, ``!q``, ``q:v``, ``!q:v``): it must name the question, and the
+#: choice ones the answer, or show the condition as written. An empty one shows the bare condition
+#: (``Resolver._condition``), as ``labels.condition`` does.
+for _name, _answer in (("condition_true", False), ("condition_false", False),
+                       ("condition_is", True), ("condition_is_not", True)):
+    LABEL_FIELDS[_name] = TemplateFields(
+        frozenset({"question", "condition", *(("answer",) if _answer else ())}), why=_CONDITION_WHY,
+        empty_falls_back=True, required_any=(_SHOWS_QUESTION, *((_SHOWS_ANSWER,) if _answer else ())))
+del _name, _answer
+
+#: The fields of ``placeholders.blank``; any other braces in it are text, so
+#: a blank written as ``{TBD}`` keeps rendering as written.
+BLANK_FIELDS = frozenset({"id", "name", "prompt"})
+_BLANK_FIELD_RE = re.compile(r"\{(" + "|".join(sorted(BLANK_FIELDS)) + r")\}")
+
+
+def blank_has_fields(template: str) -> bool:
+    """Whether the blank *template* (``placeholders.blank``) labels each blank."""
+    return _BLANK_FIELD_RE.search(template) is not None
+
+
+def fill_blank(template: str, values: dict[str, str]) -> str:
+    """*template* with its :data:`BLANK_FIELDS` filled, in one pass (a value
+    holding ``{name}`` is not filled again)."""
+    return _BLANK_FIELD_RE.sub(lambda match: values[match.group(1)], template)
 
 
 def _unused(fields: TemplateFields) -> TemplateFields:
     """*fields* for a setting the style does not use: a typo is still a typo,
     but nothing is missing from a setting nothing reads."""
-    return replace(fields, required=frozenset(), why="")
+    return replace(fields, required=frozenset(), required_any=(), why="")
 
 
 def template_settings(style: Style) -> Iterator[tuple[str, str, TemplateFields]]:

@@ -559,7 +559,8 @@ FREE_TEXT = ["name", "references.format", "placeholders.blank", "template_view.c
              "template_view.empty_choice", "numbering.levels.0.label", "numbering.levels.0.ref",
              "enumeration.levels.0.label", "enumeration.levels.0.ref", "paragraphs.format.label",
              "paragraphs.format.ref", *(f"labels.{name}" for name in (
-                 "drafting_note", "condition", "identification_number", "date_of_birth", "address", "represented_by",
+                 "drafting_note", "condition", "condition_true", "condition_false", "condition_is", "condition_is_not",
+                 "identification_number", "date_of_birth", "address", "represented_by",
                  "effective_date", "version", "attachments", "contents", "colon", "attachment_file", "signatures",
                  "signature_date", "signature_place", "signature_name", "signature_title"))]
 
@@ -600,6 +601,8 @@ def test_the_free_text_table_covers_every_text_setting() -> None:
 
 #: The field a setting must contain (docs/style-templates.md), so that a text of the right length is otherwise valid.
 REQUIRED_FIELD = {"labels.condition": "{condition}", "labels.attachment_file": "{file}",
+                  "labels.condition_true": "{question}", "labels.condition_false": "{question}",
+                  "labels.condition_is": "{question}{answer}", "labels.condition_is_not": "{question}{answer}",
                   "references.format": "{designation}", "numbering.levels.0.ref": "{n}",
                   "enumeration.levels.0.ref": "{n}"}
 

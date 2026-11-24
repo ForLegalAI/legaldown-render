@@ -27,7 +27,7 @@ from collections.abc import Callable
 from html import escape
 
 from ..errors import OptionsError
-from ..style.model import HeadingStyle, Style
+from ..style.model import HeadingStyle, Style, blank_has_fields
 from ..tree import (
     AttachmentPart,
     Blank,
@@ -405,7 +405,10 @@ class HtmlWriter:
             case Blank(id=identifier, text=text, prompt=prompt):
                 title_attr = f' title="{_attr(prompt)}"' if prompt else ""
                 shown = f' <span class="ld-prompt">({_text(prompt)})</span>' if prompt else ""
-                return f'<span class="ld-blank" data-placeholder="{_attr(identifier)}"{title_attr}>{_text(text)}</span>{shown}'
+                # A blank labelled by its fields (placeholders.blank: "[{name}]") may wrap, as words do.
+                classes = "ld-blank ld-blank-label" if blank_has_fields(self.style.placeholders.blank) else "ld-blank"
+                return (f'<span class="{classes}" data-placeholder="{_attr(identifier)}"{title_attr}>{_text(text)}'
+                        f'</span>{shown}')
             case Choice(question=question, options=options, separator=separator):
                 inner = _text(separator).join(f'<span class="ld-option">{_text(option)}</span>' for option in options)
                 return f'<span class="ld-choice" data-question="{_attr(question)}">[{inner}]</span>'
@@ -624,6 +627,8 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
         generated += _CONTENTS_RULES
     if style.attachments.separator == "rule":
         generated.append(((".ld-attachment",), "border-top: 1px solid var(--ld-rule); padding-top: 1em;"))
+    if blank_has_fields(style.placeholders.blank):
+        generated.append(((".ld-blank-label",), "white-space: normal;"))
 
     if standalone:
         def place(selector: str) -> str:

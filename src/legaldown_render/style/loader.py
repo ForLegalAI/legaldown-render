@@ -168,8 +168,9 @@ def load_style(
     match a strict grammar (:data:`~.model.CSS_KINDS`), also in a
     :class:`Style` and in *overrides*; ``html.extra_css`` must be empty;
     ``values.date`` is a named format; every free-text setting is at most 200
-    characters, without NUL or a lone surrogate; and a number in YAML text is at
-    most 32 characters. A message names the setting and the problem, never
+    characters, without NUL or a lone surrogate; ``placeholders.blank`` and
+    the condition labels use each of their fields at most once; and a number in
+    YAML text is at most 32 characters. A message names the setting and the problem, never
     quotes the style or a path, and lists at most 20 problems. Whatever else
     the loader raises on such a style is a :class:`StyleError` too.
 
@@ -578,6 +579,28 @@ def _template_problems(style: Style, trusted: bool = True) -> list[str]:
             continue
         for name in sorted(fields.required - found):
             problems.append(f"{key}: must contain {{{name}}}" + (f" — {fields.why}" if fields.why else ""))
+        for group in fields.required_any:
+            if not group & found:
+                either = " or ".join(f"{{{name}}}" for name in sorted(group))
+                problems.append(f"{key}: must contain {either}" + (f" — {fields.why}" if fields.why else ""))
+    if not trusted:
+        problems.extend(_repeated_document_text(style))
+    return problems
+
+
+def _repeated_document_text(style: Style) -> list[str]:
+    """An untrusted style may use each field that holds the document's own text
+    (a question's prompt, a choice's label) once per template: repeated, a short
+    template would multiply a long prompt at every blank or conditional unit."""
+    problems = []
+    candidates = [("placeholders.blank", style.placeholders.blank, ("id", "name", "prompt"))]
+    candidates += [(f"labels.{name}", getattr(style.labels, name) or "", ("question", "answer", "condition"))
+                   for name in ("condition", "condition_true", "condition_false", "condition_is", "condition_is_not")]
+    for key, template, names in candidates:
+        found = _FIELD_RE.findall(template)
+        for name in names:
+            if found.count(name) > 1:
+                problems.append(f"{key}: an untrusted style may use {{{name}}} once")
     return problems
 
 

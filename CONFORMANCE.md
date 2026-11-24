@@ -36,7 +36,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Style templates in a separate file (§13.7) | ✅ YAML, layered and validated; see [docs/style-templates.md](docs/style-templates.md) |
 | Signature blocks (§2.2) | ✅ One per party, with `legal_name` and each representative |
 | Labels following the document language (§13.7) | ✅ Built in for `en`, `cs`, `de`, `fr`, `pl`, and `sk`; any label can be set by a style |
-| A conditional unit's condition is shown (§15.8, MUST) | ✅ Also for a custom style: `labels.condition` must contain `{condition}`, or the style is refused |
+| A conditional unit's condition is shown (§15.8, MUST) | ✅ Also for a custom style: `labels.condition` must contain `{condition}`, and each label of one shape of condition (`labels.condition_true`, `_false`, `_is`, `_is_not`) its question (and the choice ones the answer) or `{condition}`, or the style is refused. That a negated shape's words say "not" cannot be checked: a custom `condition_false` or `condition_is_not` that leaves it out misstates the condition, and is the style author's to get right (docs/style-templates.md, "Condition labels") |
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments (see "Text after a comment", below) |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |
@@ -45,7 +45,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Plain-text layout (§13.6, optional) | ✅ `attachments.separator` (§13.8): `none` prints no `---`; `rule` and `page-break` both print one before the attachments heading and between consecutive attachments, so the heading stays with the first (text has no pages). One quote stays one quote (blank lines keep the `>`), and the blocks of a list item are set apart by blank lines and indented under the item's label, whatever its condition label; an item that opens with a nested list, table, code block or quote has its label on a line of its own, so that block stays valid. A pipe in a table cell is backslash-escaped, and the separator row marks column alignment (`:---`, `:---:`, `---:`). A label a style blanks drops its `label: ` prefix in the title block, party details and signature blocks (a signature row with neither label nor value is omitted); HTML keeps an empty `<dt>` so its grid layout and the `<dl>` stay valid |
 | Extended tables through raw HTML (§9.2, MAY) | ❌ Not supported; the HTML table is dropped with the Warning |
 | Visual blank for a placeholder (§13.5 rule 6) | ✅ `placeholders.blank`; a blank that is empty, or only whitespace or invisible format characters (U+200B, U+FEFF), renders `[TBD: id]` |
-| Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt` |
+| Question prompts next to blanks (§15.8, MAY) | ✅ `placeholders.show_prompt`, or the prompt as the blank itself (`placeholders.blank: "[{prompt}]"`). A blank's `note=` is never shown (§13.5 rule 4) |
 | Final check (§15.9, SHOULD) | ✅ `--final` / `final=True`: the validator's `placeholder-unfilled` and `template-construct-present` Errors; with `--strict`, the document is refused |
 
 ## DOCX output (§13.6)
@@ -192,7 +192,8 @@ other Word-only assumption of the plan) is a manual checklist before each releas
   without one; §2.3 says such a renderer SHOULD set one) and loads the style untrusted
   (`load_style(trusted=False)`: a built-in name, a mapping or YAML text, never a file; `extends`
   only a built-in; plain CSS values only; no `html.extra_css`; `values.date` one of the four names;
-  free text at most 200 characters; no YAML aliases; at most 64 KiB).
+  free text at most 200 characters; each field at most once in `placeholders.blank` and the condition labels; no YAML
+  aliases; at most 64 KiB).
   Every style, trusted or not, is refused when a value written into the stylesheet contains `/*`,
   `*/`, `</`, a backslash, a control character or a line break, or when `html.extra_css` contains
   `</style`. Style values never come from the document, which is never emitted as HTML or CSS (§8.7).
