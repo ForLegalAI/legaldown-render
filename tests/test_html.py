@@ -3,6 +3,7 @@ attachments container, not inside it, and only where the separator asks for
 one."""
 from __future__ import annotations
 
+import pytest
 from conftest import run_cli_text
 
 ATTACHED = (
@@ -90,14 +91,24 @@ def test_the_stylesheet_cannot_end_its_element_through_raw_css() -> None:
     assert "content: '<\\/b>'" in stylesheet(Style(html=Html(extra_css="a::before { content: '</b>' }")))
 
 
-def test_print_lifts_the_document_width_limit() -> None:
-    """``@media print { .ld-document { max-width: none } }`` must follow the screen width rule it overrides
-    (the same specificity: the later wins), or a printed page keeps the screen's width limit."""
-    from legaldown_render.style import builtin_styles, load_style
+@pytest.mark.parametrize("max_width", ["46rem", "50rem", "none"])
+@pytest.mark.parametrize("standalone", [True, False])
+def test_print_lifts_the_document_width_limit(max_width: str, standalone: bool) -> None:
+    """In print the document has no width limit, on screen it has the style's: the print rule
+    (``max-width: none``) follows every screen rule that sets the document's width (the same specificity: the
+    later wins), and only print lifts it."""
+    from test_embedded_stylesheet import rules
+
+    from legaldown_render.style import Html, Style
     from legaldown_render.writers.html import stylesheet
 
-    for name in builtin_styles():
-        for standalone in (True, False):
-            css = stylesheet(load_style(name), standalone=standalone)
-            screen = css.index("max-width: 46rem") if "max-width: 46rem" in css else css.index("max-width:")
-            assert screen < css.index("max-width: none"), (name, standalone)
+    found = rules(stylesheet(Style(html=Html(max_width=max_width, extra_css=".x { max-width: 46rem }")),
+                             standalone=standalone))
+
+    def widths(block: str) -> list[tuple[int, str]]:
+        return [(position, declarations) for position, (in_block, selectors, declarations) in enumerate(found)
+                if in_block == block and selectors[-1].split()[-1] == ".ld-document" and "max-width" in declarations]
+    screen, printed = widths(""), widths("@media print")
+    assert screen and all(f"max-width: {max_width};" in declarations for _, declarations in screen)
+    assert printed and all("max-width: none;" in declarations for _, declarations in printed)
+    assert max(position for position, _ in screen) < min(position for position, _ in printed)

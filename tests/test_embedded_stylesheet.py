@@ -82,7 +82,8 @@ PAGE_SELECTORS = {":root", "body", "html"}
 def test_golden_stylesheet(style: Style, name: str, standalone: bool, update_golden: bool) -> None:
     """Both sheets of every built-in style and of one that writes every optional
     rule, byte for byte (the HTML goldens hold only the default style's sheet).
-    The standalone files are the sheets of the code before #18. Regenerate with
+    The standalone files were the sheets of the code before #18, until the print
+    rules moved after the document's width rule (the print width fix). Regenerate with
     ``pytest --update-golden`` and review the diff."""
     css = stylesheet(style, standalone=standalone)
     golden = GOLDEN / f"stylesheet.{name}.{'standalone' if standalone else 'embedded'}.css"

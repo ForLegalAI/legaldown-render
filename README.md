@@ -141,8 +141,8 @@ has the reference and what a minor release may change. For HTML with `standalone
 only the `<article>`, `legaldown_render.writers.stylesheet(style, standalone=False)` gives its CSS for a host page:
 every rule is under `.ld-document`, the style's variables, typography and white background are set on it, and there
 is no `body`, `:root`, `html` or `@page` rule, so nothing of the page outside the document is styled. Its rules
-override each other as in a complete page (`stylesheet(style)`, the default, is that page's sheet), except that in
-print the document's width limit is lifted. The page margin and the document's padding are left out, on screen and
+override each other as in a complete page (`stylesheet(style)`, the default, is that page's sheet); in print, both
+lift the document's width limit. The page margin and the document's padding are left out, on screen and
 in print: the gutter is the host container's. `scope=".preview"` places the document
 under one more selector, `:where(.preview) .ld-document`, without raising specificity, so documents of different
 styles can share a page; it is one selector of type, class and id selectors joined by a space or ` > `

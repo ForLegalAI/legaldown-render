@@ -619,8 +619,8 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
     and there is no ``body``, ``:root``, ``html`` or ``@page`` rule, so it
     styles nothing of the page outside the document. Every rule gains the
     same specificity, so its rules override each other as in the standalone
-    sheet; the one difference is that the document's own rule comes before
-    the print rules, so that in print its width limit is lifted. The page's
+    sheet (in both, the print rules follow the document's width rule, which
+    they lift). The page's
     margin and the document's padding (a page gutter, on screen and in
     print) are left out.
 
