@@ -142,7 +142,7 @@ page:
 
 html:
   max_width: 46rem
-  extra_css: ""              # raw CSS, appended to the stylesheet as written (see "Trusted input")
+  extra_css: ""              # raw CSS, appended to the stylesheet as written (see "Trusted input" and "Embedded HTML")
 
 docx:                        # the DOCX writer only (see "DOCX")
   update_fields_on_open: true
@@ -308,6 +308,18 @@ on fixed dates, so a bad one (`GGGGGGG`) is a style error, not an exception at r
 lone surrogates are refused in every value written into the stylesheet, `html.extra_css` included. `extends` and
 `--style` read any file the process can read. Do not render with styles from users you do not
 trust in this mode ([Security](architecture.md#security)).
+
+### Embedded HTML
+
+For HTML embedded in a host page (`--fragment`, `standalone=False`), the CSS is
+`legaldown_render.writers.stylesheet(style, standalone=False)`: every rule is under `.ld-document`, and
+`typography`, `headings`, `html.max_width` and the colours apply there as on a complete page. `page.size` and
+`page.margin` (the `@page` rule) are not written, and neither is the page's margin or the document's padding: the
+host's page and container own them. `html.extra_css` is appended as written, not scoped: a bare selector in it
+reaches the host page, an override of a base rule applies only when written under `.ld-document`
+(`.ld-document .ld-title { … }`, not `.ld-title { … }`), and `:root` variables in it do not reach the document.
+Give the sheet a `<style>` element of its own, so that a value that does not parse (`12pt (`) cannot take the host's
+rules with it. See the README's "Python" section for `scope=`.
 
 ### Untrusted mode
 
