@@ -495,7 +495,7 @@ src/legaldown_render/
 
 | Dependency | Why |
 |---|---|
-| `legaldown-validator>=0.5.0,<0.6` | The only LegalDown parser; Core validation |
+| `legaldown-validator>=0.6.0,<0.7` | The only LegalDown parser; Core validation |
 | `markdown-it-py` | Inline Markdown inside one block's text (ADR 0007) |
 | `babel` | CLDR locale data (ADR 0005) |
 | `pyyaml` | Style templates |
