@@ -240,7 +240,8 @@ result = render(source, RenderOptions(untrusted=True, document_root="/srv/upload
 
 - It requires a `document_root` (`--root DIR`), so that no file reference can leave the tree the
   document belongs to (§2.3); without one `render` raises `OptionsError` and the command exits 2.
-- It loads the style untrusted (`load_style(..., trusted=False)`): a built-in name, a mapping or YAML
+- It loads the style untrusted (`load_style(..., trusted=False)`; `placeholders.blank` and the condition labels may use
+  each field once): a built-in name, a mapping or YAML
   text, never a file; `extends` only a built-in; only plain CSS values (no `calc()`, no `var()`);
   no `html.extra_css`; `values.date` one of `short`, `medium`, `long`, `full`; every label and format
   at most 200 characters; YAML text of at most 64 KiB with no aliases and nested at most 32 levels.

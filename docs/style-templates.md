@@ -247,8 +247,10 @@ the label is blank), `{condition}` the condition as written. A shape whose label
 these four: they change nothing unless a style asks. A condition the validator rejects (`condition-invalid`) always
 takes `labels.condition`. Each label must name its question (and the choice ones the answer), or show `{condition}`;
 that `condition_false` and `condition_is_not` actually say "not" is the style's to get right, as no check can read
-the words. With `extends`, a label set in the parent applies to the child. An untrusted style may use each field once per
-label (and per `placeholders.blank`), so that it cannot multiply a long prompt or choice label.
+the words. With `extends`, a label set in the parent applies to the child. An untrusted style may use each field once in each condition label (`labels.condition` too) and in
+`placeholders.blank`, so that it cannot multiply a long prompt or choice label. `{answer}` is written on one line,
+and it is the value id when the choice's label is blank or another choice of the question has the same label, so that
+two conditions never read alike.
 
 ### Headers and footers
 
@@ -376,6 +378,8 @@ with `RenderOptions(untrusted=True, document_root=...)` (`legaldown-render --unt
 
 - The style is a built-in name, a `Style`, a mapping, or YAML text (a string with a line break), never
   a path; `extends` may name only a built-in style (`default`, `continental`, `outline`).
+- `placeholders.blank` and the condition labels (`labels.condition`, `condition_true`, `condition_false`,
+  `condition_is`, `condition_is_not`) use each of their fields at most once.
 - Each value that reaches the stylesheet must be a plain value of its kind:
 
   | Setting | Accepted |

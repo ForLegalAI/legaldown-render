@@ -658,7 +658,10 @@ out when the validator reported the same path at the same line, or at none (`dia
   length, line-height, colour, font-weight, font-family, page size, margin, max-width), enforced in
   `_convert` for a mapping and, through `style_to_dict`, for a `Style` object and for settings
   objects given as overrides. The grammars allow no function, no variable and no `!important`, so
-  `calc(1em + 2px)` and `var(--x)` are refused. `html.extra_css` must be empty. YAML text is at most
+  `calc(1em + 2px)` and `var(--x)` are refused. `html.extra_css` must be empty. `placeholders.blank` and the
+  condition labels (`labels.condition` and the four of one shape) use each field at most once
+  (`style/loader.py:_repeated_document_text`), so a short template cannot multiply a long prompt or choice label.
+  YAML text is at most
   64 KiB (UTF-8 bytes), may not use aliases (the "billion laughs" shape), and a number in it is at most
   32 characters (`_StyleLoader` reads `!!int`, `!!float`, `!!bool` and timestamps through guarded
   constructors, so a text PyYAML cannot convert is a `StyleError`, not its `ValueError`). Every

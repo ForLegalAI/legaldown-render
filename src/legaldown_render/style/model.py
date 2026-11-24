@@ -515,7 +515,7 @@ def fill_blank(template: str, values: dict[str, str]) -> str:
 def _unused(fields: TemplateFields) -> TemplateFields:
     """*fields* for a setting the style does not use: a typo is still a typo,
     but nothing is missing from a setting nothing reads."""
-    return replace(fields, required=frozenset(), why="")
+    return replace(fields, required=frozenset(), required_any=(), why="")
 
 
 def template_settings(style: Style) -> Iterator[tuple[str, str, TemplateFields]]:

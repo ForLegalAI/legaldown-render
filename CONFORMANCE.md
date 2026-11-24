@@ -192,7 +192,8 @@ other Word-only assumption of the plan) is a manual checklist before each releas
   without one; §2.3 says such a renderer SHOULD set one) and loads the style untrusted
   (`load_style(trusted=False)`: a built-in name, a mapping or YAML text, never a file; `extends`
   only a built-in; plain CSS values only; no `html.extra_css`; `values.date` one of the four names;
-  free text at most 200 characters; no YAML aliases; at most 64 KiB).
+  free text at most 200 characters; each field at most once in `placeholders.blank` and the condition labels; no YAML
+  aliases; at most 64 KiB).
   Every style, trusted or not, is refused when a value written into the stylesheet contains `/*`,
   `*/`, `</`, a backslash, a control character or a line break, or when `html.extra_css` contains
   `</style`. Style values never come from the document, which is never emitted as HTML or CSS (§8.7).

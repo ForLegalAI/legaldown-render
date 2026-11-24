@@ -168,8 +168,9 @@ def load_style(
     match a strict grammar (:data:`~.model.CSS_KINDS`), also in a
     :class:`Style` and in *overrides*; ``html.extra_css`` must be empty;
     ``values.date`` is a named format; every free-text setting is at most 200
-    characters, without NUL or a lone surrogate; and a number in YAML text is at
-    most 32 characters. A message names the setting and the problem, never
+    characters, without NUL or a lone surrogate; ``placeholders.blank`` and
+    the condition labels use each of their fields at most once; and a number in
+    YAML text is at most 32 characters. A message names the setting and the problem, never
     quotes the style or a path, and lists at most 20 problems. Whatever else
     the loader raises on such a style is a :class:`StyleError` too.
 
@@ -594,7 +595,7 @@ def _repeated_document_text(style: Style) -> list[str]:
     problems = []
     candidates = [("placeholders.blank", style.placeholders.blank, ("id", "name", "prompt"))]
     candidates += [(f"labels.{name}", getattr(style.labels, name) or "", ("question", "answer", "condition"))
-                   for name in ("condition_true", "condition_false", "condition_is", "condition_is_not")]
+                   for name in ("condition", "condition_true", "condition_false", "condition_is", "condition_is_not")]
     for key, template, names in candidates:
         found = _FIELD_RE.findall(template)
         for name in names:

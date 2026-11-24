@@ -939,11 +939,20 @@ class Resolver:
         return fill_condition(self.labels.condition or "{condition}", condition)
 
     def _answer_label(self, question: str, value: str) -> str:
-        """The label *question* gives *value* in its ``choices`` (§15.2), else the value id."""
+        """The label *question* gives *value* in its ``choices`` (§15.2), on one
+        line; the value id when the label is blank, or when another choice reads
+        the same, so that two conditions never read alike (§15.8)."""
         declared = self.questions.get(question)
         choices = declared.get("choices") if isinstance(declared, dict) else None
-        label = choices.get(value) if isinstance(choices, dict) else None
-        return label.strip() if isinstance(label, str) and label.strip() else value
+        if not isinstance(choices, dict):
+            return value
+
+        def label_of(choice: object) -> str:
+            return " ".join(choice.split()) if isinstance(choice, str) else ""
+        label = label_of(choices.get(value))
+        if not label or sum(1 for other in choices.values() if label_of(other) == label) > 1:
+            return value
+        return label
 
     # -- inlines --------------------------------------------------------------
 

@@ -308,11 +308,62 @@ def test_prompt_falls_back_to_the_name_after_a_partial_assembly() -> None:
     assert "[Client name]" in assembled.output
 
 
-@pytest.mark.parametrize(("key", "value"), [("placeholders.blank", "{prompt} {prompt}"),
-                                            ("labels.condition_is", "{question} = {answer}, {answer}")])
-def test_an_untrusted_style_uses_each_field_once(key: str, value: str) -> None:
+UNTRUSTED_FIELDS = [("placeholders.blank", name) for name in ("id", "name", "prompt")] + [
+    (f"labels.{label}", name)
+    for label, names in (("condition", ("condition",)), ("condition_true", ("question", "condition")),
+                         ("condition_false", ("question", "condition")),
+                         ("condition_is", ("question", "answer", "condition")),
+                         ("condition_is_not", ("question", "answer", "condition")))
+    for name in names]
+
+
+@pytest.mark.parametrize(("key", "field"), UNTRUSTED_FIELDS)
+def test_an_untrusted_style_uses_each_field_once(key: str, field: str) -> None:
     section, name = key.split(".")
+    # Valid apart from the repeat: every required field is there once.
+    value = {"condition_true": "{question}", "condition_false": "{question}", "condition_is": "{question}{answer}",
+             "condition_is_not": "{question}{answer}"}.get(name, "")
+    value = value.replace("{" + field + "}", "") + f"{{{field}}} {{{field}}}"
     with pytest.raises(StyleError) as caught:
         load_style({section: {name: value}}, trusted=False)
-    assert any("may use" in problem and "once" in problem for problem in caught.value.problems)
+    assert caught.value.problems == [f"{key}: an untrusted style may use {{{field}}} once"]
     load_style({section: {name: value}})  # trusted: as written
+    load_style({section: {name: value.rsplit(" ", 1)[0]}}, trusted=False)  # once: fine
+
+
+def test_the_untrusted_field_rule_holds_for_a_style_object() -> None:
+    from dataclasses import replace
+
+    from legaldown_render.style.model import Placeholders, Style
+
+    with pytest.raises(StyleError) as caught:
+        load_style(replace(Style(), placeholders=Placeholders(blank="{prompt}{prompt}")), trusted=False)
+    assert caught.value.problems == ["placeholders.blank: an untrusted style may use {prompt} once"]
+
+
+@pytest.mark.parametrize(("courts", "shown", "arbitration"), [
+    ("|-\n        State\n        courts", "State courts", "Arbitration"),  # a line break: one line
+    ('"Arbitration"', "courts", "arbitration"),                 # shared with another choice: the value ids
+    ('"  "', "courts", "Arbitration"),                          # blank: the value id
+])
+def test_an_answer_is_one_line_and_never_ambiguous(courts: str, shown: str, arbitration: str) -> None:
+    source = template().replace("      courts: State courts\n", f"      courts: {courts}\n").replace(
+        '      arbitration: "{question} arbitration"\n', "      arbitration: Arbitration\n")
+    output = text(source, **READABLE)
+    assert f"[Only if: forum = {shown}]" in output
+    assert f"[Only if: forum = {arbitration}]" in output
+
+
+def test_a_labelled_blank_wraps_in_the_embedded_stylesheet_too() -> None:
+    from legaldown_render.writers import stylesheet
+
+    css = stylesheet(load_style("default", overrides={"placeholders.blank": "[{name}]"}), standalone=False,
+                     scope=".preview")
+    assert ":where(.preview) .ld-document .ld-blank-label { white-space: normal; }" in css
+    assert css.index(".ld-document .ld-blank {") < css.index(".ld-document .ld-blank-label {")
+
+
+def test_a_prompt_in_a_blank_is_escaped() -> None:
+    source = template().replace('prompt: "  Monthly fee  "', "prompt: \"<b>Fee & 'more'</b>\"")
+    output = render(source, format="html", style=load_style("default", overrides={"placeholders.blank": "[{prompt}]"}))
+    assert "[&lt;b&gt;Fee &amp; 'more'&lt;/b&gt;]" in output.output and "<b>Fee" not in output.output
