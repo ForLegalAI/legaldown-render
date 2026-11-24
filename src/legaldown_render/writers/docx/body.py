@@ -65,9 +65,6 @@ from .styles import (
     heading_style,
 )
 
-#: The left indent the paragraph styles set, in twips: what a paragraph in that style has without an indent of its own.
-
-
 #: Limits on what a plan's indents can do to the page, in twips: Word does not take a left indent past 31680
 #: (22 inches), and a paragraph needs room to be read in; a column needs room for a word.
 _MAX_INDENT = 31680

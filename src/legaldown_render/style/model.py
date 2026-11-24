@@ -399,7 +399,8 @@ class TextFormat:
     the writers draw by default, so a style changes only what it sets."""
 
     font_family: str | None = css_field("font-family", None)
-    #: A length; ``em`` is the body text's size.
+    #: A length. ``em`` is the size of the text around the element: in DOCX the body's, in HTML that of
+    #: the element it is in (a table in a list item of ``0.8em`` is 0.64em), so ``pt`` reads alike in both.
     font_size: str | None = css_field("length", None)
     color: str | None = css_field("color", None)
 

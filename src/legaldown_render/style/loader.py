@@ -526,12 +526,31 @@ def _build(data: Mapping, source: str, trusted: bool = True) -> Style:
     problems: list[str] = []
     style = _convert(data, Style, "", problems, trusted=trusted)
     problems.extend(_template_problems(style, trusted))
+    problems.extend(_element_problems(style, problems))
     problems.extend(_value_problems(style, trusted))
     if problems:
         if len(problems) > MAX_PROBLEMS:
             problems = [*problems[:MAX_PROBLEMS], f"and {len(problems) - MAX_PROBLEMS} more"]
         raise StyleError(source, problems)
     return style
+
+
+def _element_problems(style: Style, reported: list[str]) -> list[str]:
+    """An ``elements.*`` value that is empty: neither a value nor unset (``null``),
+    it would write an empty declaration (``font-family: ;``). A setting already
+    in *reported* (a value the grammar refused, which is left empty) is not
+    reported again."""
+    problems = []
+    for element in dataclasses.fields(style.elements):
+        entry = getattr(style.elements, element.name)
+        for item in dataclasses.fields(entry):
+            value = getattr(entry, item.name)
+            key = f"elements.{element.name}.{item.name}"
+            if isinstance(value, str) and not value.strip() and not any(
+                    problem.startswith(f"{key}:") for problem in reported):
+                problems.append(f"elements.{element.name}.{item.name}: is empty; leave it out (or write null) "
+                                "to keep the default")
+    return problems
 
 
 def _value_problems(style: Style, trusted: bool) -> list[str]:

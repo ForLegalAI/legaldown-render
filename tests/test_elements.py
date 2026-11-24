@@ -78,9 +78,12 @@ def style(**overrides: object):
 # -- HTML ------------------------------------------------------------------------
 
 def test_unset_elements_add_no_rule() -> None:
-    assert stylesheet(style()) == stylesheet(load_style("default"))
-    for name in ("quote", "list", "table", "parties", "signatures", "defined_term"):
-        assert stylesheet(style(**{f"elements.{name}.color": None})) == stylesheet(load_style("default"))
+    """The default sheet has no element rule and one print block (the base one)."""
+    css = stylesheet(load_style("default"))
+    for selector in (".ld-quote { font", ".ld-quote .ld-quote", ".ld-list { font", ".ld-list .ld-list", ".ld-list > li",
+                     ".ld-table { font", ".ld-parties { font", ".ld-signatures { font", "dfn.ld-defined"):
+        assert selector not in css, selector
+    assert css.count("@media print") == 1
 
 
 def test_each_element_gets_its_rule() -> None:
@@ -300,3 +303,57 @@ def test_libreoffice_starts_the_signatures_on_a_new_page() -> None:
     assert shown["attached_breaking"].pages == shown["attached"].pages + 1
     # Every element set: the same words, one page more for the signatures.
     assert [line for line in shown["everything"].lines if line] == [line for line in shown["breaking"].lines if line]
+
+
+def test_a_list_in_a_drafting_note_keeps_the_note_style() -> None:
+    source = SOURCE + "\n> [!DRAFTING]\n> A note.\n>\n> - noted item\n"
+    root = ET.fromstring(parts(render(source, format="docx").binary)["word/document.xml"])
+    used = paragraph_styles(root)
+    assert any(text == "noted item" and style_id == "DraftingNote" for style_id, text in used), used
+
+
+def test_a_quote_indent_reaches_the_quote_paragraphs() -> None:
+    """A plain paragraph in the quote has the style's indent (no w:ind of its own); one in a quote in a quote
+    twice it."""
+    root = docx_parts(**{"elements.quote.indent": "1in"})["word/document.xml"]
+    by_text = {"".join(t.text or "" for t in p.iter(f"{W}t")): p for p in root.iter(f"{W}p")}
+    assert by_text["A quote."].find(f"{W}pPr/{W}ind") is None
+    assert by_text["A quote in a quote."].find(f"{W}pPr/{W}ind").get(f"{W}left") == "2880"
+
+
+@pytest.mark.parametrize(("overrides", "problem"), [
+    ({"elements.quote.line_height": "0"}, "elements.quote.line_height: a number must be greater than 0"),
+    ({"elements.quote.space_before": "23in"}, "elements.quote.space_before: must be 0 or more and at most 1584pt"),
+    ({"elements.quote.indent": "10in"}, "elements.quote.indent: leaves less than 36pt of the text width"),
+])
+def test_docx_limits_name_their_setting(overrides: dict, problem: str) -> None:
+    with pytest.raises(StyleError) as caught:
+        render(SOURCE, format="docx", style=style(**overrides))
+    assert any(message.startswith(problem) for message in caught.value.problems), caught.value.problems
+
+
+def test_a_line_height_in_em_is_the_element_size() -> None:
+    by_id = styles_by_id(docx_parts(**{"elements.quote.font_size": "20pt", "elements.quote.line_height": "1em"})[
+        "word/styles.xml"])
+    spacing = by_id["Quote"].find(f"{W}pPr/{W}spacing")
+    assert (spacing.get(f"{W}line"), spacing.get(f"{W}lineRule")) == ("400", "atLeast")
+
+
+@pytest.mark.parametrize("key", ["elements.table.font_family", "elements.quote.indent", "elements.list.color"])
+def test_an_empty_element_value_is_refused(key: str) -> None:
+    with pytest.raises(StyleError) as caught:
+        style(**{key: " "})
+    assert caught.value.problems == [f"{key}: is empty; leave it out (or write null) to keep the default"]
+
+
+def test_the_signing_line_takes_the_signature_colour() -> None:
+    by_id = styles_by_id(docx_parts(**{"elements.signatures.color": "maroon"})["word/styles.xml"])
+    assert by_id["SignatureLine"].find(f"{W}pPr/{W}pBdr/{W}bottom").get(f"{W}color") == "800000"
+    plain = styles_by_id(docx_parts()["word/styles.xml"])
+    assert plain["SignatureLine"].find(f"{W}pPr/{W}pBdr/{W}bottom").get(f"{W}color") == "auto"
+
+
+def test_the_page_break_paragraph_is_a_signature_paragraph() -> None:
+    body = docx_parts(**{"signatures.page_break_before": True})["word/document.xml"].find(f"{W}body")
+    breaking = next(p for p in body if p.find(f"{W}pPr/{W}pageBreakBefore") is not None)
+    assert breaking.find(f"{W}pPr/{W}pStyle").get(f"{W}val") == "SignatureText"

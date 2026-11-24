@@ -288,8 +288,21 @@ The values are CSS, held to the same grammars as `typography` in an untrusted st
 indents are the numbering's and the page's, so there is no indent for them, and no spacing for tables, parties
 and signatures, which are tables in Word. In DOCX `em` in an element is the element's own font size when it
 sets one (`indent: 2em` of a 10pt quote is 20pt), `rem` the body's; `%`, `ch` and `ex` are an error for DOCX, as
-everywhere, and a space or an indent is 0 or more. In HTML a quote or a list inside one of its kind keeps its
-size rather than scaling it again. `signatures.page_break_before` starts the signature blocks on a new page: in
+everywhere, a space or an indent is 0 or more, and a quote's indent must leave at least 36pt of text. An empty
+value is refused: leave the field out, or write `null`, to keep the default.
+
+Where the formats differ, as their models do:
+
+- **Spacing.** In HTML `item_spacing` is the space after each list item and a quote's `space_before` and
+  `space_after` are around the whole quote. In DOCX they are paragraph properties of the style, so they apply to
+  each paragraph that has it: each paragraph of an item, each paragraph of a quote (as the default spacing of a
+  quote always has).
+- **Nesting.** In HTML an element's settings reach what it holds: a table or a quote in a list item takes the
+  list's font and colour unless it sets its own, and an `em` size is relative to the element it is in (a table of
+  `0.8em` in a list item of `0.8em` is 0.64em). A quote or a list inside one of its kind keeps its size rather
+  than scaling it again. In DOCX each paragraph has the one style of its kind (a table in a list item is `Table
+  Text`, not `List Paragraph`), and `em` is the body's. Sizes in `pt` and settings on the inner element read
+  alike in both. `signatures.page_break_before` starts the signature blocks on a new page: in
 HTML in print (`break-before: page`), in DOCX with an empty paragraph one point high that breaks the page before
 the signature table.
 
@@ -355,8 +368,9 @@ number of more than 32 digits is no length at all. `html.max_width` and `html.ex
 
 The writer generates Word styles from the template (`Normal`, `heading 1` to `heading 5`, `Title`,
 `Subtitle`, `Quote`, `List Paragraph`, `toc 1` to `toc 5`, `Hyperlink`, `Table Grid`, and styles of its own for
-drafting notes, code, table text, the title block, the parties and the signatures, defined terms, blanks, choices,
-failure markers and condition labels; see "Elements"), so a change made to a
+drafting notes, code, table text (`Table Text`), the title block, the parties (`Party Side`, `Party Name`,
+`Party Details`) and the signatures, defined terms, blanks, choices, failure markers and condition labels; see
+"Elements"), so a change made to a
 style in Word applies to every paragraph that uses it.
 
 | Setting | Meaning |

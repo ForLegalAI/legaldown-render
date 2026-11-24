@@ -300,7 +300,7 @@ def build_styles(style: Style, settings: DocxSettings, language: str, *, heading
                props=[el("keepLines"), el("spacing", {"before": 0, "after": em(0.2)}), el("jc", {"val": "left"})],
                run=_element_run(signatures)),
         _style(SIGNATURE_LINE, "Signature Line", based_on=NORMAL, priority=49, custom=True,
-               props=[el("keepLines"), el("pBdr", None, _border("bottom", "auto", 4, 1)),
+               props=[el("keepLines"), el("pBdr", None, _border("bottom", signatures.color or "auto", 4, 1)),
                       el("spacing", {"before": SIGNATURE_SPACE, "after": em(0.3)})],
                run=_element_run(signatures)),
         _style(DRAFTING_NOTE, "Drafting Note", based_on=NORMAL, priority=30, custom=True,

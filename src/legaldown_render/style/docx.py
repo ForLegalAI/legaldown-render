@@ -227,6 +227,10 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
 
     elements = {item.name: _element(getattr(style.elements, item.name), f"elements.{item.name}", font_points, problems)
                 for item in fields(style.elements)}
+    indent = elements["quote"].indent
+    if indent is not None and indent > page.text_width - _MIN_TEXT_TWIPS:
+        problems.add("elements.quote.indent", f"leaves less than {_MIN_TEXT_TWIPS // 20}pt of the text width for the "
+                                              "quote's text")
 
     problems.items.extend(docx_style_errors(style))
     if problems.items:
