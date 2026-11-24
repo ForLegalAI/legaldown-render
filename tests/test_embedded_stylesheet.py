@@ -78,12 +78,14 @@ PAGE_SELECTORS = {":root", "body", "html"}
 # -- Standalone is unchanged -------------------------------------------------------
 
 @pytest.mark.parametrize("standalone", [True, False], ids=["standalone", "embedded"])
-def test_golden_stylesheet(standalone: bool, update_golden: bool) -> None:
-    """Both sheets of a style that writes every optional rule, byte for byte: the
-    HTML goldens hold only the default style's sheet. Regenerate with
+@pytest.mark.parametrize(("style", "name"), list(zip(STYLES, IDS, strict=True)), ids=IDS)
+def test_golden_stylesheet(style: Style, name: str, standalone: bool, update_golden: bool) -> None:
+    """Both sheets of every built-in style and of one that writes every optional
+    rule, byte for byte (the HTML goldens hold only the default style's sheet).
+    The standalone files are the sheets of the code before #18. Regenerate with
     ``pytest --update-golden`` and review the diff."""
-    css = stylesheet(_every_branch(), standalone=standalone)
-    golden = GOLDEN / f"stylesheet.every-branch.{'standalone' if standalone else 'embedded'}.css"
+    css = stylesheet(style, standalone=standalone)
+    golden = GOLDEN / f"stylesheet.{name}.{'standalone' if standalone else 'embedded'}.css"
     if update_golden or not golden.exists():
         golden.write_text(css, encoding="utf-8", newline="\n")
         if not update_golden:
@@ -93,8 +95,8 @@ def test_golden_stylesheet(standalone: bool, update_golden: bool) -> None:
 
 @pytest.mark.parametrize("style", STYLES, ids=IDS)
 def test_the_default_is_the_standalone_sheet(style: Style) -> None:
-    assert stylesheet(style) == stylesheet(style, standalone=True)
     css = stylesheet(style)
+    assert css == stylesheet(style, standalone=True) != stylesheet(style, standalone=False)
     assert ":root {" in css and "body {" in css and "@page {" in css
 
 
@@ -209,6 +211,33 @@ def test_extra_css_is_appended_as_written() -> None:
     assert "<\\/b>" in stylesheet(Style(html=Html(extra_css="x::before { content: '</b>' }")), standalone=False)
 
 
+def test_an_extra_css_override_applies_in_the_embedded_sheet_only_under_the_document() -> None:
+    """As documented: an override of a base rule wins by order in the standalone
+    sheet, and in the embedded one only when it is written under ``.ld-document``
+    (the base rule gained its specificity)."""
+    base = next(selectors[0] for _, selectors, _ in rules(stylesheet(Style(), standalone=False))
+                if selectors[0].endswith(" .ld-title"))
+    assert specificity(".ld-title") < specificity(base)
+    assert specificity(".ld-document .ld-title") == specificity(base)
+
+
+@pytest.mark.parametrize("standalone", [True, False])
+def test_heading_levels_of_a_style_built_by_hand(standalone: bool) -> None:
+    """A number or a string of digits is a level, as the old sheet wrote it; any
+    other key, which never wrote a rule that matched a heading, is left out."""
+    style = Style(headings={2: HeadingStyle(size="2em"), "1": HeadingStyle(size="1em"),  # type: ignore[dict-item]
+                            "03": HeadingStyle(size="3em"), True: HeadingStyle(size="77em"),  # type: ignore[dict-item]
+                            1.5: HeadingStyle(size="77em")})  # type: ignore[dict-item]
+    css = stylesheet(style, standalone=standalone)
+    headings = [line.split(" > .ld-heading")[0].split()[-1] for line in css.splitlines() if "> .ld-heading {" in line]
+    assert headings == [".ld-level-1", ".ld-level-2", ".ld-level-03"]
+    assert "77em" not in css and "True" not in css
+
+
+def test_an_alignment_of_a_style_built_by_hand_is_written_as_text() -> None:
+    assert "text-align: None;" in stylesheet(Style(headings={1: HeadingStyle(align=None)}))  # type: ignore[arg-type]
+
+
 def test_values_cannot_leave_their_declaration_in_the_embedded_sheet() -> None:
     hostile = "red;}</style><script>x</script>@import 'x'; /* c */ \\ \x07\n }"
     style = Style(
@@ -235,7 +264,8 @@ def test_usable_scopes(scope: str) -> None:
 
 
 @pytest.mark.parametrize("scope", ["a, b", ":not(", '[a="', ".a >", "> .a", ".a  .b", "x{", "x;", "/*", "</style",
-                                   "@media", ".a\n.b", " .a", ".a ", "#1", ".1a", ".a:hover", "*", ".a~.b", "é", "_x", ".a\n", ".a\t"])
+                                   "@media", ".a\n.b", " .a", ".a ", "#1", ".1a", ".a:hover", "*", ".a~.b", "é", "_x", ".a\n", ".a\t", ".a + .b",
+                                   ".a ~ .b", ".a >> .b"])
 def test_unusable_scopes_are_refused(scope: str) -> None:
     assert check_scope(scope) is not None
     with pytest.raises(OptionsError, match="scope"):

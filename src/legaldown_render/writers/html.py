@@ -25,7 +25,7 @@ from collections.abc import Callable
 from html import escape
 
 from ..errors import OptionsError
-from ..style.model import Style
+from ..style.model import HeadingStyle, Style
 from ..tree import (
     AttachmentPart,
     Blank,
@@ -540,6 +540,25 @@ def _print_block(place: Callable[[str], str], rules: tuple[_Rule, ...] = _PRINT_
     return "@media print {\n" + "".join(f"  {_rule(rule, place)}\n" for rule in rules) + "}"
 
 
+def _heading_levels(style: Style) -> list[tuple[str, HeadingStyle]]:
+    """The heading levels the sheet writes, in numeric order, as the digits of
+    their class name (``ld-level-1``).
+
+    The loader reads every level as a number. A key of a Style built by hand
+    becomes part of a selector, so it is written only when it is a number or
+    a string of digits (``"1"`` writes ``.ld-level-1``, as it always did); any
+    other key (``True``, ``1.5``, ``"1, body"``) is left out. Those never wrote
+    a rule that matched a heading."""
+    levels: list[tuple[int, str, HeadingStyle]] = []
+    for key, heading in style.headings.items():
+        if isinstance(key, int) and not isinstance(key, bool):
+            levels.append((int(key), str(int(key)), heading))
+        elif isinstance(key, str) and re.fullmatch(r"[0-9]+", key, re.ASCII):
+            levels.append((int(key), str.__str__(key), heading))
+    levels.sort(key=lambda level: level[0])
+    return [(digits, heading) for _, digits, heading in levels]
+
+
 def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str:
     """The CSS for *style*: base rules plus everything the style sets.
 
@@ -556,8 +575,17 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
     sheet; the one difference is that the document's own rule comes before
     the print rules, so that in print its width limit is lifted. The page's
     margin and the document's padding (a page gutter, on screen and in
-    print) are left out. ``html.extra_css`` is appended as written in both modes: it is
-    the style author's own CSS, and is not scoped.
+    print) are left out.
+
+    ``html.extra_css`` is appended as written in both modes: it is the style
+    author's own CSS, and is not scoped. In the embedded sheet a bare selector
+    in it reaches the host page, and its overrides of the base rules lose to
+    them on specificity (``.ld-title { … }`` against ``.ld-document
+    .ld-title``), and ``:root`` variables in it do not reach the document,
+    whose own rule sets them; to apply there, its rules must be written under
+    ``.ld-document``. A host should give the embedded sheet a ``<style>``
+    element of its own, so that a value that does not parse (a trusted
+    style's ``foo(``) cannot take the host's rules after it with it.
 
     *scope*, with ``standalone=False`` only, places the document under one
     more selector, ``:where(scope) .ld-document`` (specificity unchanged), so
@@ -582,13 +610,9 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
     generated: list[_Rule] = []
     if typography.justify:
         generated.append(((".ld-p", ".ld-item > p"), "text-align: justify; hyphens: auto;"))
-    # The loader reads levels as numbers; a key of a Style built by hand becomes
-    # part of a selector, so only a number is written.
-    levels = {level: heading for level, heading in style.headings.items()
-              if isinstance(level, int) and not isinstance(level, bool)}
-    for level, heading in sorted(levels.items()):
+    for level, heading in _heading_levels(style):
         rules = [f"font-size: {_css(heading.size)}", f"font-weight: {_css(heading.weight)}",
-                 f"text-align: {_css(heading.align)}", f"font-style: {'italic' if heading.italic else 'normal'}"]
+                 f"text-align: {_css(str(heading.align))}", f"font-style: {'italic' if heading.italic else 'normal'}"]
         if heading.transform == "uppercase":
             rules.append("text-transform: uppercase")
         elif heading.transform == "small-caps":
@@ -610,7 +634,8 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
         parts += [_rule(rule, place) for rule in generated]
         parts.append(f"@page {{ size: {_css(style.page.size)}; margin: {_css(style.page.margin)}; }}")
     else:
-        root = f":where({scope}) {_ROOT}" if scope else _ROOT
+        # str.__str__: the value check_scope matched, whatever a str subclass formats as.
+        root = f":where({str.__str__(scope)}) {_ROOT}" if scope else _ROOT
 
         def place(selector: str) -> str:
             # The document's own rule is the root; every other selector is placed under it.

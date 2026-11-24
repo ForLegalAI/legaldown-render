@@ -145,9 +145,13 @@ print the document's width limit is lifted. The page margin and the document's p
 in print: the gutter is the host container's. `scope=".preview"` places the document
 under one more selector, `:where(.preview) .ld-document`, without raising specificity, so documents of different
 styles can share a page; it is one selector of type, class and id selectors joined by a space or ` > `
-(`OptionsError` otherwise, and with the default `standalone=True`). Two limits: `html.extra_css` is the style
-author's raw CSS and is appended as written, not scoped (an untrusted style may not set it); and the sheet does not
-isolate the document from the host's own CSS, so a reset that styles `h1`, `ul` or `th` reaches the document's
+(`OptionsError` otherwise, and with the default `standalone=True`). Give the sheet a `<style>`
+element of its own: a trusted style's value that does not parse (`font_family: "foo("`) then cannot take the host's
+rules after it with it. Two limits: `html.extra_css` is the style author's raw CSS and is appended as written, not
+scoped (an untrusted style may not set it), so in this sheet a bare selector in it reaches the host page, an
+override of a base rule applies only when written under `.ld-document` (`.ld-document .ld-title`, not `.ld-title`,
+which the scoped base rule now outranks), and `:root` variables in it do not reach the document; and the sheet does
+not isolate the document from the host's own CSS, so a reset that styles `h1`, `ul` or `th` reaches the document's
 unclassed elements too. `html_id_prefix=` (`--id-prefix`) puts a prefix before
 every `id` and every in-document `#` link of the output (`"ld-"` makes `id="scope"` `id="ld-scope"`, and
 `href="#def:fee"` `href="#ld-def:fee"`), so that the document's anchors cannot collide with the page's own. It is an ASCII letter and then letters,

@@ -167,7 +167,8 @@ Only additions: no existing name, field or output changes.
 - **An embedded stylesheet** ([#18](https://github.com/ForLegalAI/legaldown-render/issues/18)):
   `stylesheet(style, standalone=False)` is the CSS for `standalone=False` output in a host page. Every rule is under
   `.ld-document`, the variables, typography and background are set on it, and there is no `body`, `:root`, `html` or
-  `@page` rule; the rules override each other as in the standalone sheet. `scope=` places the document under one more
+  `@page` rule; the rules override each other as in the standalone sheet (`html.extra_css` stays unscoped: its overrides
+  apply there when written under `.ld-document`). `scope=` places the document under one more
   selector (`:where(scope) .ld-document`); an unusable scope is an `OptionsError`. `stylesheet(style)` and rendered
   output are unchanged
 
