@@ -288,9 +288,11 @@ The values are CSS, held to the same grammars as `typography` in an untrusted st
 indents are the numbering's and the page's, so there is no indent for them, and no spacing for tables, parties
 and signatures, which are tables in Word. In DOCX `em` in an element is the element's own font size when it
 sets one (`indent: 2em` of a 10pt quote is 20pt), `rem` the body's; `%`, `ch` and `ex` are an error for DOCX, as
-everywhere, a space or an indent is 0 or more, and a quote's indent must leave at least 113.4pt (4 cm) of the text
-width, the least room the DOCX body leaves any paragraph (a quote nested in a quote is held at that limit too). An
-empty value is refused: leave the field out, or write `null`, to keep the default (or what the style extends).
+everywhere, a space or an indent is 0 or more, and a quote's indent is at most the text width less 113.4pt (4 cm),
+the least room the DOCX body leaves any paragraph (a quote nested in a quote is held at that limit too; on a page
+narrower than that, only 0). An
+empty value is refused: leave the field out to keep the default (or what the style extends), or write `null` to
+go back to the default over what it extends.
 
 `signatures.page_break_before` starts the signature blocks on a new page: in HTML in print (`break-before:
 page`), in DOCX with an empty paragraph one point high that breaks the page before the signature table.
@@ -403,14 +405,14 @@ The numbering and wording settings are the same as in the other formats; what th
 | `locale`, `values.*`, `placeholders.*`, `template_view.*`, `labels.*` | As in the other formats: dates, amounts, blanks, choices and labels are written as text (they are not numbers Word can compute) |
 | `html.max_width`, `html.extra_css` | Not read |
 
-The styles for this matter (`Title Block Text`, `Party Side`, `Party Name`, `Attachments Heading`, `Attachment Title`,
+The styles for this matter (`Title Block Text`, `Party Side`, `Party Name`, `Party Details`, `Attachments Heading`, `Attachment Title`,
 `Attachment File`, `Signature Side`, `Signature Text`, `Signature Line`) are Word styles like the others: a lawyer who
 changes one in Word changes every paragraph that uses it.
 
 ### Trusted input
 
 A style template, a `--set` value, and an `extends` path are the operator's, not the document
-author's. A value placed into the stylesheet (`typography`, `headings`, `page`, `html.max_width`)
+author's. A value placed into the stylesheet (`typography`, `headings`, `elements`, `page`, `html.max_width`)
 must not contain `/*`, `*/`, `</`, a backslash, a control character or a line break: the style is
 refused, naming the setting (nothing is stripped). Other CSS is accepted as written, `calc()` and
 `var()` included, and is not checked as CSS, so a value such as `12pt (` breaks the rest of the
@@ -446,11 +448,11 @@ with `RenderOptions(untrusted=True, document_root=...)` (`legaldown-render --unt
 
   | Setting | Accepted |
   |---|---|
-  | `typography.font_size`, `headings.N.size` | a length: `11pt`, `1.2em`, `0` (units `em rem ex ch pt pc px mm cm in %`) |
-  | `typography.line_height` | `normal`, a number (`1.5`), or a length |
-  | `typography.color`, `typography.link_color` | `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, a colour name, `rgb()`/`rgba()`/`hsl()`/`hsla()` of plain numbers |
+  | `typography.font_size`, `headings.N.size`, the `font_size`, spaces, `indent` and `item_spacing` of `elements.*` | a length: `11pt`, `1.2em`, `0` (units `em rem ex ch pt pc px mm cm in %`) |
+  | `typography.line_height`, `elements.quote.line_height`, `elements.list.line_height` | `normal`, a number (`1.5`), or a length |
+  | `typography.color`, `typography.link_color`, `elements.*.color` | `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, a colour name, `rgb()`/`rgba()`/`hsl()`/`hsla()` of plain numbers |
   | `headings.N.weight` | `normal`, `bold`, `bolder`, `lighter`, or 1 to 1000 |
-  | `typography.font_family` | up to ten font names separated by commas; names of more than one word quoted |
+  | `typography.font_family`, `elements.*.font_family` | up to ten font names separated by commas; names of more than one word quoted |
   | `page.size` | `auto`, `portrait`, `landscape`, a paper size (`A3` to `A5`, `B4`, `B5`, `letter`, `legal`, `ledger`) with an optional orientation, or one or two lengths |
   | `page.margin` | one to four lengths |
   | `html.max_width` | `none` or a length |

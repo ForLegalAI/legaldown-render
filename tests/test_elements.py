@@ -80,8 +80,10 @@ def style(**overrides: object):
 def test_unset_elements_add_no_rule() -> None:
     """The default sheet has no element rule and one print block (the base one)."""
     css = stylesheet(load_style("default"))
-    for selector in (".ld-quote { font", ".ld-quote .ld-quote", ".ld-list { font", ".ld-list .ld-list", ".ld-list > li",
-                     ".ld-table { font", ".ld-parties { font", ".ld-signatures { font", "dfn.ld-defined"):
+    for selector in (".ld-quote { font", ".ld-quote { color", ".ld-quote .ld-quote", ".ld-list { font",
+                     ".ld-list { color", ".ld-list .ld-list", ".ld-list > li", ".ld-table { font", ".ld-table { color",
+                     ".ld-parties { font",
+                     ".ld-parties { color", ".ld-signatures { font", ".ld-signatures { color", ".ld-defined {"):
         assert selector not in css, selector
     assert css.count("@media print") == 1
 
@@ -324,7 +326,7 @@ def test_a_quote_indent_reaches_the_quote_paragraphs() -> None:
 @pytest.mark.parametrize(("overrides", "problem"), [
     ({"elements.quote.line_height": "0"}, "elements.quote.line_height: a number must be greater than 0"),
     ({"elements.quote.space_before": "23in"}, "elements.quote.space_before: must be 0 or more and at most 1584pt"),
-    ({"elements.quote.indent": "10in"}, "elements.quote.indent: leaves less than 113.4pt of the text width"),
+    ({"elements.quote.indent": "10in"}, "elements.quote.indent: is deeper than a Word document can draw it"),
 ])
 def test_docx_limits_name_their_setting(overrides: dict, problem: str) -> None:
     with pytest.raises(StyleError) as caught:
@@ -380,8 +382,10 @@ def test_zero_is_a_value_not_the_default() -> None:
     assert ".ld-quote { padding-left: 0; }" in css and ".ld-list > li { margin-bottom: 0; }" in css
 
 
-@pytest.mark.parametrize(("size", "reset"), [("10pt", False), ("12px", False), ("1rem", False), ("0.9em", True),
-                                             ("90%", True)])
+@pytest.mark.parametrize(("size", "reset"), [
+    ("10pt", False), ("12px", False), ("1rem", False), ("1REM", False), (" 10pt ", False), ("0", False),
+    (".5in", False), ("0.9em", True), ("1.2EM", True), ("90%", True), ("1.5ex", True), ("2ch", True),
+    ("smaller", True), ("calc(0.5em + 1px)", True)])
 def test_only_a_relative_size_resets_inside_its_kind(size: str, reset: bool) -> None:
     """An absolute size applies at every depth by its own rule; a reset would inherit whatever is in between
     (a quote in a list in a quote would take the list's size)."""
@@ -403,3 +407,51 @@ def test_a_quote_in_a_list_item_is_a_quote_in_docx() -> None:
     source = SOURCE.replace("  a second paragraph of item one\n", "  > quoted in an item\n")
     used = paragraph_styles(ET.fromstring(parts(render(source, format="docx").binary)["word/document.xml"]))
     assert ("Quote", "quoted in an item") in used
+
+
+def test_a_rem_line_height_is_the_body_size() -> None:
+    by_id = styles_by_id(docx_parts(**{"elements.quote.font_size": "20pt", "elements.quote.line_height": "1REM"})[
+        "word/styles.xml"])
+    spacing = by_id["Quote"].find(f"{W}pPr/{W}spacing")
+    assert (spacing.get(f"{W}line"), spacing.get(f"{W}lineRule")) == ("220", "atLeast")  # 1rem of the body's 11pt
+
+
+def test_a_padded_rem_space_is_the_body_size() -> None:
+    by_id = styles_by_id(docx_parts(**{"elements.quote.font_size": "20pt", "elements.quote.space_before": " 1REM "})[
+        "word/styles.xml"])
+    assert by_id["Quote"].find(f"{W}pPr/{W}spacing").get(f"{W}before") == "220"
+
+
+def test_on_a_narrow_page_a_quote_indent_of_zero_is_taken() -> None:
+    """A text width under 4cm: the body draws no indent at all, so 0 is the one indent it can draw."""
+    from legaldown_render.style.docx import docx_settings
+
+    narrow = {"page.size": "50mm 100mm", "page.margin": "6mm"}
+    assert docx_settings(style(**narrow, **{"elements.quote.indent": "0"})).elements["quote"].indent == 0
+    with pytest.raises(StyleError, match="elements.quote.indent"):
+        docx_settings(style(**narrow, **{"elements.quote.indent": "1pt"}))
+
+
+def test_the_page_break_paragraph_takes_no_space() -> None:
+    body = docx_parts(**{"signatures.page_break_before": True})["word/document.xml"].find(f"{W}body")
+    breaking = next(p for p in body if p.find(f"{W}pPr/{W}pageBreakBefore") is not None)
+    spacing = breaking.find(f"{W}pPr/{W}spacing")
+    assert {k.removeprefix(W): v for k, v in spacing.attrib.items()} == {
+        "before": "0", "after": "0", "line": "20", "lineRule": "exact"}
+
+
+def test_null_clears_what_the_style_extends(tmp_path) -> None:
+    (tmp_path / "base.yaml").write_text("version: 1\nname: base\nelements:\n  quote: { color: red, font_size: 10pt }\n",
+                                        encoding="utf-8")
+    (tmp_path / "child.yaml").write_text("version: 1\nname: child\nextends: base.yaml\nelements:\n"
+                                         "  quote: { color: null }\n", encoding="utf-8")
+    quote = load_style(tmp_path / "child.yaml").elements.quote
+    assert (quote.color, quote.font_size) == (None, "10pt")
+
+
+def test_the_elements_survive_a_round_trip_through_the_dump() -> None:
+    from legaldown_render.style import dump_style
+
+    loaded = style(**EVERYTHING)
+    assert load_style(dump_style(loaded)) == loaded
+    assert load_style(dump_style(loaded), trusted=False).elements == loaded.elements

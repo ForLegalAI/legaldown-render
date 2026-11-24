@@ -231,9 +231,11 @@ def docx_settings(style: Style, *, trusted: bool = True) -> DocxSettings:
     elements = {item.name: _element(getattr(style.elements, item.name), f"elements.{item.name}", font_points, problems)
                 for item in fields(style.elements)}
     indent = elements["quote"].indent
-    if indent is not None and indent > page.text_width - MIN_PARAGRAPH_TWIPS:
-        problems.add("elements.quote.indent", f"leaves less than {MIN_PARAGRAPH_TWIPS / 20:g}pt of the text width "
-                                              "for the quote's text")
+    # As deep as the body draws a paragraph (it keeps MIN_PARAGRAPH_TWIPS of the text width, or none on a page
+    # narrower than that): a deeper indent would be drawn shallower than the style asks.
+    if indent is not None and indent > max(0, page.text_width - MIN_PARAGRAPH_TWIPS):
+        problems.add("elements.quote.indent", f"is deeper than a Word document can draw it: at most the text width "
+                                              f"less {MIN_PARAGRAPH_TWIPS / 20:g}pt")
 
     problems.items.extend(docx_style_errors(style))
     if problems.items:
@@ -253,6 +255,9 @@ def _element(fmt: object, key: str, body_points: float, problems: _Problems) -> 
         """A field's value; blank is unset (the loader refuses it; a Style built by hand may hold it)."""
         value = getattr(fmt, name, None)
         return value if isinstance(value, str) and value.strip() else None
+    def em(value: str) -> float:
+        """The points an ``em`` of *value* is: the element's own size, but the body's for ``rem``."""
+        return body_points if value.strip().lower().endswith("rem") else em_points
     size = given("font_size")
     points = _font_points(size, f"{key}.font_size", body_points, problems) if size is not None else None
     em_points = points if points is not None else body_points
@@ -262,8 +267,7 @@ def _element(fmt: object, key: str, body_points: float, problems: _Problems) -> 
         value = given(name)
         if value is None:
             return None
-        twips = _length(value, f"{key}.{name}", body_points if value.strip().lower().endswith("rem") else em_points,
-                        problems)
+        twips = _length(value, f"{key}.{name}", em(value), problems)
         if twips is not None and not 0 <= twips <= _MAX_TWIPS:
             problems.add(f"{key}.{name}", f"must be 0 or more and at most {_MAX_TWIPS // 20}pt in a Word document")
             return None
@@ -273,7 +277,7 @@ def _element(fmt: object, key: str, body_points: float, problems: _Problems) -> 
         font=_family(family) if family is not None else None,
         half_points=round(points * 2) if points is not None else None,
         color=_color(color, f"{key}.color", problems) if color is not None else None,
-        line=_line_height(line, em_points, problems, f"{key}.line_height") if line is not None else None,
+        line=_line_height(line, em(line), problems, f"{key}.line_height") if line is not None else None,
         before=length("space_before"), after=length("space_after"), indent=length("indent"),
         item_spacing=length("item_spacing"))
 

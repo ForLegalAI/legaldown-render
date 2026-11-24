@@ -576,11 +576,15 @@ def _element_rules(elements: Elements) -> list[_Rule]:
     return found
 
 
+_ABSOLUTE_SIZE = re.compile(r"(?:0|[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:pt|pc|px|mm|cm|in|q|rem))", re.IGNORECASE)
+
+
 def _relative(size: str | None) -> bool:
-    """Whether a font size scales with the text around it (``em``, ``%``): then an element of a kind inside one of
-    its kind would scale it again. An absolute size needs no reset, and would only be undone by one (the reset
-    inherits from whatever element is in between)."""
-    return size is not None and size.strip().lower().endswith(("em", "%")) and not size.strip().lower().endswith("rem")
+    """Whether a font size may scale with the text around it: anything but a plain absolute length (``em``,
+    ``%``, ``ex``, ``ch``, ``smaller``, ``calc()``). Then an element of a kind inside one of its kind would scale
+    it again. An absolute size needs no reset, and would only be undone by one (the reset inherits from whatever
+    element is in between)."""
+    return size is not None and bool(size.strip()) and _ABSOLUTE_SIZE.fullmatch(size.strip()) is None
 
 
 def _heading_levels(style: Style) -> list[tuple[str, HeadingStyle]]:
