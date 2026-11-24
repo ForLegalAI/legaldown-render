@@ -680,10 +680,11 @@ def stylesheet(style: Style, *, standalone: bool = True, scope: str = "") -> str
         def place(selector: str) -> str:
             return selector
         parts = [_rule(rule, place) for rule in _BASE_RULES]
-        parts.append(_print_block(place))
         parts.append(f":root {{ {variables} }}")
         parts.append(f"body {{ margin: 0; {text} }}")
         parts.append(f".ld-document {{ {max_width} }}")
+        # After the document's width, which the print rules lift (max-width: none) and so must follow.
+        parts.append(_print_block(place))
         parts += [_rule(rule, place) for rule in generated]
         if print_rules:
             parts.append(_print_block(place, print_rules))

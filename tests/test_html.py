@@ -88,3 +88,16 @@ def test_the_stylesheet_cannot_end_its_element_through_raw_css() -> None:
     assert "a { color: red }" in css
     # A string that holds ``</`` still means the same to CSS.
     assert "content: '<\\/b>'" in stylesheet(Style(html=Html(extra_css="a::before { content: '</b>' }")))
+
+
+def test_print_lifts_the_document_width_limit() -> None:
+    """``@media print { .ld-document { max-width: none } }`` must follow the screen width rule it overrides
+    (the same specificity: the later wins), or a printed page keeps the screen's width limit."""
+    from legaldown_render.style import builtin_styles, load_style
+    from legaldown_render.writers.html import stylesheet
+
+    for name in builtin_styles():
+        for standalone in (True, False):
+            css = stylesheet(load_style(name), standalone=standalone)
+            screen = css.index("max-width: 46rem") if "max-width: 46rem" in css else css.index("max-width:")
+            assert screen < css.index("max-width: none"), (name, standalone)

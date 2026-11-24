@@ -164,6 +164,8 @@ Only additions: no existing name, field or output changes.
 
 ### Unreleased
 
+- **Print width**: a printed HTML page no longer keeps the screen's width limit (`html.max_width`); the print rule that
+  lifts it came before the screen rule it overrides
 - **Typography of single elements** ([#14](https://github.com/ForLegalAI/legaldown-render/issues/14)): `elements.quote`,
   `list`, `table`, `parties`, `signatures` and `defined_term` set font, size and colour (quotes also line height, space
   and indent; lists line height and the space after each item), in HTML and DOCX; `signatures.page_break_before` starts

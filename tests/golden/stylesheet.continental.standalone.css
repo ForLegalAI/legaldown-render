@@ -48,6 +48,9 @@ p.ld-condition { margin: 0 0 0.5em; }
 .ld-signature-side { font-weight: 700; }
 .ld-signatory { margin-top: 2.5em; }
 .ld-signature-line { border-top: 1px solid currentColor; width: 80%; margin-bottom: 0.3em; }
+:root { --ld-rule: #c8c8c8; --ld-subtle: #f5f5f5; --ld-muted: #666; --ld-link: #1f4e8c; }
+body { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 11pt; line-height: 1.5; color: #1a1a1a; background: #fff; }
+.ld-document { max-width: 46rem; }
 @media print {
   .ld-document { max-width: none; padding: 0; }
   .ld-attachments.ld-separator-page-break { break-before: page; }
@@ -56,9 +59,6 @@ p.ld-condition { margin: 0 0 0.5em; }
   .ld-signatures { break-inside: avoid; }
   a { color: inherit; }
 }
-:root { --ld-rule: #c8c8c8; --ld-subtle: #f5f5f5; --ld-muted: #666; --ld-link: #1f4e8c; }
-body { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 11pt; line-height: 1.5; color: #1a1a1a; background: #fff; }
-.ld-document { max-width: 46rem; }
 .ld-level-1 > .ld-heading { font-size: 1.1em; font-weight: 700; text-align: center; font-style: normal; }
 .ld-level-2 > .ld-heading { font-size: 1em; font-weight: 700; text-align: left; font-style: normal; }
 .ld-level-3 > .ld-heading { font-size: 1em; font-weight: 600; text-align: left; font-style: italic; }
