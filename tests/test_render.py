@@ -174,8 +174,13 @@ def test_every_built_in_language_sets_every_label() -> None:
     from dataclasses import fields
 
     from legaldown_render.style.labels import BUILTIN_LABELS
+    # The labels of one shape of condition are a style's own: no language sets them (labels.condition does).
+    optional = {"condition_true", "condition_false", "condition_is", "condition_is_not"}
     for language, labels in BUILTIN_LABELS.items():
         for item in fields(labels):
+            if item.name in optional:
+                assert getattr(labels, item.name) is None, f"{language}: {item.name} is set"
+                continue
             assert getattr(labels, item.name), f"{language}: {item.name} is not set"
         assert "{condition}" in labels.condition and "{file}" in labels.attachment_file, language
 

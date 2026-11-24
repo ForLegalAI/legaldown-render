@@ -578,6 +578,10 @@ def _template_problems(style: Style, trusted: bool = True) -> list[str]:
             continue
         for name in sorted(fields.required - found):
             problems.append(f"{key}: must contain {{{name}}}" + (f" — {fields.why}" if fields.why else ""))
+        for group in fields.required_any:
+            if not group & found:
+                either = " or ".join(f"{{{name}}}" for name in sorted(group))
+                problems.append(f"{key}: must contain {either}" + (f" — {fields.why}" if fields.why else ""))
     return problems
 
 

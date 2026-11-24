@@ -105,7 +105,8 @@ values:
   duration: long             # long (12 months) | short | narrow
 
 placeholders:
-  blank: "[_____]"           # empty, or only whitespace/invisible characters: renders [TBD: id] (§13.5 rule 6)
+  blank: "[_____]"           # empty, or only whitespace/invisible characters: renders [TBD: id] (§13.5 rule 6);
+                             # {id}, {name} ("Purchase price"), {prompt} label each blank: "[{name}]" (see "Blanks")
   show_prompt: false         # show the question's prompt next to the blank (§15.8)
 
 title_block: { parties: true, effective_date: true, version: false }
@@ -118,6 +119,7 @@ template_view: { choice_separator: " / ", empty_choice: "" }
 labels:                      # every word the renderer generates; unset: built-in for the document language
   drafting_note: Drafting note
   condition: "Only if: {condition}"
+  # condition_true, condition_false, condition_is, condition_is_not: unset (see "Condition labels")
   # identification_number, date_of_birth, address, represented_by, effective_date, version,
   # attachments, contents, attachment_file ("{file}"), signatures, signature_date, signature_place,
   # signature_name, signature_title
@@ -189,6 +191,9 @@ just text.
 | `enumeration.levels[].ref`, `paragraphs.format.ref` | `{n}`, `{section}` | `{n}`, when lists are enumerated / paragraphs are numbered |
 | `references.format` | `{designation}` | `{designation}`, or every reference reads the same |
 | `labels.condition` | `{condition}` | `{condition}`, as §15.8 requires the condition to be shown; an empty value is allowed and shows the bare condition |
+| `labels.condition_true`, `labels.condition_false` | `{question}`, `{condition}` | `{question}` or `{condition}`; an empty value shows the bare condition |
+| `labels.condition_is`, `labels.condition_is_not` | `{question}`, `{answer}`, `{condition}` | `{question}` or `{condition}`, and `{answer}` or `{condition}`; an empty value shows the bare condition |
+| `placeholders.blank` | `{id}`, `{name}`, `{prompt}` | none; any other braces are text (`{TBD}` renders as written) |
 | `labels.attachment_file` | `{file}` | none |
 | `page.header.*`, `page.footer.*` (left, center, right) | `{page}`, `{pages}`, `{title}`, `{version}`, `{date}` | none: an empty text shows nothing |
 | every other label | not checked: braces are text | none |
@@ -201,6 +206,46 @@ legaldown-render: Invalid style 'default':
 
 A `ref` is one piece of a designation, so it cannot show the whole `{path}`. A label left unset
 takes the built-in one for the document language, which always passes.
+
+### Blanks
+
+`placeholders.blank` is the text of every blank (§13.5 rule 5). Three fields label each blank instead of
+drawing the same line everywhere:
+
+| Field | Is | `{{placeholder: purchase-price}}` |
+|---|---|---|
+| `{id}` | the placeholder id | `purchase-price` |
+| `{name}` | the id as words: hyphens become spaces, the first letter upper case | `Purchase price` |
+| `{prompt}` | the declared question's `prompt` (§15.2), stripped; without one, `{name}` | `Price, excluding VAT` |
+
+`blank: "[{name}]"` renders `[Purchase price]`. Any other braces are text. A blank's `note=` is never shown:
+the specification keeps notes out of rendered output (§10.1, §13.5 rule 4). A blank with fields always shows
+something, so §13.5 rule 6's `[TBD: id]` applies only to a blank without them. The text appears wherever the
+blank does, also in a document title, a `{title}` in a page header, and a reference to a heading that holds the
+blank under `numbering.scheme: none`. In HTML a blank with fields may wrap, as words do (`ld-blank-label`); the
+plain one stays on one line. `placeholders.show_prompt` still adds `(prompt)` after the blank, so with
+`blank: "[{prompt}]"` it shows the prompt twice.
+
+### Condition labels
+
+In the template view (§15.8) a conditional unit shows a label with its condition. `labels.condition`
+(`"Only if: {condition}"`) shows the condition as written: `vat`, `!vat`, `forum:courts`, `!forum:courts`. A
+style may give each of the four shapes of condition a label of its own:
+
+| Label | Condition | Example | Shows |
+|---|---|---|---|
+| `labels.condition_true` | `q` | `"Only if: {question}"` | Only if: vat |
+| `labels.condition_false` | `!q` | `"Only if not: {question}"` | Only if not: vat |
+| `labels.condition_is` | `q:v` | `"Only if: {question} = {answer}"` | Only if: forum = State courts |
+| `labels.condition_is_not` | `!q:v` | `"Only if: {question} ≠ {answer}"` | Only if: forum ≠ State courts |
+
+`{question}` is the question id, `{answer}` the label the question gives the value in `choices` (the value id when
+the label is blank), `{condition}` the condition as written. A shape whose label is unset takes
+`labels.condition`, so a style that sets only `labels.condition` renders as before, and no built-in language sets
+these four: they change nothing unless a style asks. A condition the validator rejects (`condition-invalid`) always
+takes `labels.condition`. Each label must name its question (and the choice ones the answer), or show `{condition}`;
+that `condition_false` and `condition_is_not` actually say "not" is the style's to get right, as no check can read
+the words. With `extends`, a label set in the parent applies to the child.
 
 ### Headers and footers
 

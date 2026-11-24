@@ -164,6 +164,11 @@ Only additions: no existing name, field or output changes.
 
 ### Unreleased
 
+- **Template view wording** ([#15](https://github.com/ForLegalAI/legaldown-render/issues/15)): `placeholders.blank`
+  takes `{id}`, `{name}` and `{prompt}`, so `"[{name}]"` labels each blank (`[Purchase price]`); a blank's `note=` stays
+  out of the output (§13.5 rule 4). `labels.condition_true`, `_false`, `_is` and `_is_not` label each shape of condition
+  with `{question}` and the choice's `{answer}` ("Only if: forum = State courts"). Nothing changes unless a style sets
+  them
 - **An embedded stylesheet** ([#18](https://github.com/ForLegalAI/legaldown-render/issues/18)):
   `stylesheet(style, standalone=False)` is the CSS for `standalone=False` output in a host page. Every rule is under
   `.ld-document`, the variables, typography and background are set on it, and there is no `body`, `:root`, `html` or

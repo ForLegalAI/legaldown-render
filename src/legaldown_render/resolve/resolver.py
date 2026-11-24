@@ -38,6 +38,7 @@ worked out whatever reference asked for it first.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -66,7 +67,7 @@ from legaldown.syntax import Directive
 from ..build import plain_inlines
 from ..diagnostics import KeyLines, covered_by, record
 from ..style import Style, effective_labels
-from ..style.model import LevelFormat
+from ..style.model import LevelFormat, blank_has_fields, fill_blank
 from ..tree import (
     AttachmentPart,
     Blank,
@@ -919,9 +920,30 @@ class Resolver:
                            condition_label=self._condition(item.condition))
 
     def _condition(self, condition: str) -> str | None:
+        """The label of a conditional unit (§15.8): the style's label for the
+        condition's shape (``labels.condition_true`` and the others) when it
+        sets one, else ``labels.condition``. A condition the validator rejects
+        (condition-invalid) always takes ``labels.condition``."""
         if not condition:
             return None
+        parsed = parse_condition(condition) if condition_problem(condition, self.questions) is None else None
+        if parsed is not None:
+            shape = ("condition_is_not" if parsed.negated else "condition_is") if parsed.value is not None \
+                else ("condition_false" if parsed.negated else "condition_true")
+            template = getattr(self.labels, shape)
+            if template is not None:
+                values = {"question": parsed.question, "condition": condition}
+                if parsed.value is not None:
+                    values["answer"] = self._answer_label(parsed.question, parsed.value)
+                return fill_fields(template or "{condition}", values)
         return fill_condition(self.labels.condition or "{condition}", condition)
+
+    def _answer_label(self, question: str, value: str) -> str:
+        """The label *question* gives *value* in its ``choices`` (§15.2), else the value id."""
+        declared = self.questions.get(question)
+        choices = declared.get("choices") if isinstance(declared, dict) else None
+        label = choices.get(value) if isinstance(choices, dict) else None
+        return label.strip() if isinstance(label, str) and label.strip() else value
 
     # -- inlines --------------------------------------------------------------
 
@@ -1312,6 +1334,13 @@ class Resolver:
         # and neither does one of whitespace or format characters only
         # (U+200B zero-width space, U+FEFF, bidi controls): it shows nothing.
         blank = self.style.placeholders.blank
+        if blank_has_fields(blank):
+            name = placeholder_name(placeholder_id)
+            question_prompt = declared.get("prompt") if isinstance(declared, dict) else None
+            blank = fill_blank(blank, {
+                "id": placeholder_id, "name": name,
+                "prompt": question_prompt.strip() if isinstance(question_prompt, str) and question_prompt.strip()
+                else name})
         shows = any(not c.isspace() and unicodedata.category(c) != "Cf" for c in blank)
         return Blank(placeholder_id, blank if shows else f"[TBD: {placeholder_id}]", prompt)
 
@@ -1713,6 +1742,22 @@ def _walk(inlines: tuple[Inline, ...]) -> Iterator[Inline]:
 
 def fill_condition(template: str, value: str, *, key: str = "condition") -> str:
     return template.replace("{" + key + "}", value)
+
+
+_LABEL_FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def fill_fields(template: str, values: dict[str, str]) -> str:
+    """*template* with each ``{field}`` of *values* filled, in one pass (a value
+    holding ``{answer}`` is not filled again); any other braces are kept."""
+    return _LABEL_FIELD_RE.sub(lambda match: values.get(match.group(1), match.group(0)), template)
+
+
+def placeholder_name(placeholder_id: str) -> str:
+    """A placeholder id as words, for ``{name}`` in ``placeholders.blank``:
+    ``purchase-price`` is "Purchase price"."""
+    words = placeholder_id.replace("-", " ")
+    return words[:1].upper() + words[1:]
 
 
 def _attribute_text(inlines: tuple[Inline, ...]) -> tuple[Inline, ...]:

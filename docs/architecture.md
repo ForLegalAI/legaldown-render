@@ -707,6 +707,7 @@ its file is named). `pytest -n auto` (pytest-xdist, in the `dev` extra) runs the
 | `tests/test_file_references.py` | File references (§2.3): the lexical check (relative, `../`, scheme, drive, backslash, encoding), each kind of reference with and without a root and from a subdirectory, what is shown instead, the options and `--root`, strict, and the lines |
 | `tests/test_text_writer.py` | The plain-text layout: attachment separators, tables, quotes, list items and indent, blanked labels |
 | `tests/test_html.py` | The HTML writer's print stylesheet for attachments |
+| `tests/test_template_view_wording.py` | Blanks labelled by `{id}`, `{name}`, `{prompt}` (never the `note=`), and the labels of each shape of condition: defaults unchanged, precedence over `labels.condition`, `extends`, other languages, one-pass filling, validation, untrusted styles, HTML and DOCX |
 | `tests/test_embedded_stylesheet.py` | The embedded stylesheet (`standalone=False`): every rule under the root, no page rules, the standalone cascade, `scope` and its allowlist, `extra_css`, heading keys of a `Style` built by hand, and golden CSS of every built-in style in both modes (`tests/golden/stylesheet.*.css`) |
 | `tests/test_labels.py` | The built-in labels of parties, per language |
 | `tests/test_style.py` | Built-in styles, `extends`, dotted overrides, problem reporting, dumping a style, typing of command-line values |
