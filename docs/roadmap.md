@@ -145,7 +145,7 @@ values appear only as the cached results of fields. Decided in
 - **`definition-circular`** (U8) and the validator's other new checks (the combined document, frontmatter keys
   written twice, `definition-used-before-declaration`) appear among the diagnostics
 
-### v0.7 — A public render tree (this release)
+### v0.7 — A public render tree (released)
 
 For hosts that read the tree or embed the HTML ([#13](https://github.com/ForLegalAI/legaldown-render/issues/13)).
 Only additions: no existing name, field or output changes.
@@ -162,7 +162,18 @@ Only additions: no existing name, field or output changes.
   for output embedded in a host page. An unusable prefix is an `OptionsError` (exit 2); `--id-prefix` with another
   format is a usage error. Without it, the output is unchanged
 
-### v0.8 — PDF
+### v0.8 — Validator 0.6.0 (this release)
+
+- Built on `legaldown-validator` 0.6.0 (`>=0.6.0,<0.7`), which deprecates and removes no API; the renderer needed no
+  change. PyYAML 6.0.4 or later, which validator 0.6.0 requires
+- The validator's sharper checks appear among the diagnostics as they are: a fragment's own findings for a target
+  that is no identifier and for a question used in ways no one declaration allows
+  ([validator#147](https://github.com/ForLegalAI/legaldown-validator/issues/147),
+  [#148](https://github.com/ForLegalAI/legaldown-validator/issues/148)), and clearer frontmatter findings for keys
+  written twice, merged or aliased ([#133](https://github.com/ForLegalAI/legaldown-validator/issues/133)). Rendered
+  output is unchanged
+
+### v0.9 — PDF
 
 - Choose the engine ([ADR 0004](decisions/0004-html-first.md)). The leading option is WeasyPrint
   on the HTML writer; its print stylesheet already exists
