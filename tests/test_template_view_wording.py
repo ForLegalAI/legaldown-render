@@ -267,3 +267,52 @@ def test_the_fill_functions_fill_in_one_pass() -> None:
 
     assert fill_fields("{a} {b} {c}", {"a": "{b}", "b": "x"}) == "{b} x {c}"
     assert fill_blank("{prompt} {id} {name}", {"prompt": "{id}", "id": "fee", "name": "{prompt}"}) == "{id} fee {prompt}"
+
+
+def test_a_conditional_attachment_takes_its_shape_label() -> None:
+    source = template().replace("questions:\n", "attachments:\n  - id: schedule\n    title: Fee schedule\n"
+                                "    file: schedule.pdf\n    when: \"!forum:courts\"\nquestions:\n", 1)
+    assert "Fee schedule\n[Only if: forum ≠ State courts]\nFile: schedule.pdf" in text(source, **READABLE)
+
+
+@pytest.mark.parametrize(("placeholder", "name"), [("a--b", "A b"), ("price-2", "Price 2"), ("a-", "A"),
+                                                   ("x", "X")])
+def test_an_id_as_words(placeholder: str, name: str) -> None:
+    from legaldown_render.resolve.resolver import placeholder_name
+
+    assert placeholder_name(placeholder) == name
+
+
+def test_a_prompt_is_written_on_one_line() -> None:
+    source = template().replace('prompt: "  Monthly fee  "', "prompt: |\n      Monthly\n      fee")
+    assert "The fee is [Monthly fee]," in text(source, **{"placeholders.blank": "[{prompt}]"})
+
+
+@pytest.mark.parametrize(("prompt", "shown"), [("[a, b]", "[Fee]"), ("{a: b}", "[Fee]"), ("12", "[12]")])
+def test_a_prompt_that_is_no_text_shows_the_name(prompt: str, shown: str) -> None:
+    """A list or a mapping is no prompt; a number YAML reads is the metadata's text."""
+    source = template().replace('prompt: "  Monthly fee  "', f"prompt: {prompt}")
+    assert f"The fee is {shown}," in text(source, **{"placeholders.blank": "[{prompt}]"})
+
+
+def test_a_prompt_of_nothing_visible_falls_back_to_tbd() -> None:
+    source = template().replace('prompt: "  Monthly fee  "', 'prompt: "\\u200b"')
+    assert "The fee is [TBD: fee]," in text(source, **{"placeholders.blank": "{prompt}"})
+
+
+def test_prompt_falls_back_to_the_name_after_a_partial_assembly() -> None:
+    source = (DOCUMENTS / "template.lgd").read_text(encoding="utf-8")
+    style = load_style("default", overrides={"placeholders.blank": "[{prompt}]"})
+    assert "[The client's name]" in render(source, format="text", style=style).output
+    assembled = render(source, format="text", style=style, answers={"non-solicit": False, "forum": "arbitration"})
+    assert "[Client name]" in assembled.output
+
+
+@pytest.mark.parametrize(("key", "value"), [("placeholders.blank", "{prompt} {prompt}"),
+                                            ("labels.condition_is", "{question} = {answer}, {answer}")])
+def test_an_untrusted_style_uses_each_field_once(key: str, value: str) -> None:
+    section, name = key.split(".")
+    with pytest.raises(StyleError) as caught:
+        load_style({section: {name: value}}, trusted=False)
+    assert any("may use" in problem and "once" in problem for problem in caught.value.problems)
+    load_style({section: {name: value}})  # trusted: as written

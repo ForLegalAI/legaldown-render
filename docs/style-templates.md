@@ -219,8 +219,10 @@ drawing the same line everywhere:
 | `{prompt}` | the declared question's `prompt` (§15.2), stripped; without one, `{name}` | `Price, excluding VAT` |
 
 `blank: "[{name}]"` renders `[Purchase price]`. Any other braces are text. A blank's `note=` is never shown:
-the specification keeps notes out of rendered output (§10.1, §13.5 rule 4). A blank with fields always shows
-something, so §13.5 rule 6's `[TBD: id]` applies only to a blank without them. The text appears wherever the
+the specification keeps notes out of rendered output (§10.1, §13.5 rule 4). §13.5 rule 6 is judged on the filled
+text: a blank whose text fills to nothing visible (`"{prompt}"` with a prompt of a zero-width space) renders
+`[TBD: id]`. `{prompt}` is written on one line. After a partial assembly (an answers set that leaves blanks
+open), the assembled document no longer declares the questions, so `{prompt}` shows `{name}` there. The text appears wherever the
 blank does, also in a document title, a `{title}` in a page header, and a reference to a heading that holds the
 blank under `numbering.scheme: none`. In HTML a blank with fields may wrap, as words do (`ld-blank-label`); the
 plain one stays on one line. `placeholders.show_prompt` still adds `(prompt)` after the blank, so with
@@ -245,7 +247,8 @@ the label is blank), `{condition}` the condition as written. A shape whose label
 these four: they change nothing unless a style asks. A condition the validator rejects (`condition-invalid`) always
 takes `labels.condition`. Each label must name its question (and the choice ones the answer), or show `{condition}`;
 that `condition_false` and `condition_is_not` actually say "not" is the style's to get right, as no check can read
-the words. With `extends`, a label set in the parent applies to the child.
+the words. With `extends`, a label set in the parent applies to the child. An untrusted style may use each field once per
+label (and per `placeholders.blank`), so that it cannot multiply a long prompt or choice label.
 
 ### Headers and footers
 

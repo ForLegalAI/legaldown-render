@@ -36,7 +36,7 @@ It is checked against the specification's own examples and fixtures corpus (`tes
 | Style templates in a separate file (§13.7) | ✅ YAML, layered and validated; see [docs/style-templates.md](docs/style-templates.md) |
 | Signature blocks (§2.2) | ✅ One per party, with `legal_name` and each representative |
 | Labels following the document language (§13.7) | ✅ Built in for `en`, `cs`, `de`, `fr`, `pl`, and `sk`; any label can be set by a style |
-| A conditional unit's condition is shown (§15.8, MUST) | ✅ Also for a custom style: `labels.condition` must contain `{condition}`, and each label of one shape of condition (`labels.condition_true`, `_false`, `_is`, `_is_not`) its question (and the choice ones the answer) or `{condition}`, or the style is refused |
+| A conditional unit's condition is shown (§15.8, MUST) | ✅ Also for a custom style: `labels.condition` must contain `{condition}`, and each label of one shape of condition (`labels.condition_true`, `_false`, `_is`, `_is_not`) its question (and the choice ones the answer) or `{condition}`, or the style is refused. That a negated shape's words say "not" cannot be checked: a custom `condition_false` or `condition_is_not` that leaves it out misstates the condition, and is the style author's to get right (docs/style-templates.md, "Condition labels") |
 | `ref-not-enumerated` Warning (§6.3, §16.3) | ✅ |
 | `raw-html` Warning; raw HTML never emitted (§8.7) | ✅ Nothing is emitted: an HTML block is dropped whole, and an inline tag is dropped with its text kept. The Warning is the validator's, once per block or text that holds raw HTML other than comments (see "Text after a comment", below) |
 | Automatic term recognition (§7.4, MAY) | ❌ Not supported |

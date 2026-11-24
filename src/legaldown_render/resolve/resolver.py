@@ -1339,8 +1339,9 @@ class Resolver:
             question_prompt = declared.get("prompt") if isinstance(declared, dict) else None
             blank = fill_blank(blank, {
                 "id": placeholder_id, "name": name,
-                "prompt": question_prompt.strip() if isinstance(question_prompt, str) and question_prompt.strip()
-                else name})
+                # One line: a prompt written over several lines must not break a heading or a table row.
+                "prompt": " ".join(question_prompt.split()) if isinstance(question_prompt, str)
+                and question_prompt.strip() else name})
         shows = any(not c.isspace() and unicodedata.category(c) != "Cf" for c in blank)
         return Blank(placeholder_id, blank if shows else f"[TBD: {placeholder_id}]", prompt)
 
@@ -1756,7 +1757,7 @@ def fill_fields(template: str, values: dict[str, str]) -> str:
 def placeholder_name(placeholder_id: str) -> str:
     """A placeholder id as words, for ``{name}`` in ``placeholders.blank``:
     ``purchase-price`` is "Purchase price"."""
-    words = placeholder_id.replace("-", " ")
+    words = " ".join(part for part in placeholder_id.split("-") if part)
     return words[:1].upper() + words[1:]
 
 
